@@ -1,22 +1,36 @@
 import {
   BarChart3,
+  Banknote,
+  Building2,
   Droplets,
   FileText,
+  FileSpreadsheet,
   Gauge,
+  History,
   LogOut,
   MapPinned,
+  MonitorSmartphone,
   Receipt,
+  Settings2,
   Tags,
   Users,
-  WalletCards
+  WalletCards,
+  Wrench
 } from "lucide-react";
 
 const navItems = [
-  { key: "dashboard", label: "Dashboard", icon: BarChart3, roles: ["admin", "meter_reader", "accountant", "customer"] },
-  { key: "customers", label: "Customers", icon: Users, roles: ["admin", "meter_reader", "accountant", "customer"] },
+  { key: "portal", label: "Portal", icon: MonitorSmartphone, roles: ["customer"] },
+  { key: "dashboard", label: "Dashboard", icon: BarChart3, roles: ["admin", "meter_reader", "accountant"] },
+  { key: "customers", label: "Customers", icon: Users, roles: ["admin", "meter_reader", "accountant"] },
   { key: "readings", label: "Readings", icon: Gauge, roles: ["admin", "meter_reader"] },
   { key: "bills", label: "Bills", icon: FileText, roles: ["admin", "accountant", "customer"] },
+  { key: "billing", label: "Billing Setup", icon: Settings2, roles: ["admin", "accountant"] },
+  { key: "business", label: "Business Settings", icon: Building2, roles: ["admin", "accountant"] },
   { key: "payments", label: "Payments", icon: WalletCards, roles: ["admin", "accountant"] },
+  { key: "expenses", label: "Expenses", icon: Banknote, roles: ["admin", "accountant"] },
+  { key: "maintenance", label: "Maintenance", icon: Wrench, roles: ["admin", "accountant", "meter_reader"] },
+  { key: "reports", label: "Reports", icon: FileSpreadsheet, roles: ["admin", "accountant"] },
+  { key: "audit", label: "Audit Trail", icon: History, roles: ["admin", "accountant"] },
   { key: "rates", label: "Rates", icon: Tags, roles: ["admin", "accountant"] },
   { key: "zones", label: "Zones", icon: MapPinned, roles: ["admin", "accountant"] },
   { key: "users", label: "Users", icon: Receipt, roles: ["admin"] }

@@ -1,15 +1,366 @@
 const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
+const { createBillNumber, getMonthlyPeriodDates, getOrCreateBillingPeriod } = require("../services/billingPeriod.service");
+const { recordAuditEvent } = require("../services/audit.service");
+const { applyCustomerCreditToBill } = require("../services/credit.service");
+const { calculateTariffCharge, getTariffWithBlocks } = require("../services/tariff.service");
+const {
+  assertMeterBelongsToCustomer,
+  ensureActiveMeter,
+  getActiveMeter,
+  getPreviousReadingForMeter
+} = require("../services/meter.service");
+
+const normalizeImportHeader = (value) => String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+
+const parseCsv = (csvText) => {
+  const text = String(csvText || "").replace(/^\uFEFF/, "").trim();
+  if (!text) {
+    throw new ApiError(400, "CSV content is required.");
+  }
+
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+
+    if (char === '"' && quoted && next === '"') {
+      cell += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      row.push(cell.trim());
+      cell = "";
+    } else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(cell.trim());
+      if (row.some((value) => value !== "")) rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+
+  row.push(cell.trim());
+  if (row.some((value) => value !== "")) rows.push(row);
+
+  if (quoted) {
+    throw new ApiError(400, "CSV has an unclosed quoted value.");
+  }
+  if (rows.length < 2) {
+    throw new ApiError(400, "CSV must include a header row and at least one reading row.");
+  }
+
+  const headers = rows[0].map(normalizeImportHeader);
+  return rows.slice(1).map((values, index) => {
+    const parsed = { rowNumber: index + 2 };
+    headers.forEach((header, headerIndex) => {
+      parsed[header] = values[headerIndex] || "";
+    });
+    return parsed;
+  });
+};
+
+const readImportValue = (row, keys) => keys.map((key) => row[key]).find((value) => value !== undefined && value !== "");
+
+const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+
+const resolveReadingImportRows = async (client, csvText, { commitMode = false } = {}) => {
+  const parsedRows = parseCsv(csvText);
+  const importKeys = new Set();
+
+  const resolvedRows = [];
+  for (const row of parsedRows) {
+    const errors = [];
+    const warnings = [];
+    const customerId = readImportValue(row, ["customer_id", "id"]);
+    const accountNumber = readImportValue(row, ["acc_number", "account_number", "account", "customer_account"]);
+    const meterNumber = readImportValue(row, ["meter_number", "meter"]);
+    const readingDate = readImportValue(row, ["reading_date", "date"]);
+    const readingValue = readImportValue(row, ["reading_value", "reading", "current_reading"]);
+    const notes = readImportValue(row, ["notes", "note"]);
+    const numericReading = Number(readingValue);
+    const numericCustomerId = customerId ? Number(customerId) : null;
+
+    if (!customerId && !accountNumber) errors.push("Customer ID or account number is required.");
+    if (customerId && (!Number.isInteger(numericCustomerId) || numericCustomerId <= 0)) {
+      errors.push("Customer ID must be a valid number.");
+    }
+    if (!readingDate || !isDateOnly(readingDate)) errors.push("Reading date must use YYYY-MM-DD.");
+    if (readingValue === undefined || readingValue === "") {
+      errors.push("Reading value is required.");
+    } else if (!Number.isFinite(numericReading) || numericReading < 0) {
+      errors.push("Reading value must be zero or greater.");
+    }
+
+    let customer = null;
+    if (!errors.some((error) => error.includes("Customer"))) {
+      const customerResult = await client.query(
+        `SELECT c.*, r.amount AS rate
+         FROM customers c
+         JOIN rates r ON r.id = c.rate_id
+         WHERE ($1::integer IS NOT NULL AND c.id = $1)
+            OR ($2::text IS NOT NULL AND c.acc_number = $2)
+         ORDER BY CASE WHEN $1::integer IS NOT NULL AND c.id = $1 THEN 0 ELSE 1 END
+         LIMIT 1`,
+        [numericCustomerId, accountNumber || null]
+      );
+      customer = customerResult.rows[0] || null;
+      if (!customer) errors.push("Customer was not found.");
+    }
+
+    let meter = null;
+    if (customer && meterNumber) {
+      const meterResult = await client.query("SELECT * FROM meters WHERE meter_number = $1", [meterNumber]);
+      meter = meterResult.rows[0] || null;
+      if (!meter) {
+        errors.push("Meter number was not found.");
+      } else if (Number(meter.customer_id) !== Number(customer.id)) {
+        errors.push("Meter number does not belong to this customer.");
+      }
+    } else if (customer) {
+      meter = await getActiveMeter(client, customer.id);
+      if (!meter) warnings.push("No active meter found; one will be generated during import.");
+    }
+
+    const importKey = `${meter?.id || customer?.id || accountNumber || customerId}:${readingDate}`;
+    if (readingDate && importKeys.has(importKey)) {
+      errors.push("Duplicate reading for the same customer or meter and date in this CSV.");
+    }
+    importKeys.add(importKey);
+
+    let previous = null;
+    if (meter && readingDate && isDateOnly(readingDate)) {
+      const existingResult = await client.query(
+        "SELECT id FROM meter_readings WHERE meter_id = $1 AND reading_date = $2",
+        [meter.id, readingDate]
+      );
+      if (existingResult.rows[0]) {
+        errors.push("A reading already exists for this meter and date.");
+      }
+
+      previous = await getPreviousReadingForMeter(client, meter.id, readingDate);
+      if (previous && Number.isFinite(numericReading) && numericReading < Number(previous.reading_value)) {
+        errors.push("Reading value is lower than the previous reading.");
+      }
+    }
+
+    resolvedRows.push({
+      rowNumber: row.rowNumber,
+      customer_id: customer?.id || numericCustomerId,
+      customer_name: customer?.name || "",
+      acc_number: customer?.acc_number || accountNumber || "",
+      meter_id: meter?.id || null,
+      meter_number: meter?.meter_number || meterNumber || "",
+      reading_date: readingDate || "",
+      reading_value: readingValue === undefined || readingValue === "" ? "" : numericReading,
+      previous_reading_value: previous?.reading_value || null,
+      notes: notes || null,
+      bill_expected: Boolean(previous),
+      errors,
+      warnings,
+      status: errors.length ? "invalid" : commitMode ? "ready" : "valid"
+    });
+  }
+
+  const rowsByMeterOrCustomer = new Map();
+  for (const row of resolvedRows.filter((resolved) => !resolved.errors.length)) {
+    const key = row.meter_id ? `meter:${row.meter_id}` : `customer:${row.customer_id}`;
+    const groupedRows = rowsByMeterOrCustomer.get(key) || [];
+    groupedRows.push(row);
+    rowsByMeterOrCustomer.set(key, groupedRows);
+  }
+
+  for (const groupedRows of rowsByMeterOrCustomer.values()) {
+    groupedRows.sort(
+      (left, right) =>
+        String(left.reading_date).localeCompare(String(right.reading_date)) || left.rowNumber - right.rowNumber
+    );
+
+    let previousValue = null;
+    for (const row of groupedRows) {
+      if (previousValue !== null) {
+        row.previous_reading_value = previousValue;
+        row.bill_expected = true;
+        if (Number(row.reading_value) < Number(previousValue)) {
+          row.errors.push("Reading value is lower than another earlier reading in this CSV.");
+        }
+      } else if (row.previous_reading_value !== null && row.previous_reading_value !== undefined) {
+        previousValue = Number(row.previous_reading_value);
+      }
+
+      if (!row.errors.length) {
+        previousValue = Number(row.reading_value);
+      }
+      row.status = row.errors.length ? "invalid" : commitMode ? "ready" : "valid";
+    }
+  }
+
+  return resolvedRows;
+};
+
+const createReadingWithBill = async (client, req, payload, { source = "field", auditReason = null } = {}) => {
+  const { customer_id, meter_id, reading_value, reading_date, notes } = payload;
+
+  const customerResult = await client.query(
+    `SELECT c.*, r.amount AS rate
+     FROM customers c
+     JOIN rates r ON r.id = c.rate_id
+     WHERE c.id = $1`,
+    [customer_id]
+  );
+  const customer = customerResult.rows[0];
+  if (!customer) {
+    throw new ApiError(404, "Customer not found.");
+  }
+
+  let activeMeter = await ensureActiveMeter(client, customer);
+  if (meter_id) {
+    const meterResult = await client.query("SELECT * FROM meters WHERE id = $1", [meter_id]);
+    activeMeter = meterResult.rows[0];
+    assertMeterBelongsToCustomer(activeMeter, customer_id);
+  }
+
+  const duplicateResult = await client.query(
+    "SELECT id FROM meter_readings WHERE meter_id = $1 AND reading_date = $2",
+    [activeMeter.id, reading_date]
+  );
+  if (duplicateResult.rows[0]) {
+    throw new ApiError(400, "A reading already exists for this meter and date.");
+  }
+
+  const billingPeriod = await getOrCreateBillingPeriod(client, reading_date, req.user.id);
+  const previous = await getPreviousReadingForMeter(client, activeMeter.id, reading_date);
+
+  if (previous && Number(reading_value) < Number(previous.reading_value)) {
+    throw new ApiError(400, "Current reading cannot be lower than previous reading.");
+  }
+
+  const readingResult = await client.query(
+    `INSERT INTO meter_readings (
+      customer_id, meter_id, billing_period_id, previous_reading_id, previous_reading_value,
+      reading_value, reading_date, source, notes, created_by
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING *`,
+    [
+      customer_id,
+      activeMeter.id,
+      billingPeriod.id,
+      previous?.id || null,
+      previous?.reading_value || null,
+      reading_value,
+      reading_date,
+      source,
+      notes || null,
+      req.user.id
+    ]
+  );
+  const reading = readingResult.rows[0];
+  await recordAuditEvent(client, {
+    req,
+    action: "reading.created",
+    entityType: "meter_reading",
+    entityId: reading.id,
+    afterData: reading,
+    reason: auditReason
+  });
+
+  let bill = null;
+  if (previous) {
+    const unitsUsed = Number(reading_value) - Number(previous.reading_value);
+    const tariff = await getTariffWithBlocks(client, customer.rate_id);
+    const charge = calculateTariffCharge(tariff || customer, unitsUsed);
+    const billNumber = createBillNumber(billingPeriod, customer, reading.id);
+    const billResult = await client.query(
+      `INSERT INTO bills (
+        customer_id, billing_period_id, bill_number, previous_reading_id, current_reading_id,
+        billing_month, previous_reading, current_reading, units_used, rate, amount,
+        subtotal_amount, fixed_charge_amount, penalty_amount, vat_amount, reconnection_fee_amount,
+        deposit_applied_amount, adjustment_amount, total_amount, balance_amount, tariff_snapshot, due_date, issued_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+        $12, $13, 0, $14, $15, 0, 0, $11, $11, $16::jsonb, $17, NOW()
+      )
+      RETURNING *`,
+      [
+        customer_id,
+        billingPeriod.id,
+        billNumber,
+        previous.id,
+        reading.id,
+        billingPeriod.period_start,
+        previous.reading_value,
+        reading_value,
+        unitsUsed,
+        charge.rateAmount,
+        charge.totalAmount,
+        charge.subtotalAmount,
+        charge.fixedChargeAmount,
+        charge.vatAmount,
+        charge.reconnectionFeeAmount,
+        JSON.stringify(charge.tariffSnapshot),
+        billingPeriod.due_date
+      ]
+    );
+    bill = billResult.rows[0];
+    const creditApplication = await applyCustomerCreditToBill(client, {
+      customerId: bill.customer_id,
+      billId: bill.id
+    });
+    if (creditApplication.appliedAmount > 0) {
+      bill = creditApplication.bill;
+      await recordAuditEvent(client, {
+        req,
+        action: "bill.credit_applied",
+        entityType: "bill",
+        entityId: bill.id,
+        afterData: {
+          bill,
+          allocations: creditApplication.allocations,
+          appliedAmount: creditApplication.appliedAmount
+        },
+        reason: auditReason || "Customer credit auto-applied to new bill"
+      });
+    }
+    await recordAuditEvent(client, {
+      req,
+      action: "bill.created",
+      entityType: "bill",
+      entityId: bill.id,
+      afterData: bill,
+      reason: auditReason
+    });
+  }
+
+  return { reading, bill };
+};
 
 const listReadings = asyncHandler(async (req, res) => {
   const params = [];
   const scope =
     req.user.role === "customer" ? `WHERE mr.customer_id = $${params.push(req.user.customer_id || 0)}` : "";
   const { rows } = await pool.query(
-    `SELECT mr.*, c.name AS customer_name, c.acc_number, u.name AS created_by_name
+    `SELECT mr.*,
+            c.name AS customer_name,
+            c.acc_number,
+            m.meter_number,
+            prev.reading_date AS previous_reading_date,
+            bp.name AS billing_period_name,
+            u.name AS created_by_name
      FROM meter_readings mr
      JOIN customers c ON c.id = mr.customer_id
+     LEFT JOIN meters m ON m.id = mr.meter_id
+     LEFT JOIN meter_readings prev ON prev.id = mr.previous_reading_id
+     LEFT JOIN billing_periods bp ON bp.id = mr.billing_period_id
      LEFT JOIN users u ON u.id = mr.created_by
      ${scope}
      ORDER BY mr.reading_date DESC, mr.created_at DESC
@@ -19,8 +370,47 @@ const listReadings = asyncHandler(async (req, res) => {
   res.json(rows);
 });
 
+const getReadingContext = asyncHandler(async (req, res) => {
+  const customerId = Number(req.query.customer_id);
+  const readingDate = req.query.reading_date || new Date().toISOString().slice(0, 10);
+
+  if (!customerId) {
+    throw new ApiError(400, "Customer is required.");
+  }
+
+  if (req.user.role === "customer" && Number(req.user.customer_id) !== customerId) {
+    throw new ApiError(403, "You do not have permission to view this reading context.");
+  }
+
+  const client = await pool.connect();
+  try {
+    const customerResult = await client.query("SELECT * FROM customers WHERE id = $1", [customerId]);
+    const customer = customerResult.rows[0];
+    if (!customer) {
+      throw new ApiError(404, "Customer not found.");
+    }
+
+    const activeMeter = await ensureActiveMeter(client, customer);
+    const previousReading = await getPreviousReadingForMeter(client, activeMeter.id, readingDate);
+    const period = getMonthlyPeriodDates(readingDate);
+
+    res.json({
+      customer: {
+        id: customer.id,
+        name: customer.name,
+        acc_number: customer.acc_number
+      },
+      activeMeter,
+      previousReading,
+      billingPeriod: period
+    });
+  } finally {
+    client.release();
+  }
+});
+
 const createReading = asyncHandler(async (req, res) => {
-  const { customer_id, reading_value, reading_date } = req.body;
+  const { customer_id, meter_id, reading_value, reading_date, notes } = req.body;
 
   if (!customer_id || reading_value === undefined || !reading_date) {
     throw new ApiError(400, "Customer, reading value, and reading date are required.");
@@ -29,59 +419,12 @@ const createReading = asyncHandler(async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-
-    const customerResult = await client.query("SELECT * FROM customers WHERE id = $1", [customer_id]);
-    const customer = customerResult.rows[0];
-    if (!customer) {
-      throw new ApiError(404, "Customer not found.");
-    }
-
-    const previousResult = await client.query(
-      `SELECT * FROM meter_readings
-       WHERE customer_id = $1 AND reading_date < $2
-       ORDER BY reading_date DESC, id DESC
-       LIMIT 1`,
-      [customer_id, reading_date]
+    const { reading, bill } = await createReadingWithBill(
+      client,
+      req,
+      { customer_id, meter_id, reading_value, reading_date, notes },
+      { source: "field" }
     );
-    const previous = previousResult.rows[0];
-
-    if (previous && Number(reading_value) < Number(previous.reading_value)) {
-      throw new ApiError(400, "Current reading cannot be lower than previous reading.");
-    }
-
-    const readingResult = await client.query(
-      `INSERT INTO meter_readings (customer_id, reading_value, reading_date, created_by)
-       VALUES ($1, $2, $3, $4)
-       RETURNING *`,
-      [customer_id, reading_value, reading_date, req.user.id]
-    );
-    const reading = readingResult.rows[0];
-
-    let bill = null;
-    if (previous) {
-      const unitsUsed = Number(reading_value) - Number(previous.reading_value);
-      const amount = unitsUsed * Number(customer.rate);
-      const billResult = await client.query(
-        `INSERT INTO bills (
-          customer_id, previous_reading_id, current_reading_id, billing_month,
-          previous_reading, current_reading, units_used, rate, amount, due_date
-        )
-        VALUES ($1, $2, $3, date_trunc('month', $4::date)::date, $5, $6, $7, $8, $9, $4::date + INTERVAL '14 days')
-        RETURNING *`,
-        [
-          customer_id,
-          previous.id,
-          reading.id,
-          reading_date,
-          previous.reading_value,
-          reading_value,
-          unitsUsed,
-          customer.rate,
-          amount
-        ]
-      );
-      bill = billResult.rows[0];
-    }
 
     await client.query("COMMIT");
     res.status(201).json({ reading, bill });
@@ -93,9 +436,92 @@ const createReading = asyncHandler(async (req, res) => {
   }
 });
 
+const previewReadingImport = asyncHandler(async (req, res) => {
+  const rows = await resolveReadingImportRows(pool, req.body.csv);
+  res.json({
+    rows,
+    summary: {
+      total: rows.length,
+      valid: rows.filter((row) => !row.errors.length).length,
+      invalid: rows.filter((row) => row.errors.length).length,
+      billsExpected: rows.filter((row) => row.bill_expected && !row.errors.length).length
+    }
+  });
+});
+
+const commitReadingImport = asyncHandler(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const rows = await resolveReadingImportRows(client, req.body.csv, { commitMode: true });
+    const invalidRows = rows.filter((row) => row.errors.length);
+
+    if (invalidRows.length) {
+      throw new ApiError(400, "CSV still has invalid rows. Preview and fix the errors before import.");
+    }
+
+    const orderedRows = [...rows].sort((left, right) => {
+      if (left.customer_id !== right.customer_id) return left.customer_id - right.customer_id;
+      return String(left.reading_date).localeCompare(String(right.reading_date)) || left.rowNumber - right.rowNumber;
+    });
+
+    const imported = [];
+    for (const row of orderedRows) {
+      const result = await createReadingWithBill(
+        client,
+        req,
+        {
+          customer_id: row.customer_id,
+          meter_id: row.meter_id,
+          reading_value: row.reading_value,
+          reading_date: row.reading_date,
+          notes: row.notes
+        },
+        { source: "csv_import", auditReason: `CSV reading import row ${row.rowNumber}` }
+      );
+
+      imported.push({
+        rowNumber: row.rowNumber,
+        reading_id: result.reading.id,
+        bill_id: result.bill?.id || null,
+        customer_name: row.customer_name,
+        acc_number: row.acc_number,
+        reading_date: row.reading_date,
+        reading_value: row.reading_value
+      });
+    }
+
+    await recordAuditEvent(client, {
+      req,
+      action: "reading_import.committed",
+      entityType: "reading_import",
+      afterData: {
+        totalRows: rows.length,
+        importedRows: imported.length,
+        billCount: imported.filter((row) => row.bill_id).length
+      }
+    });
+
+    await client.query("COMMIT");
+    res.status(201).json({
+      imported,
+      summary: {
+        total: rows.length,
+        imported: imported.length,
+        billsCreated: imported.filter((row) => row.bill_id).length
+      }
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 const recalculateBillForReading = async (client, readingId) => {
   const readingResult = await client.query(
-    `SELECT mr.*, c.rate
+    `SELECT mr.*, c.rate, c.rate_id, c.acc_number, c.name AS customer_name
      FROM meter_readings mr
      JOIN customers c ON c.id = mr.customer_id
      WHERE mr.id = $1`,
@@ -104,14 +530,26 @@ const recalculateBillForReading = async (client, readingId) => {
   const reading = readingResult.rows[0];
   if (!reading) return null;
 
-  const previousResult = await client.query(
-    `SELECT * FROM meter_readings
-     WHERE customer_id = $1 AND reading_date < $2 AND id <> $3
-     ORDER BY reading_date DESC, id DESC
-     LIMIT 1`,
-    [reading.customer_id, reading.reading_date, reading.id]
+  const customer = {
+    id: reading.customer_id,
+    acc_number: reading.acc_number
+  };
+  const activeMeter = reading.meter_id
+    ? { id: reading.meter_id, customer_id: reading.customer_id }
+    : await ensureActiveMeter(client, customer);
+  const billingPeriod = await getOrCreateBillingPeriod(client, reading.reading_date);
+  const previous = await getPreviousReadingForMeter(client, activeMeter.id, reading.reading_date, reading.id);
+
+  await client.query(
+    `UPDATE meter_readings
+     SET meter_id = $1,
+         billing_period_id = $2,
+         previous_reading_id = $3,
+         previous_reading_value = $4,
+         updated_at = NOW()
+     WHERE id = $5`,
+    [activeMeter.id, billingPeriod.id, previous?.id || null, previous?.reading_value || null, reading.id]
   );
-  const previous = previousResult.rows[0];
 
   const existingBillResult = await client.query(
     "SELECT * FROM bills WHERE current_reading_id = $1 FOR UPDATE",
@@ -135,62 +573,109 @@ const recalculateBillForReading = async (client, readingId) => {
   }
 
   const unitsUsed = Number(reading.reading_value) - Number(previous.reading_value);
-  const amount = unitsUsed * Number(reading.rate);
+  const tariff = await getTariffWithBlocks(client, reading.rate_id);
+  const charge = calculateTariffCharge(tariff || reading, unitsUsed);
+  const totalAmount = charge.totalAmount;
 
   if (existingBill) {
-    const nextPaidAmount = Math.min(Number(existingBill.paid_amount), amount);
-    const nextStatus = nextPaidAmount <= 0 ? "unpaid" : nextPaidAmount >= amount ? "paid" : "partial";
+    const nextPaidAmount = Math.min(Number(existingBill.paid_amount), totalAmount);
+    const nextStatus = nextPaidAmount <= 0 ? "unpaid" : nextPaidAmount >= totalAmount ? "paid" : "partial";
+    const nextBalanceAmount = Math.max(totalAmount - nextPaidAmount, 0);
     const billResult = await client.query(
       `UPDATE bills
        SET previous_reading_id = $1,
-           billing_month = date_trunc('month', $2::date)::date,
-           previous_reading = $3,
-           current_reading = $4,
-           units_used = $5,
-           rate = $6,
-           amount = $7,
-           paid_amount = $8,
-           status = $9,
-           due_date = $2::date + INTERVAL '14 days',
-           paid_at = CASE WHEN $9 = 'paid' THEN COALESCE(paid_at, NOW()) ELSE NULL END
-       WHERE id = $10
+           billing_period_id = $2,
+           billing_month = $3,
+           previous_reading = $4,
+           current_reading = $5,
+           units_used = $6,
+           rate = $7,
+           amount = $8,
+           subtotal_amount = $9,
+           fixed_charge_amount = $10,
+           penalty_amount = 0,
+           vat_amount = $11,
+           reconnection_fee_amount = $12,
+           deposit_applied_amount = 0,
+           adjustment_amount = 0,
+           total_amount = $8,
+           balance_amount = $13,
+           paid_amount = $14,
+           status = $15::varchar,
+           tariff_snapshot = $16::jsonb,
+           due_date = $17,
+           paid_at = CASE WHEN $15::text = 'paid' THEN COALESCE(paid_at, NOW()) ELSE NULL END,
+           issued_at = COALESCE(issued_at, NOW())
+       WHERE id = $18
        RETURNING *`,
       [
         previous.id,
-        reading.reading_date,
+        billingPeriod.id,
+        billingPeriod.period_start,
         previous.reading_value,
         reading.reading_value,
         unitsUsed,
-        reading.rate,
-        amount,
+        charge.rateAmount,
+        totalAmount,
+        charge.subtotalAmount,
+        charge.fixedChargeAmount,
+        charge.vatAmount,
+        charge.reconnectionFeeAmount,
+        nextBalanceAmount,
         nextPaidAmount,
         nextStatus,
+        JSON.stringify(charge.tariffSnapshot),
+        billingPeriod.due_date,
         existingBill.id
       ]
     );
-    return billResult.rows[0];
+    const bill = billResult.rows[0];
+    const creditApplication = await applyCustomerCreditToBill(client, {
+      customerId: bill.customer_id,
+      billId: bill.id
+    });
+    return creditApplication.appliedAmount > 0 ? creditApplication.bill : bill;
   }
 
+  const billNumber = createBillNumber(billingPeriod, reading, reading.id);
   const billResult = await client.query(
     `INSERT INTO bills (
-      customer_id, previous_reading_id, current_reading_id, billing_month,
-      previous_reading, current_reading, units_used, rate, amount, due_date
+      customer_id, billing_period_id, bill_number, previous_reading_id, current_reading_id,
+      billing_month, previous_reading, current_reading, units_used, rate, amount,
+      subtotal_amount, fixed_charge_amount, penalty_amount, vat_amount, reconnection_fee_amount,
+      deposit_applied_amount, adjustment_amount, total_amount, balance_amount, tariff_snapshot, due_date, issued_at
     )
-    VALUES ($1, $2, $3, date_trunc('month', $4::date)::date, $5, $6, $7, $8, $9, $4::date + INTERVAL '14 days')
+    VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+      $12, $13, 0, $14, $15, 0, 0, $11, $11, $16::jsonb, $17, NOW()
+    )
     RETURNING *`,
     [
       reading.customer_id,
+      billingPeriod.id,
+      billNumber,
       previous.id,
       reading.id,
-      reading.reading_date,
+      billingPeriod.period_start,
       previous.reading_value,
       reading.reading_value,
       unitsUsed,
-      reading.rate,
-      amount
+      charge.rateAmount,
+      charge.totalAmount,
+      charge.subtotalAmount,
+      charge.fixedChargeAmount,
+      charge.vatAmount,
+      charge.reconnectionFeeAmount,
+      JSON.stringify(charge.tariffSnapshot),
+      billingPeriod.due_date
     ]
   );
-  return billResult.rows[0];
+  const bill = billResult.rows[0];
+  const creditApplication = await applyCustomerCreditToBill(client, {
+    customerId: bill.customer_id,
+    billId: bill.id
+  });
+  return creditApplication.appliedAmount > 0 ? creditApplication.bill : bill;
 };
 
 const updateReading = asyncHandler(async (req, res) => {
@@ -214,40 +699,103 @@ const updateReading = asyncHandler(async (req, res) => {
 
     const oldNextResult = await client.query(
       `SELECT id FROM meter_readings
-       WHERE customer_id = $1 AND reading_date > $2
+       WHERE (($1::integer IS NOT NULL AND meter_id = $1) OR ($1::integer IS NULL AND customer_id = $2))
+         AND reading_date > $3
        ORDER BY reading_date ASC, id ASC
        LIMIT 1`,
-      [existing.customer_id, existing.reading_date]
+      [existing.meter_id || null, existing.customer_id, existing.reading_date]
     );
 
     const customerResult = await client.query("SELECT * FROM customers WHERE id = $1", [customer_id]);
-    if (!customerResult.rows[0]) {
+    const customer = customerResult.rows[0];
+    if (!customer) {
       throw new ApiError(404, "Customer not found.");
+    }
+
+    let activeMeter = null;
+    if (Number(existing.customer_id) === Number(customer_id) && existing.meter_id) {
+      const meterResult = await client.query("SELECT * FROM meters WHERE id = $1", [existing.meter_id]);
+      activeMeter = meterResult.rows[0];
+    }
+    if (!activeMeter) {
+      activeMeter = await ensureActiveMeter(client, customer);
+    }
+
+    assertMeterBelongsToCustomer(activeMeter, customer_id);
+    const billingPeriod = await getOrCreateBillingPeriod(client, reading_date, req.user.id);
+    const previous = await getPreviousReadingForMeter(client, activeMeter.id, reading_date, req.params.id);
+
+    if (previous && Number(reading_value) < Number(previous.reading_value)) {
+      throw new ApiError(400, "Reading cannot be lower than the previous reading.");
     }
 
     const updatedResult = await client.query(
       `UPDATE meter_readings
        SET customer_id = $1,
-           reading_value = $2,
-           reading_date = $3
-       WHERE id = $4
+           meter_id = $2,
+           billing_period_id = $3,
+           previous_reading_id = $4,
+           previous_reading_value = $5,
+           reading_value = $6,
+           reading_date = $7,
+           updated_by = $8,
+           updated_at = NOW()
+       WHERE id = $9
        RETURNING *`,
-      [customer_id, reading_value, reading_date, req.params.id]
+      [
+        customer_id,
+        activeMeter.id,
+        billingPeriod.id,
+        previous?.id || null,
+        previous?.reading_value || null,
+        reading_value,
+        reading_date,
+        req.user.id,
+        req.params.id
+      ]
     );
+    await recordAuditEvent(client, {
+      req,
+      action: "reading.updated",
+      entityType: "meter_reading",
+      entityId: updatedResult.rows[0].id,
+      beforeData: existing,
+      afterData: updatedResult.rows[0]
+    });
 
     const bill = await recalculateBillForReading(client, updatedResult.rows[0].id);
+    if (bill) {
+      await recordAuditEvent(client, {
+        req,
+        action: "bill.recalculated",
+        entityType: "bill",
+        entityId: bill.id,
+        afterData: bill,
+        reason: "Reading update recalculated bill"
+      });
+    }
 
     const nextResult = await client.query(
       `SELECT id FROM meter_readings
-       WHERE customer_id = $1 AND reading_date > $2
+       WHERE meter_id = $1 AND reading_date > $2
        ORDER BY reading_date ASC, id ASC
        LIMIT 1`,
-      [customer_id, reading_date]
+      [activeMeter.id, reading_date]
     );
 
     let nextBill = null;
     if (nextResult.rows[0]) {
       nextBill = await recalculateBillForReading(client, nextResult.rows[0].id);
+      if (nextBill) {
+        await recordAuditEvent(client, {
+          req,
+          action: "bill.recalculated",
+          entityType: "bill",
+          entityId: nextBill.id,
+          afterData: nextBill,
+          reason: "Adjacent reading update recalculated bill"
+        });
+      }
     }
 
     let oldNextBill = null;
@@ -257,6 +805,16 @@ const updateReading = asyncHandler(async (req, res) => {
       oldNextResult.rows[0].id !== nextResult.rows[0]?.id
     ) {
       oldNextBill = await recalculateBillForReading(client, oldNextResult.rows[0].id);
+      if (oldNextBill) {
+        await recordAuditEvent(client, {
+          req,
+          action: "bill.recalculated",
+          entityType: "bill",
+          entityId: oldNextBill.id,
+          afterData: oldNextBill,
+          reason: "Previous meter sequence recalculated bill"
+        });
+      }
     }
 
     await client.query("COMMIT");
@@ -270,7 +828,11 @@ const updateReading = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  commitReadingImport,
+  getReadingContext,
   listReadings,
   createReading,
+  previewReadingImport,
+  recalculateBillForReading,
   updateReading
 };

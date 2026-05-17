@@ -18,13 +18,26 @@ AGUA-GLOBAL/
 - Customer CRUD with account numbers and customer rates
 - Rate and zone/location management for customer dropdowns
 - Meter reading submission linked to customers
+- Active meter tracking with previous reading visibility during reading entry
+- Meter replacement workflow with old final readings, new meter baselines, and event history
+- CSV reading imports with preview validation before committing rows
 - Automatic bill creation from current and previous readings
 - Editable meter readings that recalculate the affected bills
+- Monthly billing periods with due dates on the last day of the following month
+- Billing settings for fixed penalties and default deposit rules
+- Customer deposit tracking as paid or not paid
 - Bill tracking with `unpaid`, `partial`, and `paid` states
-- Payments by selected customer, with allocation across oldest unpaid bills
-- Editable payments that recalculate the linked bill status
+- Receipt-level payments by selected customer, with allocation across oldest unpaid bills
+- Payment channels for cash, bank, M-Pesa/paybill, and manual adjustments
+- Editable receipts that reverse and reapply allocations
+- Printable receipts with business profile header, logo, allocations, and footer notes
+- CSV payment imports with preview validation before committing receipts
+- Expense register with manual entry and CSV imports
+- Business settings for shared logo/contact/payment/footer details
+- Audit trail for customer, reading, bill, billing, payment, and meter changes
 - User creation and role assignment
 - Dashboard summaries for billed water units, cash collected, bills due, and arrears
+- Printable full or individual accountant reports with business profile header, logo, and footer notes
 - REST API routes for the main resources
 
 ## Database Files For DBMS Import
@@ -34,6 +47,13 @@ Use these files in pgAdmin, DBeaver, TablePlus, or another PostgreSQL DBMS:
 - Schema path: `server/database/schema.sql`
 - Demo seed path: `server/database/seed.sql`
 - Existing database migration path: `server/database/migrations/001_rates_zones.sql`
+- Billing period/settings migration path: `server/database/migrations/002_billing_periods_settings.sql`
+- Meter/readings migration path: `server/database/migrations/003_meters_reading_context.sql`
+- Meter replacement events migration path: `server/database/migrations/004_meter_replacement_events.sql`
+- Receipt-level payments migration path: `server/database/migrations/005_receipt_level_payments.sql`
+- Audit trail migration path: `server/database/migrations/006_audit_events.sql`
+- Expenses migration path: `server/database/migrations/007_expenses.sql`
+- Business settings migration path: `server/database/migrations/008_business_settings.sql`
 
 Run `schema.sql` first, then `seed.sql`.
 
@@ -44,6 +64,62 @@ server/database/migrations/001_rates_zones.sql
 ```
 
 Then restart the server.
+
+For the billing period and deposit fields, run:
+
+```text
+server/database/migrations/002_billing_periods_settings.sql
+```
+
+This preserves the existing bill and payment behavior while adding the richer billing fields.
+
+For active meters and previous-reading context, run:
+
+```text
+server/database/migrations/003_meters_reading_context.sql
+```
+
+Or use the project command:
+
+```powershell
+cd server
+npm.cmd run db:migrate:meters
+```
+
+For meter replacement events, run:
+
+```powershell
+cd server
+npm.cmd run db:migrate:meter-events
+```
+
+For receipt-level payments, run:
+
+```powershell
+cd server
+npm.cmd run db:migrate:payments
+```
+
+For audit trail events, run:
+
+```powershell
+cd server
+npm.cmd run db:migrate:audit
+```
+
+For the expense register and expense CSV imports, run:
+
+```powershell
+cd server
+npm.cmd run db:migrate:expenses
+```
+
+For shared business profile, logo path, contacts, payment details, and print footer notes, run:
+
+```powershell
+cd server
+npm.cmd run db:migrate:business-settings
+```
 
 ## Local Setup
 

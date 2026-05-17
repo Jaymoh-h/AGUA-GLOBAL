@@ -11,7 +11,8 @@ const publicUser = (user) => ({
   email: user.email,
   phone: user.phone,
   role: user.role,
-  customer_id: user.customer_id
+  customer_id: user.customer_id,
+  must_change_password: Boolean(user.must_change_password)
 });
 
 const login = asyncHandler(async (req, res) => {
@@ -30,6 +31,8 @@ const login = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Invalid email or password.");
   }
 
+  await pool.query("UPDATE users SET last_login_at = NOW() WHERE id = $1", [user.id]);
+
   const token = jwt.sign({ id: user.id, role: user.role }, jwtSecret, {
     expiresIn: jwtExpiresIn
   });
@@ -44,7 +47,41 @@ const me = asyncHandler(async (req, res) => {
   res.json({ user: req.user });
 });
 
+const changePassword = asyncHandler(async (req, res) => {
+  const { current_password, new_password } = req.body;
+
+  if (!current_password || !new_password) {
+    throw new ApiError(400, "Current password and new password are required.");
+  }
+
+  if (String(new_password).length < 8) {
+    throw new ApiError(400, "New password must be at least 8 characters.");
+  }
+
+  const { rows } = await pool.query("SELECT * FROM users WHERE id = $1 AND is_active = TRUE", [req.user.id]);
+  const user = rows[0];
+
+  if (!user || !(await bcrypt.compare(current_password, user.password_hash))) {
+    throw new ApiError(401, "Current password is incorrect.");
+  }
+
+  const passwordHash = await bcrypt.hash(new_password, 10);
+  const result = await pool.query(
+    `UPDATE users
+     SET password_hash = $1,
+         must_change_password = FALSE,
+         password_changed_at = NOW(),
+         updated_at = NOW()
+     WHERE id = $2
+     RETURNING id, customer_id, name, email, phone, role, is_active, must_change_password`,
+    [passwordHash, req.user.id]
+  );
+
+  res.json({ user: publicUser(result.rows[0]) });
+});
+
 module.exports = {
   login,
-  me
+  me,
+  changePassword
 };

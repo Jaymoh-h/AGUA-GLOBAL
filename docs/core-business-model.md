@@ -16,6 +16,34 @@ The app already has a practical starter model:
 
 The next model should keep this foundation, but add explicit business-control records so billing, meter lifecycle, payments, and audits are predictable.
 
+## Current Gaps To Close
+
+These are the specific gaps found in the current schema and controllers:
+
+- Billing due dates are hard-coded as reading date plus 14 days.
+- There is no explicit billing period record, so monthly close, lock, and reporting rules are implied instead of controlled.
+- Readings belong only to customers, not physical meters.
+- Previous reading is calculated during bill creation, but not exposed as a reading-entry aid or stored on the reading itself.
+- Meter replacements cannot be represented without rewriting or confusing reading history.
+- Payments are currently split into one `payments` row per bill allocation, so the receipt is not a first-class record.
+- Payment methods and references exist, but receipt numbers, M-Pesa/paybill references, and reconciliation status are not explicit.
+- Sensitive changes are not audit logged.
+
+## First-Version Business Defaults
+
+These defaults keep the first implementation useful while leaving room for later policy changes:
+
+- Billing cycle: one global monthly period for all customers.
+- Billing period status flow: `draft` -> `open` -> `closed` -> `locked`.
+- Due date: the last day of the month after the billed monthly period.
+- Penalties: supported as a fixed/lump-sum charge, but disabled by default.
+- Deposits: tracked on customers as paid or not paid, but not applied to bills except through a later termination workflow.
+- Meter replacement: preserve old meter history, create a new active meter, and calculate future readings against the new meter.
+- Mid-period replacement: store enough data to split usage later; first UI may summarize total consumption unless a split bill view is needed immediately.
+- Payment allocation: oldest unpaid bills first unless a specific bill is selected.
+- Overpayments: blocked for now until customer credit handling is intentionally designed.
+- Audit trail: append-only JSON snapshots for create, update, delete, void, and status-change actions.
+
 ## Design Principles
 
 - Keep billing explainable from the bill itself: period, readings, units, charges, due date, penalties, paid amount, and balance.
@@ -23,6 +51,27 @@ The next model should keep this foundation, but add explicit business-control re
 - Keep payments as receipts plus allocations, because one payment may settle one or many bills.
 - Keep audit logs append-only and generic enough to cover customers, readings, bills, payments, and settings.
 - Keep tariffs simple in the UI for now, but store enough structure to support future blocks, fixed charges, VAT, fees, and exemptions.
+
+## Relationship Map
+
+```mermaid
+erDiagram
+  customers ||--o{ meters : owns
+  customers ||--o{ meter_readings : receives
+  customers ||--o{ bills : billed
+  customers ||--o{ payments : pays
+  customers }o--|| rates : uses
+  customers }o--|| zones : belongs_to
+  meters ||--o{ meter_readings : records
+  meters ||--o{ meter_events : involved_in
+  billing_periods ||--o{ meter_readings : groups
+  billing_periods ||--o{ bills : groups
+  meter_readings ||--o| bills : generates
+  bills ||--o{ bill_line_items : explains
+  payments ||--o{ payment_allocations : allocates
+  bills ||--o{ payment_allocations : receives
+  users ||--o{ audit_events : performs
+```
 
 ## Proposed Core Entities
 
@@ -33,7 +82,8 @@ Existing `customers` should remain the account owner.
 Recommended additions:
 
 - `deposit_amount NUMERIC(12,2) DEFAULT 0`
-- `deposit_status VARCHAR(20)` such as `not_required`, `held`, `applied`, `refunded`
+- `deposit_paid BOOLEAN DEFAULT FALSE`
+- `deposit_paid_at DATE`
 - `customer_type VARCHAR(40)` such as `domestic`, `commercial`, `institutional`
 - `meter_id INTEGER` nullable pointer to the currently active meter, after the `meters` table exists
 
@@ -70,8 +120,15 @@ Business purpose:
 Initial rule recommendation:
 
 - One global monthly billing period.
-- Due date defaults to `bill_date + 14 days`.
+- Due date defaults to the last day of the following month.
 - Route-specific billing can be added later by linking billing periods to zones.
+
+Operational notes:
+
+- `draft` means the period exists but is not ready for active reading entry.
+- `open` means readings and bills can be posted.
+- `closed` means normal posting should stop, but admin corrections can still happen.
+- `locked` means changes require an explicit adjustment workflow and audit reason.
 
 ### Billing Settings
 
@@ -80,9 +137,9 @@ New table: `billing_settings`
 Suggested fields:
 
 - `id`
-- `default_due_days INTEGER DEFAULT 14`
+- `due_rule VARCHAR(40) DEFAULT 'next_month_end'`
 - `penalty_grace_days INTEGER DEFAULT 0`
-- `penalty_type VARCHAR(20)` such as `none`, `fixed`, `percentage`
+- `penalty_type VARCHAR(20)` such as `none`, `fixed`
 - `penalty_value NUMERIC(12,2) DEFAULT 0`
 - `deposit_required BOOLEAN DEFAULT FALSE`
 - `default_deposit_amount NUMERIC(12,2) DEFAULT 0`
@@ -104,8 +161,10 @@ Suggested fields:
 - `customer_id`
 - `meter_number`
 - `installed_at DATE`
+- `removed_at DATE`
 - `initial_reading NUMERIC(12,2) DEFAULT 0`
 - `status VARCHAR(20)` such as `active`, `replaced`, `removed`, `faulty`
+- `notes TEXT`
 - `created_at`
 - `updated_at`
 
@@ -152,6 +211,7 @@ Recommended additions:
 - `meter_id INTEGER REFERENCES meters(id)`
 - `billing_period_id INTEGER REFERENCES billing_periods(id)`
 - `previous_reading_value NUMERIC(12,2)` snapshot for UI/billing clarity
+- `previous_reading_id INTEGER REFERENCES meter_readings(id)`
 - `source VARCHAR(30)` such as `field`, `admin`, `import`, `portal`
 - `notes TEXT`
 - `updated_by`
@@ -229,6 +289,7 @@ Recommended additions:
 - `external_reference VARCHAR(120)`
 - `received_from VARCHAR(160)`
 - `status VARCHAR(20)` such as `posted`, `void`
+- `total_allocated_amount NUMERIC(12,2)`
 - `voided_by`
 - `voided_at`
 - `updated_by`
@@ -293,6 +354,74 @@ Initial audit rule recommendation:
 - Audit creates, updates, deletes/voids for customers, readings, bills, payments, rates, billing settings, meters, and meter events.
 - Store full JSON snapshots for simplicity and reliability.
 
+## API And UI Impact
+
+### Billing Periods
+
+New API surface:
+
+- `GET /api/billing/periods`
+- `POST /api/billing/periods`
+- `PATCH /api/billing/periods/:id/status`
+- `GET /api/billing/settings`
+- `PUT /api/billing/settings`
+
+UI impact:
+
+- Add a compact billing settings/period management view for admins/accountants.
+- Readings screen should default to the current open billing period.
+- Bills screen should filter by billing period.
+
+### Reading Entry
+
+API impact:
+
+- `GET /api/readings/context?customer_id=&billing_period_id=` should return active meter, previous reading, and warnings.
+- `POST /api/readings` should accept `billing_period_id`, `meter_id`, `reading_value`, `reading_date`, and optional notes.
+
+UI impact:
+
+- Customer selection should reveal active meter number, previous reading, previous reading date, and expected period.
+- Current reading input should validate against the previous reading before submit where possible.
+
+### Meter Replacement
+
+New API surface:
+
+- `GET /api/meters?customer_id=`
+- `POST /api/meter-events/replacement`
+
+UI impact:
+
+- Add a replacement action from the customer or reading workflow.
+- Replacement form captures old final reading, new meter number, new initial reading, date, and reason.
+
+### Payments And Receipts
+
+API impact:
+
+- `POST /api/payments` should create one receipt row and one or many allocation rows.
+- `GET /api/payments/:id` should return receipt, allocations, and affected bills.
+- Existing payment listing should show receipt number, channel, external reference, and total amount.
+
+UI impact:
+
+- Payment form should use `payment_channel` values: `cash`, `bank`, `mpesa_paybill`, `manual_adjustment`.
+- Reference label should adapt to the channel: receipt number, bank slip, M-Pesa transaction code, or adjustment note.
+- Payment history should show one row per receipt, not one row per allocated bill.
+
+### Audit Trail
+
+API impact:
+
+- Internal helper: `recordAuditEvent(client, actor, action, entityType, entityId, beforeData, afterData, reason, req)`.
+- Later read API: `GET /api/audit-events?entity_type=&entity_id=`.
+
+UI impact:
+
+- No heavy UI needed in the first slice.
+- Add lightweight audit history panels later on customer, bill, payment, and reading detail screens.
+
 ## Core Workflows
 
 ### 1. Billing Period Setup
@@ -340,6 +469,108 @@ Initial audit rule recommendation:
 3. Audit event is inserted before commit.
 4. UI can later show audit history by record.
 
+## Implementation Slices
+
+### Slice 1: Billing Periods And Settings
+
+Database:
+
+- Add `billing_periods`.
+- Add `billing_settings`.
+- Add `billing_period_id`, `bill_number`, `subtotal_amount`, `penalty_amount`, `deposit_applied_amount`, `adjustment_amount`, `total_amount`, `balance_amount`, `issued_at`, and `locked_at` to `bills`.
+- Backfill existing bills into billing periods based on `billing_month`.
+
+Backend:
+
+- Replace hard-coded due date logic with billing settings.
+- Link new bills to the current/open billing period.
+- Keep `amount` and `paid_amount` working for compatibility.
+
+Frontend:
+
+- Add billing period visibility to bills.
+- Add due date and balance columns if space allows.
+
+### Slice 2: Meters And Previous Reading Context
+
+Database:
+
+- Add `meters`. Implemented in `server/database/migrations/003_meters_reading_context.sql`.
+- Create one active generated meter for every existing customer.
+- Add `meter_id`, `billing_period_id`, `previous_reading_id`, and `previous_reading_value` to `meter_readings`.
+- Backfill readings to each customer's generated active meter.
+
+Backend:
+
+- Add reading context endpoint: `GET /api/readings/context?customer_id=&reading_date=`.
+- Change reading creation and recalculation to use active meter history first.
+
+Frontend:
+
+- Show active meter, previous reading/date, and monthly billing period during reading entry.
+
+### Slice 3: Meter Replacement
+
+Database:
+
+- Add `meter_events`. Implemented in `server/database/migrations/004_meter_replacement_events.sql`.
+- Change reading uniqueness from customer/date to meter/date so old-meter final and new-meter initial readings can share the replacement date.
+
+Backend:
+
+- Add replacement endpoint wrapped in a transaction: `POST /api/meters/replace`.
+- Mark old meter replaced and create new active meter.
+- Record an old-meter final reading and a new-meter initial baseline reading.
+- Recalculate/create the final old-meter bill when previous usage exists.
+- Create a `meter_events` replacement log.
+
+Frontend:
+
+- Add meter replacement form/action to the readings workspace.
+- Show replacement events in a meter event history table.
+
+### Slice 4: Receipt-Level Payments
+
+Database:
+
+- Add receipt fields to `payments`. Implemented in `server/database/migrations/005_receipt_level_payments.sql`.
+- Add `payment_allocations`.
+- Backfill one allocation for each existing payment row.
+
+Backend:
+
+- Create one payment receipt and one or many allocation rows.
+- Update bills from allocations.
+- Reverse and reapply allocations when a receipt is edited.
+- Keep old `payments.bill_id`, `method`, and `reference` populated temporarily for compatibility.
+
+Frontend:
+
+- Update payment channels to `cash`, `bank`, `mpesa_paybill`, and `manual_adjustment`.
+- Capture receipt number, external reference, received-from, and notes.
+- Show one payment history row per receipt with allocation count and bill numbers.
+
+### Slice 5: Audit Trail
+
+Database:
+
+- Add `audit_events`. Implemented in `server/database/migrations/006_audit_events.sql`.
+
+Backend:
+
+- Add audit helper: `recordAuditEvent`.
+- Log customer creates, updates, and deletes.
+- Log reading creates/updates and bill creation/recalculation.
+- Log bill status changes.
+- Log payment receipt creates/updates and allocation snapshots.
+- Log billing period and billing settings changes.
+- Log meter replacement, new meter creation, replacement readings, and meter event creation.
+- Expose audit endpoint: `GET /api/audit-events`.
+
+Frontend:
+
+- Add Audit Trail page for admins/accountants with actor, action, entity, snapshot summary, reason, and timestamp.
+
 ## Migration Strategy
 
 Recommended implementation order:
@@ -356,15 +587,39 @@ Compatibility notes:
 - Introduce new fields gradually and update UI screens one workflow at a time.
 - Avoid dropping old columns until the replacement screens and reports are stable.
 
+## Compatibility Contract
+
+During milestones 1-5, these existing fields should remain available to avoid breaking current screens:
+
+- `customers.rate`
+- `customers.location`
+- `bills.billing_month`
+- `bills.amount`
+- `bills.paid_amount`
+- `bills.status`
+- `payments.bill_id`
+- `payments.method`
+- `payments.reference`
+
+New code can write the richer fields while still maintaining these compatibility columns. Once reports, receipts, and portal views use the new model, the old fields can be reviewed for deprecation.
+
 ## Open Business Decisions
 
 These decisions should be confirmed while implementing the relevant milestone:
 
 - Should billing periods be global or per zone/route?
-- Should due dates be fixed monthly dates or calculated from bill date?
-- Should penalties be fixed amount, percentage, or disabled at first?
-- Are deposits only held as security, or can they be applied to unpaid balances?
+- Should billing periods be opened manually every month, or should the system auto-create the period when the first reading is posted?
+- What fixed penalty amount should be enabled later, if any?
+- What deposit amount should be required for new customers, if any?
 - Should receipt numbers be manually entered, system generated, or both?
 - Should overpayments be blocked or stored as customer credit?
 - During meter replacement, should mid-period consumption be split on the bill or summarized as one line?
 
+## Recommended Next Step
+
+Start with Slice 1 because it gives every later workflow a stable monthly container:
+
+- Add billing period and billing settings tables.
+- Backfill existing May 2026 seeded bills into a `May 2026` billing period.
+- Replace the hard-coded 14-day due date with last-day-of-next-month billing settings.
+- Preserve the current bill-generation behavior so readings still create bills normally.

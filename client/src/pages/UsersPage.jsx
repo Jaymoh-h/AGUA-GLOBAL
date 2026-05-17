@@ -1,18 +1,22 @@
-import { UserPlus } from "lucide-react";
+import { Edit3, RotateCcw, Save, UserPlus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../services/api";
 
-function UsersPage() {
+const blank = {
+  name: "",
+  email: "",
+  phone: "",
+  role: "meter_reader",
+  customer_id: "",
+  password: "",
+  is_active: true
+};
+
+function UsersPage({ user: currentUser }) {
   const [users, setUsers] = useState([]);
   const [customers, setCustomers] = useState([]);
-  const [form, setForm] = useState({
-    name: "",
-    email: "",
-    phone: "",
-    role: "meter_reader",
-    customer_id: "",
-    password: ""
-  });
+  const [form, setForm] = useState(blank);
+  const [editingId, setEditingId] = useState(null);
   const [message, setMessage] = useState("");
 
   const load = async () => {
@@ -25,19 +29,72 @@ function UsersPage() {
     load().catch((err) => setMessage(err.message));
   }, []);
 
-  const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  const resetForm = () => {
+    setEditingId(null);
+    setForm(blank);
+    setMessage("");
+  };
+
+  const setField = (field, value) => {
+    setForm((current) => ({
+      ...current,
+      [field]: value,
+      ...(field === "role" && value !== "customer" ? { customer_id: "" } : {})
+    }));
+  };
+
+  const edit = (account) => {
+    setEditingId(account.id);
+    setForm({
+      name: account.name || "",
+      email: account.email || "",
+      phone: account.phone || "",
+      role: account.role || "meter_reader",
+      customer_id: account.customer_id || "",
+      password: "",
+      is_active: Boolean(account.is_active)
+    });
+    setMessage("");
+  };
 
   const submit = async (event) => {
     event.preventDefault();
     setMessage("");
+
+    if (!editingId && !form.password) {
+      setMessage("Temporary password is required when creating an account.");
+      return;
+    }
+
     try {
-      await api.users.create({
+      const payload = {
         ...form,
         customer_id: form.role === "customer" && form.customer_id ? Number(form.customer_id) : null
-      });
-      setForm({ name: "", email: "", phone: "", role: "meter_reader", customer_id: "", password: "" });
+      };
+      if (!payload.password) {
+        delete payload.password;
+      }
+
+      if (editingId) {
+        await api.users.update(editingId, payload);
+      } else {
+        await api.users.create(payload);
+      }
+
+      resetForm();
       await load();
-      setMessage("User created.");
+      setMessage(editingId ? "User account updated." : "User account created.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const toggleStatus = async (account) => {
+    setMessage("");
+    try {
+      await api.users.update(account.id, { is_active: !account.is_active });
+      await load();
+      setMessage(account.is_active ? "Account locked." : "Account unlocked.");
     } catch (err) {
       setMessage(err.message);
     }
@@ -55,7 +112,12 @@ function UsersPage() {
       <section className="workspace-grid">
         <form className="panel form-grid" onSubmit={submit}>
           <div className="panel-heading">
-            <h3>Create User</h3>
+            <h3>{editingId ? "Edit User" : "Create User"}</h3>
+            {editingId ? (
+              <button className="icon-button" type="button" onClick={resetForm} title="Cancel editing">
+                <RotateCcw size={16} />
+              </button>
+            ) : null}
           </div>
           <label>
             Name
@@ -81,7 +143,7 @@ function UsersPage() {
           {form.role === "customer" ? (
             <label>
               Linked customer
-              <select value={form.customer_id} onChange={(event) => setField("customer_id", event.target.value)}>
+              <select value={form.customer_id} onChange={(event) => setField("customer_id", event.target.value)} required>
                 <option value="">Select customer</option>
                 {customers.map((customer) => (
                   <option key={customer.id} value={customer.id}>
@@ -92,13 +154,27 @@ function UsersPage() {
             </label>
           ) : null}
           <label>
-            Temporary password
-            <input value={form.password} onChange={(event) => setField("password", event.target.value)} type="password" required />
+            {editingId ? "Reset temporary password" : "Temporary password"}
+            <input
+              value={form.password}
+              onChange={(event) => setField("password", event.target.value)}
+              type="password"
+              required={!editingId}
+            />
+          </label>
+          <label className="checkbox-row">
+            <input
+              checked={Boolean(form.is_active)}
+              onChange={(event) => setField("is_active", event.target.checked)}
+              type="checkbox"
+              disabled={Number(editingId) === Number(currentUser.id)}
+            />
+            Account active
           </label>
           {message ? <p className="form-note">{message}</p> : null}
           <button className="primary-button" type="submit">
-            <UserPlus size={17} />
-            Create user
+            {editingId ? <Save size={17} /> : <UserPlus size={17} />}
+            {editingId ? "Save changes" : "Create user"}
           </button>
         </form>
 
@@ -114,17 +190,47 @@ function UsersPage() {
                   <th>Email</th>
                   <th>Role</th>
                   <th>Customer</th>
+                  <th>Password</th>
                   <th>Status</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {users.map((user) => (
-                  <tr key={user.id}>
-                    <td>{user.name}</td>
-                    <td>{user.email}</td>
-                    <td>{user.role.replace("_", " ")}</td>
-                    <td>{user.customer_acc_number || "-"}</td>
-                    <td>{user.is_active ? "Active" : "Inactive"}</td>
+                {users.map((account) => (
+                  <tr key={account.id}>
+                    <td>
+                      <strong>{account.name}</strong>
+                      <small>{account.phone || "-"}</small>
+                    </td>
+                    <td>{account.email}</td>
+                    <td>{account.role.replace("_", " ")}</td>
+                    <td>
+                      <strong>{account.customer_acc_number || "-"}</strong>
+                      <small>{account.customer_name || ""}</small>
+                    </td>
+                    <td>
+                      <span className={`status ${account.must_change_password ? "status-high" : "status-valid"}`}>
+                        {account.must_change_password ? "Temporary" : "Set"}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`status ${account.is_active ? "status-valid" : "status-locked"}`}>
+                        {account.is_active ? "Active" : "Locked"}
+                      </span>
+                    </td>
+                    <td className="row-actions">
+                      <button type="button" onClick={() => edit(account)}>
+                        <Edit3 size={15} />
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleStatus(account)}
+                        disabled={Number(account.id) === Number(currentUser.id)}
+                      >
+                        {account.is_active ? "Lock" : "Unlock"}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -137,4 +243,3 @@ function UsersPage() {
 }
 
 export default UsersPage;
-

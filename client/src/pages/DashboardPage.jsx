@@ -39,7 +39,7 @@ function DashboardPage() {
           <div className="panel-heading">
             <h3>Monthly Summary</h3>
           </div>
-          <ResponsiveContainer width="100%" height={320}>
+          <ResponsiveContainer width="100%" height={256}>
             <BarChart data={data.monthly}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey="month" />
@@ -88,4 +88,3 @@ function DashboardPage() {
 }
 
 export default DashboardPage;
-

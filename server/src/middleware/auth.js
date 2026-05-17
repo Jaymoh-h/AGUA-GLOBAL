@@ -14,7 +14,7 @@ const authenticate = async (req, _res, next) => {
 
     const payload = jwt.verify(token, jwtSecret);
     const { rows } = await pool.query(
-      "SELECT id, customer_id, name, email, role, is_active FROM users WHERE id = $1",
+      "SELECT id, customer_id, name, email, phone, role, is_active, must_change_password FROM users WHERE id = $1",
       [payload.id]
     );
 

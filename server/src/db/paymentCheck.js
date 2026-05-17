@@ -12,7 +12,7 @@ const run = async () => {
        c.id AS customer_id,
        c.acc_number,
        c.name,
-       COALESCE(SUM(b.amount - b.paid_amount) FILTER (WHERE b.status <> 'paid'), 0) AS balance_due,
+       COALESCE(SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount)) FILTER (WHERE b.status <> 'paid'), 0) AS balance_due,
        COUNT(b.id) FILTER (WHERE b.status <> 'paid') AS unpaid_bills
      FROM customers c
      LEFT JOIN bills b ON b.customer_id = c.id
@@ -24,7 +24,9 @@ const run = async () => {
   console.table(balances.rows);
 
   const paymentCount = await pool.query("SELECT COUNT(*) AS count FROM payments");
-  console.log(`Payments in database: ${paymentCount.rows[0].count}`);
+  const allocationCount = await pool.query("SELECT COUNT(*) AS count FROM payment_allocations");
+  console.log(`Payment receipts in database: ${paymentCount.rows[0].count}`);
+  console.log(`Payment allocations in database: ${allocationCount.rows[0].count}`);
 
   const selectedCustomerId =
     customerId || balances.rows.find((row) => Number(row.balance_due) > 0)?.customer_id;
@@ -38,7 +40,8 @@ const run = async () => {
   try {
     await client.query("BEGIN");
     const bills = await client.query(
-      `SELECT id, amount, paid_amount, status, amount - paid_amount AS balance
+      `SELECT id, COALESCE(NULLIF(total_amount, 0), amount) AS amount, paid_amount, status,
+              COALESCE(NULLIF(balance_amount, 0), amount - paid_amount) AS balance
        FROM bills
        WHERE customer_id = $1 AND status <> 'paid'
        ORDER BY billing_month ASC, id ASC
@@ -49,10 +52,7 @@ const run = async () => {
     console.log(`Dry run customer_id=${selectedCustomerId}, amount=${amount}`);
     console.table(bills.rows);
 
-    const totalBalance = bills.rows.reduce(
-      (sum, bill) => sum + (Number(bill.amount) - Number(bill.paid_amount)),
-      0
-    );
+    const totalBalance = bills.rows.reduce((sum, bill) => sum + Number(bill.balance), 0);
     console.log(`Total unpaid balance for dry run customer: ${totalBalance}`);
 
     if (amount > totalBalance) {
@@ -62,12 +62,21 @@ const run = async () => {
       let inserts = 0;
       for (const bill of bills.rows) {
         if (remainingPayment <= 0) break;
-        const billBalance = Number(bill.amount) - Number(bill.paid_amount);
+        const billBalance = Number(bill.balance);
         const appliedAmount = Math.min(remainingPayment, billBalance);
-        await client.query(
-          `INSERT INTO payments (customer_id, bill_id, amount, payment_date, method, reference, notes)
-           VALUES ($1, $2, $3, CURRENT_DATE, 'cash', 'DRY-RUN', 'Rollback dry run')`,
+        const paymentResult = await client.query(
+          `INSERT INTO payments (
+             customer_id, bill_id, amount, payment_date, method, reference,
+             receipt_number, payment_channel, external_reference, total_allocated_amount, notes
+           )
+           VALUES ($1, $2::integer, $3, CURRENT_DATE, 'cash', 'DRY-RUN', 'DRY-RUN-' || $2::integer::text, 'cash', 'DRY-RUN', $3, 'Rollback dry run')
+           RETURNING id`,
           [selectedCustomerId, bill.id, appliedAmount]
+        );
+        await client.query(
+          `INSERT INTO payment_allocations (payment_id, bill_id, amount)
+           VALUES ($1, $2, $3)`,
+          [paymentResult.rows[0].id, bill.id, appliedAmount]
         );
         const nextPaidAmount = Number(bill.paid_amount) + appliedAmount;
         const nextStatus = nextPaidAmount >= Number(bill.amount) ? "paid" : "partial";
@@ -93,6 +102,5 @@ const run = async () => {
 
 run().catch(async (error) => {
   console.error(error);
-  await pool.end();
   process.exit(1);
 });
