@@ -1,6 +1,7 @@
 const fs = require("fs/promises");
 const path = require("path");
 const pool = require("../db/pool");
+const { logoStorageMode } = require("../config/env");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
@@ -39,6 +40,21 @@ const parseLogoUpload = ({ data, mime_type }) => {
   }
 
   return { buffer, extension, mimeType };
+};
+
+const persistLogo = async ({ buffer, extension, mimeType }) => {
+  if (logoStorageMode === "data-url") {
+    return `data:${mimeType};base64,${buffer.toString("base64")}`;
+  }
+
+  if (logoStorageMode !== "filesystem") {
+    throw new ApiError(500, "Unsupported logo storage mode.");
+  }
+
+  const fileName = `business-logo-${Date.now()}.${extension}`;
+  await fs.mkdir(uploadDir, { recursive: true });
+  await fs.writeFile(path.join(uploadDir, fileName), buffer);
+  return `/uploads/${fileName}`;
 };
 
 const getBusinessSettingsRow = async (client) => {
@@ -140,15 +156,10 @@ const updateBusinessSettings = asyncHandler(async (req, res) => {
 });
 
 const uploadBusinessLogo = asyncHandler(async (req, res) => {
-  const { buffer, extension } = parseLogoUpload(req.body);
-  const fileName = `business-logo-${Date.now()}.${extension}`;
-  const logoUrl = `/uploads/${fileName}`;
+  const logoUrl = await persistLogo(parseLogoUpload(req.body));
 
   const client = await pool.connect();
   try {
-    await fs.mkdir(uploadDir, { recursive: true });
-    await fs.writeFile(path.join(uploadDir, fileName), buffer);
-
     await client.query("BEGIN");
     const before = await getBusinessSettingsRow(client);
     await client.query("SELECT * FROM business_settings WHERE id = 1 FOR UPDATE");

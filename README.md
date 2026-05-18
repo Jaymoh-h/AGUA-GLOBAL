@@ -178,6 +178,82 @@ npm run dev
 
 Default frontend URL: `http://localhost:5173`
 
+## Deploying To Vercel
+
+This repository is a split app:
+
+- `client/` is the Vite React frontend.
+- `server/` is the Express API backed by PostgreSQL.
+
+Create two Vercel projects from the same GitHub repository.
+
+### 1. Production Database
+
+Create a managed PostgreSQL database first. Import:
+
+```text
+server/database/schema.sql
+server/database/seed.sql
+```
+
+Use a strong production admin password after the first login. If the database provider requires TLS, set `DATABASE_SSL=true` in the API project's environment variables.
+
+### 2. API Project
+
+Import the GitHub repository into Vercel and use these settings:
+
+```text
+Root Directory: server
+Framework Preset: Express
+Install Command: npm install
+Build Command: None
+Output Directory: None
+```
+
+Add these environment variables in Vercel:
+
+```text
+DATABASE_URL=postgres://...
+DATABASE_SSL=true
+JWT_SECRET=<long-random-secret>
+JWT_EXPIRES_IN=8h
+CLIENT_ORIGIN=https://<client-project>.vercel.app
+LOGO_STORAGE_MODE=data-url
+```
+
+After deployment, verify:
+
+```text
+https://<api-project>.vercel.app/api/health
+```
+
+### 3. Client Project
+
+Import the same GitHub repository into a second Vercel project and use these settings:
+
+```text
+Root Directory: client
+Framework Preset: Vite
+Install Command: npm install
+Build Command: npm run build
+Output Directory: dist
+```
+
+Add this environment variable in Vercel:
+
+```text
+VITE_API_URL=https://<api-project>.vercel.app/api
+```
+
+After the client project has its final URL or custom domain, update the API project's `CLIENT_ORIGIN` to match it exactly and redeploy the API.
+
+### Production Notes
+
+- Keep `.env` files out of Git. Add secrets only in the Vercel dashboard.
+- Rotate `JWT_SECRET` if a previous secret was ever committed or shared.
+- `LOGO_STORAGE_MODE=data-url` stores uploaded business logos in PostgreSQL so they survive Vercel serverless deployments. Use `filesystem` only for local development or a server with durable disk storage.
+- If a custom domain is added later, update both `VITE_API_URL` and `CLIENT_ORIGIN` to the new production URLs.
+
 ## Login Troubleshooting
 
 If login says `Something went wrong` or `Database login failed`, check `server/.env`.
