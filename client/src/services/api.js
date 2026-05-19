@@ -67,6 +67,10 @@ export const api = {
     },
     previewImport: (csv) => request("/customers/imports/preview", { method: "POST", body: { csv } }),
     commitImport: (csv) => request("/customers/imports/commit", { method: "POST", body: { csv } }),
+    previewOpeningBalanceImport: (csv) =>
+      request("/customers/opening-balances/imports/preview", { method: "POST", body: { csv } }),
+    commitOpeningBalanceImport: (csv) =>
+      request("/customers/opening-balances/imports/commit", { method: "POST", body: { csv } }),
     create: (payload) => request("/customers", { method: "POST", body: payload }),
     update: (id, payload) => request(`/customers/${id}`, { method: "PUT", body: payload }),
     remove: (id) => request(`/customers/${id}`, { method: "DELETE" })

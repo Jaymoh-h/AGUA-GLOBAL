@@ -119,6 +119,56 @@ const createMigrationBalanceBill = async (client, customer, amount, date) => {
   return result.rows[0];
 };
 
+const upsertMigrationBalanceBill = async (client, customer, amount, date) => {
+  const balanceAmount = toMoney(amount);
+  const billNumber = `MIG-${customer.id}`;
+  const existing = await client.query("SELECT * FROM bills WHERE customer_id = $1 AND bill_number = $2 FOR UPDATE", [
+    customer.id,
+    billNumber
+  ]);
+  const migrationBill = existing.rows[0];
+
+  if (migrationBill) {
+    const allocationResult = await client.query("SELECT COUNT(*)::integer AS count FROM payment_allocations WHERE bill_id = $1", [
+      migrationBill.id
+    ]);
+    if (Number(migrationBill.paid_amount || 0) > 0 || Number(allocationResult.rows[0]?.count || 0) > 0) {
+      throw new ApiError(
+        400,
+        `Opening balance for ${customer.acc_number} already has payments allocated. Reverse or edit those payments before overwriting it.`
+      );
+    }
+  }
+
+  if (balanceAmount <= 0 || !date) {
+    if (migrationBill) {
+      await client.query("DELETE FROM bills WHERE id = $1", [migrationBill.id]);
+    }
+    return null;
+  }
+
+  if (migrationBill) {
+    const updated = await client.query(
+      `UPDATE bills
+       SET billing_month = $1,
+           amount = $2,
+           subtotal_amount = $2,
+           total_amount = $2,
+           balance_amount = $2,
+           paid_amount = 0,
+           status = 'unpaid',
+           due_date = $1,
+           issued_at = COALESCE(issued_at, NOW())
+       WHERE id = $3
+       RETURNING *`,
+      [date, balanceAmount, migrationBill.id]
+    );
+    return updated.rows[0];
+  }
+
+  return createMigrationBalanceBill(client, customer, balanceAmount, date);
+};
+
 const prepareCustomerImport = async (csvText, client) => {
   const rateResult = await client.query("SELECT id, name FROM rates WHERE is_active = TRUE");
   const zoneResult = await client.query("SELECT id, name FROM zones WHERE is_active = TRUE");
@@ -182,6 +232,77 @@ const prepareCustomerImport = async (csvText, client) => {
       opening_balance_amount: Number.isFinite(openingBalanceAmount) ? openingBalanceAmount : "",
       opening_balance_date: openingBalanceDate,
       status,
+      errors,
+      warnings,
+      status_label: errors.length ? "invalid" : "valid"
+    };
+  });
+
+  return {
+    rows,
+    summary: {
+      total: rows.length,
+      valid: rows.filter((row) => row.status_label === "valid").length,
+      invalid: rows.filter((row) => row.status_label === "invalid").length
+    }
+  };
+};
+
+const prepareOpeningBalanceImport = async (csvText, client) => {
+  const customerResult = await client.query(
+    `SELECT c.id, c.acc_number, c.name, c.opening_balance_amount, c.opening_balance_date,
+       b.id AS migration_bill_id,
+       b.paid_amount AS migration_paid_amount,
+       COALESCE(pa.allocation_count, 0) AS migration_allocation_count
+     FROM customers c
+     LEFT JOIN bills b ON b.customer_id = c.id AND b.bill_number = 'MIG-' || c.id::text
+     LEFT JOIN (
+       SELECT bill_id, COUNT(*)::integer AS allocation_count
+       FROM payment_allocations
+       GROUP BY bill_id
+     ) pa ON pa.bill_id = b.id`
+  );
+  const customersByAccount = new Map(
+    customerResult.rows.map((customer) => [customer.acc_number.toLowerCase(), customer])
+  );
+  const seenAccounts = new Set();
+
+  const rows = parseCsv(csvText).map((row) => {
+    const errors = [];
+    const warnings = [];
+    const accNumber = readImportValue(row, ["acc_number", "account", "account_number"]);
+    const openingBalanceAmount = parseImportAmount(readImportValue(row, ["opening_balance_amount", "opening_balance"]), 0);
+    const openingBalanceDate = readImportValue(row, ["opening_balance_date", "balance_date"]) || "";
+    const customer = accNumber ? customersByAccount.get(accNumber.toLowerCase()) : null;
+
+    if (!accNumber) errors.push("Account number is required.");
+    if (accNumber && seenAccounts.has(accNumber.toLowerCase())) errors.push("Duplicate account number in CSV.");
+    if (accNumber && !customer) errors.push("Customer account not found.");
+    if (!Number.isFinite(openingBalanceAmount)) errors.push("Opening balance amount must be a valid number.");
+    if (openingBalanceAmount !== 0 && !openingBalanceDate) errors.push("Opening balance date is required.");
+    if (openingBalanceDate && !isDateOnly(openingBalanceDate)) errors.push("Opening balance date must use YYYY-MM-DD format.");
+    if (
+      customer &&
+      Number(customer.migration_bill_id || 0) > 0 &&
+      (Number(customer.migration_paid_amount || 0) > 0 || Number(customer.migration_allocation_count || 0) > 0)
+    ) {
+      errors.push("Opening balance bill already has payments allocated. Reverse or edit those payments first.");
+    }
+    if (Number.isFinite(openingBalanceAmount) && openingBalanceAmount < 0) {
+      warnings.push("Negative amount will be treated as customer credit.");
+    }
+
+    if (accNumber) seenAccounts.add(accNumber.toLowerCase());
+
+    return {
+      rowNumber: row.rowNumber,
+      customer_id: customer?.id || null,
+      name: customer?.name || "",
+      acc_number: accNumber,
+      previous_opening_balance_amount: customer?.opening_balance_amount || 0,
+      previous_opening_balance_date: customer?.opening_balance_date || "",
+      opening_balance_amount: Number.isFinite(openingBalanceAmount) ? openingBalanceAmount : "",
+      opening_balance_date: openingBalanceDate,
       errors,
       warnings,
       status_label: errors.length ? "invalid" : "valid"
@@ -500,6 +621,82 @@ const commitCustomerImport = asyncHandler(async (req, res) => {
   }
 });
 
+const previewOpeningBalanceImport = asyncHandler(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    res.json(await prepareOpeningBalanceImport(req.body.csv, client));
+  } finally {
+    client.release();
+  }
+});
+
+const commitOpeningBalanceImport = asyncHandler(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const preview = await prepareOpeningBalanceImport(req.body.csv, client);
+    if (preview.summary.invalid > 0) {
+      throw new ApiError(400, "Import has invalid rows. Preview and fix the CSV before committing.");
+    }
+
+    const updated = [];
+    for (const row of preview.rows) {
+      const beforeResult = await client.query("SELECT * FROM customers WHERE id = $1 FOR UPDATE", [row.customer_id]);
+      const before = beforeResult.rows[0];
+      if (!before) {
+        throw new ApiError(404, `Customer account ${row.acc_number} was not found.`);
+      }
+
+      const openingBalance = normalizeOpeningBalance(row.opening_balance_amount, row.opening_balance_date);
+      const afterResult = await client.query(
+        `UPDATE customers
+         SET opening_balance_amount = $1,
+             opening_balance_date = $2,
+             updated_at = NOW()
+         WHERE id = $3
+         RETURNING *`,
+        [openingBalance.balanceAmount, openingBalance.balanceDate, before.id]
+      );
+      const after = afterResult.rows[0];
+      const migrationBill = await upsertMigrationBalanceBill(
+        client,
+        after,
+        after.opening_balance_amount,
+        after.opening_balance_date
+      );
+
+      updated.push({ customer: after, migration_bill: migrationBill });
+      await recordAuditEvent(client, {
+        req,
+        action: "customer.opening_balance_overwritten",
+        entityType: "customer",
+        entityId: after.id,
+        beforeData: before,
+        afterData: after,
+        reason: `Opening balance overwrite import row ${row.rowNumber}`
+      });
+      if (migrationBill) {
+        await recordAuditEvent(client, {
+          req,
+          action: "bill.migration_balance_updated",
+          entityType: "bill",
+          entityId: migrationBill.id,
+          afterData: migrationBill,
+          reason: `Opening balance overwrite import row ${row.rowNumber}`
+        });
+      }
+    }
+
+    await client.query("COMMIT");
+    res.json({ updated: updated.length, rows: updated });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 const createCustomer = asyncHandler(async (req, res) => {
   const {
     name,
@@ -666,6 +863,14 @@ const updateCustomer = asyncHandler(async (req, res) => {
     if (!rows[0]) {
       throw new ApiError(404, "Customer not found, or selected rate/zone is inactive.");
     }
+    const migrationBill = openingBalance
+      ? await upsertMigrationBalanceBill(
+          client,
+          rows[0],
+          rows[0].opening_balance_amount,
+          rows[0].opening_balance_date
+        )
+      : null;
     await recordAuditEvent(client, {
       req,
       action: "customer.updated",
@@ -674,6 +879,15 @@ const updateCustomer = asyncHandler(async (req, res) => {
       beforeData: before,
       afterData: rows[0]
     });
+    if (migrationBill) {
+      await recordAuditEvent(client, {
+        req,
+        action: "bill.migration_balance_updated",
+        entityType: "bill",
+        entityId: migrationBill.id,
+        afterData: migrationBill
+      });
+    }
     await client.query("COMMIT");
     res.json(rows[0]);
   } catch (error) {
@@ -717,6 +931,8 @@ module.exports = {
   getCustomerStatement,
   previewCustomerImport,
   commitCustomerImport,
+  previewOpeningBalanceImport,
+  commitOpeningBalanceImport,
   createCustomer,
   updateCustomer,
   deleteCustomer

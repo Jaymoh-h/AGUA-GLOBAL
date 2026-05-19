@@ -5,6 +5,8 @@ const {
   getCustomerStatement,
   previewCustomerImport,
   commitCustomerImport,
+  previewOpeningBalanceImport,
+  commitOpeningBalanceImport,
   createCustomer,
   updateCustomer,
   deleteCustomer
@@ -17,6 +19,8 @@ router.use(authenticate);
 router.get("/", listCustomers);
 router.post("/imports/preview", authorize("admin", "accountant"), previewCustomerImport);
 router.post("/imports/commit", authorize("admin", "accountant"), commitCustomerImport);
+router.post("/opening-balances/imports/preview", authorize("admin", "accountant"), previewOpeningBalanceImport);
+router.post("/opening-balances/imports/commit", authorize("admin", "accountant"), commitOpeningBalanceImport);
 router.get("/:id/statement", authorize("admin", "accountant"), getCustomerStatement);
 router.get("/:id", getCustomer);
 router.post("/", authorize("admin", "accountant"), createCustomer);

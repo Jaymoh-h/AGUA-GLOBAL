@@ -33,6 +33,8 @@ const customerImportHeaders = [
   "status"
 ];
 
+const openingBalanceImportHeaders = ["acc_number", "opening_balance_amount", "opening_balance_date"];
+
 function CustomersPage({ user }) {
   const [customers, setCustomers] = useState([]);
   const [rates, setRates] = useState([]);
@@ -46,6 +48,8 @@ function CustomersPage({ user }) {
   const [statement, setStatement] = useState(null);
   const [csvText, setCsvText] = useState("");
   const [importPreview, setImportPreview] = useState(null);
+  const [openingCsvText, setOpeningCsvText] = useState("");
+  const [openingImportPreview, setOpeningImportPreview] = useState(null);
   const [importing, setImporting] = useState(false);
   const [message, setMessage] = useState("");
   const canWrite = ["admin", "accountant"].includes(user.role);
@@ -195,6 +199,45 @@ function CustomersPage({ user }) {
   };
 
   const importReady = importPreview?.summary?.valid > 0 && importPreview?.summary?.invalid === 0;
+  const openingImportReady =
+    openingImportPreview?.summary?.valid > 0 && openingImportPreview?.summary?.invalid === 0;
+
+  const previewOpeningBalanceImport = async () => {
+    setMessage("");
+    setImporting(true);
+    try {
+      const preview = await api.customers.previewOpeningBalanceImport(openingCsvText);
+      setOpeningImportPreview(preview);
+      setMessage(`Opening balance preview ready: ${preview.summary.valid} valid, ${preview.summary.invalid} invalid.`);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleOpeningCsvFile = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setOpeningCsvText(await file.text());
+    setOpeningImportPreview(null);
+  };
+
+  const commitOpeningBalanceImport = async () => {
+    setMessage("");
+    setImporting(true);
+    try {
+      const result = await api.customers.commitOpeningBalanceImport(openingCsvText);
+      setOpeningCsvText("");
+      setOpeningImportPreview(null);
+      await load();
+      setMessage(`${result.updated} opening balance(s) overwritten.`);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setImporting(false);
+    }
+  };
 
   return (
     <section className="page-stack">
@@ -420,6 +463,92 @@ function CustomersPage({ user }) {
                       <td>
                         <strong>{Number(row.deposit_amount || 0).toLocaleString()}</strong>
                         <small>{row.deposit_paid ? "Paid" : "Not paid"}</small>
+                      </td>
+                      <td>
+                        <strong>{Number(row.opening_balance_amount || 0).toLocaleString()}</strong>
+                        <small>{row.opening_balance_date || "-"}</small>
+                      </td>
+                      <td>
+                        <span className={`status status-${row.status_label}`}>{row.status_label}</span>
+                        {[...row.errors, ...row.warnings].map((item) => (
+                          <small key={item}>{item}</small>
+                        ))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {canWrite ? (
+        <section className="panel full-span form-grid">
+          <div className="panel-heading">
+            <div>
+              <h3>Opening Balance Overwrite</h3>
+              <p className="muted">
+                Use this to correct existing imported customers before payment import. Match rows by account number.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => downloadCsvTemplate("opening-balances-overwrite-template.csv", openingBalanceImportHeaders)}
+            >
+              <Download size={16} />
+              Template
+            </button>
+          </div>
+          <label>
+            CSV file
+            <input type="file" accept=".csv,text/csv" onChange={handleOpeningCsvFile} />
+          </label>
+          <textarea
+            value={openingCsvText}
+            onChange={(event) => {
+              setOpeningCsvText(event.target.value);
+              setOpeningImportPreview(null);
+            }}
+            rows="5"
+            placeholder="acc_number,opening_balance_amount,opening_balance_date"
+          />
+          <div className="row-actions">
+            <button
+              className="primary-button"
+              type="button"
+              onClick={previewOpeningBalanceImport}
+              disabled={importing || !openingCsvText.trim()}
+            >
+              Preview overwrite
+            </button>
+            <button type="button" onClick={commitOpeningBalanceImport} disabled={importing || !openingImportReady}>
+              Commit overwrite
+            </button>
+          </div>
+
+          {openingImportPreview ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Row</th>
+                    <th>Account</th>
+                    <th>Name</th>
+                    <th>Previous</th>
+                    <th>Corrected</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {openingImportPreview.rows.map((row) => (
+                    <tr key={row.rowNumber}>
+                      <td>{row.rowNumber}</td>
+                      <td>{row.acc_number || "-"}</td>
+                      <td>{row.name || "-"}</td>
+                      <td>
+                        <strong>{Number(row.previous_opening_balance_amount || 0).toLocaleString()}</strong>
+                        <small>{row.previous_opening_balance_date || "-"}</small>
                       </td>
                       <td>
                         <strong>{Number(row.opening_balance_amount || 0).toLocaleString()}</strong>
