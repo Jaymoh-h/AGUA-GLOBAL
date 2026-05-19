@@ -2,9 +2,9 @@ import { Droplets } from "lucide-react";
 import { useState } from "react";
 import { api } from "../services/api";
 
-function LoginPage({ onLogin }) {
-  const [email, setEmail] = useState("admin@agua.local");
-  const [password, setPassword] = useState("Admin@123");
+function LoginPage({ appName, onLogin }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -31,7 +31,7 @@ function LoginPage({ onLogin }) {
             <Droplets size={24} />
           </span>
           <div>
-            <h1>AGUA Global</h1>
+            <h1>{appName}</h1>
             <p>Water billing and customer management</p>
           </div>
         </div>
@@ -39,11 +39,23 @@ function LoginPage({ onLogin }) {
         <form onSubmit={submit} className="form-grid">
           <label>
             Email
-            <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" required />
+            <input
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              type="email"
+              autoComplete="username"
+              required
+            />
           </label>
           <label>
             Password
-            <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" required />
+            <input
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              type="password"
+              autoComplete="current-password"
+              required
+            />
           </label>
           {error ? <p className="form-error">{error}</p> : null}
           <button className="primary-button" type="submit" disabled={loading}>
@@ -56,4 +68,3 @@ function LoginPage({ onLogin }) {
 }
 
 export default LoginPage;
-

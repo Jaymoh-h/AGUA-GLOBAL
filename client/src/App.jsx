@@ -17,6 +17,7 @@ import ReadingsPage from "./pages/ReadingsPage";
 import ReportsPage from "./pages/ReportsPage";
 import UsersPage from "./pages/UsersPage";
 import ZonesPage from "./pages/ZonesPage";
+import { api } from "./services/api";
 
 const access = {
   portal: ["customer"],
@@ -53,6 +54,7 @@ const getSavedUser = () => {
 function App() {
   const [user, setUser] = useState(getSavedUser);
   const [currentPage, setCurrentPage] = useState(() => (getSavedUser()?.role === "customer" ? "portal" : "dashboard"));
+  const [appName, setAppName] = useState("Water Billing");
 
   const allowedPages = useMemo(() => {
     if (!user) return [];
@@ -66,6 +68,22 @@ function App() {
       setCurrentPage(user.role === "customer" ? "portal" : "dashboard");
     }
   }, [allowedPages, currentPage, user]);
+
+  useEffect(() => {
+    api.businessSettings
+      .public()
+      .then((settings) => {
+        const businessName = settings?.business_name?.trim();
+        if (businessName) {
+          setAppName(businessName);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    document.title = appName;
+  }, [appName]);
 
   const handleLogin = ({ token, user: nextUser }) => {
     localStorage.setItem("agua_token", token);
@@ -90,7 +108,7 @@ function App() {
   };
 
   if (!user) {
-    return <LoginPage onLogin={handleLogin} />;
+    return <LoginPage appName={appName} onLogin={handleLogin} />;
   }
 
   if (user.must_change_password) {
@@ -116,7 +134,7 @@ function App() {
   };
 
   return (
-    <Layout user={user} currentPage={currentPage} onNavigate={setCurrentPage} onLogout={handleLogout}>
+    <Layout appName={appName} user={user} currentPage={currentPage} onNavigate={setCurrentPage} onLogout={handleLogout}>
       {pages[currentPage] || pages.dashboard}
     </Layout>
   );

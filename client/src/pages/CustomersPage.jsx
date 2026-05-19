@@ -540,7 +540,7 @@ function CustomersPage({ user }) {
               <span className="receipt-logo-mark">AG</span>
             )}
             <div>
-              <h3>{business?.name || "AGUA Global"}</h3>
+              <h3>{business?.business_name || "Water Billing"}</h3>
               <p>Customer Statement</p>
               <p>{business?.phone || ""}</p>
             </div>

@@ -411,7 +411,7 @@ function PaymentsPage() {
                   <div className="receipt-logo-mark">{businessSettings?.business_name?.slice(0, 2) || "AG"}</div>
                 )}
                 <div>
-                  <h3>{businessSettings?.business_name || "AGUA Global"}</h3>
+                  <h3>{businessSettings?.business_name || "Water Billing"}</h3>
                   {businessSettings?.legal_name ? <p>{businessSettings.legal_name}</p> : null}
                   {businessSettings?.physical_address ? <p>{businessSettings.physical_address}</p> : null}
                   <p>

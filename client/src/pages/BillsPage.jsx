@@ -139,7 +139,7 @@ function BillsPage({ user }) {
               <div className="receipt-logo-mark">{businessSettings?.business_name?.slice(0, 2) || "AG"}</div>
             )}
             <div>
-              <h3>{businessSettings?.business_name || "AGUA Global"}</h3>
+              <h3>{businessSettings?.business_name || "Water Billing"}</h3>
               {businessSettings?.legal_name ? <p>{businessSettings.legal_name}</p> : null}
               {businessSettings?.physical_address ? <p>{businessSettings.physical_address}</p> : null}
               <p>{[businessSettings?.phone, businessSettings?.email].filter(Boolean).join(" | ")}</p>
@@ -253,7 +253,7 @@ function BillsPage({ user }) {
             {businessSettings?.paybill_number ? <p>Paybill: {businessSettings.paybill_number}</p> : null}
             {businessSettings?.till_number ? <p>Till: {businessSettings.till_number}</p> : null}
             {businessSettings?.receipt_footer_note ? <p>{businessSettings.receipt_footer_note}</p> : null}
-            <small>{businessSettings?.business_name || "AGUA Global"} customer bill</small>
+            <small>{businessSettings?.business_name || "Water Billing"} customer bill</small>
           </div>
         </div>
       ) : null}

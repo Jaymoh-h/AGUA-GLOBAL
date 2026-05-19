@@ -113,6 +113,7 @@ export const api = {
     }
   },
   businessSettings: {
+    public: () => request("/business-settings/public"),
     get: () => request("/business-settings"),
     update: (payload) => request("/business-settings", { method: "PUT", body: payload }),
     uploadLogo: (payload) => request("/business-settings/logo", { method: "POST", body: payload })

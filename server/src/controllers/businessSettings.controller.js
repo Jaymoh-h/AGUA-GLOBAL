@@ -79,6 +79,16 @@ const getBusinessSettings = asyncHandler(async (_req, res) => {
   }
 });
 
+const getPublicBusinessSettings = asyncHandler(async (_req, res) => {
+  const client = await pool.connect();
+  try {
+    const settings = await getBusinessSettingsRow(client);
+    res.json({ business_name: settings.business_name });
+  } finally {
+    client.release();
+  }
+});
+
 const updateBusinessSettings = asyncHandler(async (req, res) => {
   const businessName = nullableText(req.body.business_name);
   const defaultCurrency = nullableText(req.body.default_currency) || "KES";
@@ -194,6 +204,7 @@ const uploadBusinessLogo = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  getPublicBusinessSettings,
   getBusinessSettings,
   updateBusinessSettings,
   uploadBusinessLogo

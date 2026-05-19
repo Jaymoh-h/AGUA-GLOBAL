@@ -1,5 +1,6 @@
 const express = require("express");
 const {
+  getPublicBusinessSettings,
   getBusinessSettings,
   updateBusinessSettings,
   uploadBusinessLogo
@@ -7,6 +8,8 @@ const {
 const { authenticate, authorize } = require("../middleware/auth");
 
 const router = express.Router();
+
+router.get("/public", getPublicBusinessSettings);
 
 router.use(authenticate);
 router.get("/", authorize("admin", "accountant"), getBusinessSettings);

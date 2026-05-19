@@ -385,7 +385,7 @@ function PortalPage() {
               <div className="receipt-logo-mark">{data.business?.business_name?.slice(0, 2) || "AG"}</div>
             )}
             <div>
-              <h3>{data.business?.business_name || "AGUA Global"}</h3>
+              <h3>{data.business?.business_name || "Water Billing"}</h3>
               {data.business?.legal_name ? <p>{data.business.legal_name}</p> : null}
               {data.business?.physical_address ? <p>{data.business.physical_address}</p> : null}
               <p>{[data.business?.phone, data.business?.email].filter(Boolean).join(" | ")}</p>
@@ -499,7 +499,7 @@ function PortalPage() {
             {data.business?.paybill_number ? <p>Paybill: {data.business.paybill_number}</p> : null}
             {data.business?.till_number ? <p>Till: {data.business.till_number}</p> : null}
             {data.business?.receipt_footer_note ? <p>{data.business.receipt_footer_note}</p> : null}
-            <small>{data.business?.business_name || "AGUA Global"} customer bill</small>
+            <small>{data.business?.business_name || "Water Billing"} customer bill</small>
           </div>
         </div>
       ) : null}
@@ -524,7 +524,7 @@ function PortalPage() {
               <div className="receipt-logo-mark">{data.business?.business_name?.slice(0, 2) || "AG"}</div>
             )}
             <div>
-              <h3>{data.business?.business_name || "AGUA Global"}</h3>
+              <h3>{data.business?.business_name || "Water Billing"}</h3>
               {data.business?.legal_name ? <p>{data.business.legal_name}</p> : null}
               {data.business?.physical_address ? <p>{data.business.physical_address}</p> : null}
               <p>{[data.business?.phone, data.business?.email].filter(Boolean).join(" | ")}</p>
@@ -609,7 +609,7 @@ function PortalPage() {
             {data.business?.paybill_number ? <p>Paybill: {data.business.paybill_number}</p> : null}
             {data.business?.till_number ? <p>Till: {data.business.till_number}</p> : null}
             {data.business?.receipt_footer_note ? <p>{data.business.receipt_footer_note}</p> : null}
-            <small>{data.business?.business_name || "AGUA Global"} customer receipt</small>
+            <small>{data.business?.business_name || "Water Billing"} customer receipt</small>
           </div>
         </div>
       ) : null}

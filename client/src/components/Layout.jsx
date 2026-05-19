@@ -36,7 +36,7 @@ const navItems = [
   { key: "users", label: "Users", icon: Receipt, roles: ["admin"] }
 ];
 
-function Layout({ user, currentPage, onNavigate, onLogout, children }) {
+function Layout({ appName, user, currentPage, onNavigate, onLogout, children }) {
   const visibleItems = navItems.filter((item) => item.roles.includes(user.role));
 
   return (
@@ -47,7 +47,7 @@ function Layout({ user, currentPage, onNavigate, onLogout, children }) {
             <Droplets size={22} />
           </span>
           <div>
-            <strong>AGUA Global</strong>
+            <strong>{appName}</strong>
             <small>Water Billing</small>
           </div>
         </div>
