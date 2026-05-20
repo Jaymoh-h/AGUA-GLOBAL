@@ -1,6 +1,8 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 DROP TABLE IF EXISTS payments CASCADE;
+DROP TABLE IF EXISTS customer_adjustments CASCADE;
+DROP TABLE IF EXISTS customer_deposit_transactions CASCADE;
 DROP TABLE IF EXISTS bill_penalty_applications CASCADE;
 DROP TABLE IF EXISTS bills CASCADE;
 DROP TABLE IF EXISTS expenses CASCADE;
@@ -69,6 +71,10 @@ CREATE TABLE customers (
   opening_balance_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
   opening_balance_date DATE,
   status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+  closed_at TIMESTAMPTZ,
+  closed_by INTEGER,
+  closure_bill_id INTEGER,
+  closure_reason TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -225,6 +231,10 @@ CREATE TABLE bills (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE customers
+  ADD CONSTRAINT customers_closed_by_fkey FOREIGN KEY (closed_by) REFERENCES users(id) ON DELETE SET NULL,
+  ADD CONSTRAINT customers_closure_bill_id_fkey FOREIGN KEY (closure_bill_id) REFERENCES bills(id) ON DELETE SET NULL;
+
 CREATE TABLE payments (
   id SERIAL PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
@@ -283,6 +293,38 @@ CREATE TABLE expenses (
   receipt_number VARCHAR(80),
   notes TEXT,
   recorded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE customer_deposit_transactions (
+  id SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  action VARCHAR(30) NOT NULL CHECK (action IN ('applied', 'refunded', 'forfeited', 'transferred')),
+  amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
+  transaction_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  target_customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+  payment_id INTEGER REFERENCES payments(id) ON DELETE SET NULL,
+  expense_id INTEGER REFERENCES expenses(id) ON DELETE SET NULL,
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE customer_adjustments (
+  id SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  adjustment_type VARCHAR(20) NOT NULL CHECK (adjustment_type IN ('credit', 'debit')),
+  amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
+  adjustment_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  reason TEXT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  payment_id INTEGER REFERENCES payments(id) ON DELETE SET NULL,
+  bill_id INTEGER REFERENCES bills(id) ON DELETE SET NULL,
+  requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ,
+  review_notes TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -351,6 +393,9 @@ CREATE INDEX idx_bill_penalty_applications_application_month ON bill_penalty_app
 CREATE INDEX idx_expenses_date ON expenses(expense_date DESC);
 CREATE INDEX idx_expenses_category ON expenses(category);
 CREATE INDEX idx_expenses_recorded_by ON expenses(recorded_by);
+CREATE INDEX idx_customer_deposit_transactions_customer ON customer_deposit_transactions(customer_id, transaction_date DESC);
+CREATE INDEX idx_customer_adjustments_status ON customer_adjustments(status, created_at DESC);
+CREATE INDEX idx_customer_adjustments_customer ON customer_adjustments(customer_id, created_at DESC);
 CREATE INDEX idx_maintenance_requests_status ON maintenance_requests(status);
 CREATE INDEX idx_maintenance_requests_customer ON maintenance_requests(customer_id);
 CREATE INDEX idx_maintenance_requests_zone ON maintenance_requests(zone_id);

@@ -58,6 +58,8 @@ function CustomersPage({ user }) {
   const [closureForm, setClosureForm] = useState({
     settlement_date: new Date().toISOString().slice(0, 10),
     apply_deposit: true,
+    deposit_remainder_action: "refund",
+    transfer_customer_id: "",
     notes: ""
   });
   const [importing, setImporting] = useState(false);
@@ -251,10 +253,12 @@ function CustomersPage({ user }) {
       setClosureForm({
         settlement_date: new Date().toISOString().slice(0, 10),
         apply_deposit: true,
+        deposit_remainder_action: "refund",
+        transfer_customer_id: "",
         notes: ""
       });
       await load();
-      setMessage("Customer account closed.");
+      setMessage("Customer account closed. Payments can still be accepted if debt remains.");
     } catch (err) {
       setMessage(err.message);
     }
@@ -600,8 +604,41 @@ function CustomersPage({ user }) {
               onChange={(event) => setClosureField("apply_deposit", event.target.checked)}
               type="checkbox"
             />
-            Apply paid deposit to outstanding bills or credit
+            Apply paid deposit to outstanding bills first
           </label>
+          {closureForm.apply_deposit ? (
+            <>
+              <label>
+                Remaining deposit
+                <select
+                  value={closureForm.deposit_remainder_action}
+                  onChange={(event) => setClosureField("deposit_remainder_action", event.target.value)}
+                >
+                  <option value="refund">Refund as expense</option>
+                  <option value="transfer">Transfer to another customer</option>
+                  <option value="forfeit">Forfeit</option>
+                </select>
+              </label>
+              {closureForm.deposit_remainder_action === "transfer" ? (
+                <label>
+                  Transfer to
+                  <select
+                    value={closureForm.transfer_customer_id}
+                    onChange={(event) => setClosureField("transfer_customer_id", event.target.value)}
+                  >
+                    <option value="">Select customer</option>
+                    {customers
+                      .filter((customer) => Number(customer.id) !== Number(closingCustomer.id))
+                      .map((customer) => (
+                        <option key={customer.id} value={customer.id}>
+                          {customer.acc_number} - {customer.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              ) : null}
+            </>
+          ) : null}
           <label>
             Notes
             <textarea

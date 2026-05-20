@@ -62,6 +62,7 @@ Use these files in pgAdmin, DBeaver, TablePlus, or another PostgreSQL DBMS:
 - Migration balance bills path: `server/database/migrations/014_migration_balance_bills.sql`
 - Customer credits migration path: `server/database/migrations/015_customer_credits.sql`
 - Numbering and account closure migration path: `server/database/migrations/016_numbering_and_account_closure.sql`
+- Account closure and adjustments migration path: `server/database/migrations/017_account_closure_and_adjustments.sql`
 
 Run `schema.sql` first, then `seed.sql`.
 
@@ -134,6 +135,13 @@ For configurable bill/receipt numbering and account closure support, run:
 ```powershell
 cd server
 npm.cmd run db:migrate:numbering
+```
+
+For final account closure tracking, deposit settlement history, and manual adjustment approvals, run:
+
+```powershell
+cd server
+npm.cmd run db:migrate:account-adjustments
 ```
 
 ## Local Setup
@@ -218,6 +226,7 @@ For an existing production database, run the latest migrations before redeployin
 ```powershell
 cd server
 npm.cmd run db:migrate:numbering
+npm.cmd run db:migrate:account-adjustments
 ```
 
 ### 2. API Project

@@ -860,17 +860,20 @@ td {
 }
 
 .status-valid,
-.status-ready {
+.status-ready,
+.status-approved {
   background: #dcfce7;
   color: #166534;
 }
 
-.status-invalid {
+.status-invalid,
+.status-rejected {
   background: #fee2e2;
   color: #991b1b;
 }
 
-.status-open {
+.status-open,
+.status-pending {
   background: #dbeafe;
   color: #1e40af;
 }

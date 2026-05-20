@@ -22,9 +22,10 @@ const paymentImportHeaders = [
   "notes"
 ];
 
-function PaymentsPage() {
+function PaymentsPage({ user }) {
   const [payments, setPayments] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [adjustments, setAdjustments] = useState([]);
   const [businessSettings, setBusinessSettings] = useState(null);
   const [receiptDetail, setReceiptDetail] = useState(null);
   const [loadingReceipt, setLoadingReceipt] = useState(false);
@@ -45,6 +46,13 @@ function PaymentsPage() {
   const [channelFilter, setChannelFilter] = useState("");
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
+  const [adjustmentForm, setAdjustmentForm] = useState({
+    customer_id: "",
+    adjustment_type: "credit",
+    amount: "",
+    adjustment_date: new Date().toISOString().slice(0, 10),
+    reason: ""
+  });
   const [message, setMessage] = useState("");
   const selectedCustomer = customers.find((customer) => Number(customer.id) === Number(form.customer_id));
   const selectedBalance = Number(selectedCustomer?.balance_due || 0);
@@ -64,14 +72,16 @@ function PaymentsPage() {
     `${businessSettings?.default_currency || "KES"} ${Math.abs(Number(value || 0)).toLocaleString()}`;
 
   const load = async () => {
-    const [paymentRows, customerRows, businessRow] = await Promise.all([
+    const [paymentRows, customerRows, businessRow, adjustmentRows] = await Promise.all([
       api.payments.list(),
       api.customers.list(),
-      api.businessSettings.get()
+      api.businessSettings.get(),
+      api.adjustments.list()
     ]);
     setPayments(paymentRows);
     setCustomers(customerRows);
     setBusinessSettings(businessRow);
+    setAdjustments(adjustmentRows);
   };
 
   useEffect(() => {
@@ -79,6 +89,7 @@ function PaymentsPage() {
   }, []);
 
   const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  const setAdjustmentField = (field, value) => setAdjustmentForm((current) => ({ ...current, [field]: value }));
 
   const handleCsvFile = async (event) => {
     const file = event.target.files?.[0];
@@ -209,6 +220,43 @@ function PaymentsPage() {
       notes: ""
     });
   };
+
+  const submitAdjustment = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    try {
+      await api.adjustments.create({
+        ...adjustmentForm,
+        customer_id: Number(adjustmentForm.customer_id),
+        amount: Number(adjustmentForm.amount)
+      });
+      setAdjustmentForm({
+        customer_id: "",
+        adjustment_type: "credit",
+        amount: "",
+        adjustment_date: new Date().toISOString().slice(0, 10),
+        reason: ""
+      });
+      await load();
+      setMessage("Adjustment request submitted for admin approval.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const reviewAdjustment = async (adjustment, status) => {
+    setMessage("");
+    try {
+      await api.adjustments.review(adjustment.id, {
+        status,
+        review_notes: status === "approved" ? "Approved from payments screen" : "Rejected from payments screen"
+      });
+      await load();
+      setMessage(`Adjustment ${status}.`);
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
   const filteredPayments = payments.filter((payment) => {
     const dateValue = payment.payment_date?.slice(0, 10) || "";
     const channelMatch = !channelFilter || (payment.payment_channel || payment.method) === channelFilter;
@@ -228,6 +276,19 @@ function PaymentsPage() {
       "external_reference",
       "reference",
       "bill_numbers"
+    ]
+  });
+  const adjustmentTable = useTableControls(adjustments, {
+    searchFields: [
+      "customer_name",
+      "acc_number",
+      "adjustment_type",
+      "amount",
+      "adjustment_date",
+      "reason",
+      "status",
+      "requested_by_name",
+      "reviewed_by_name"
     ]
   });
   const exportPayments = () => {
@@ -330,6 +391,70 @@ function PaymentsPage() {
                 Cancel edit
               </button>
             ) : null}
+          </form>
+
+          <form className="panel form-grid" onSubmit={submitAdjustment}>
+            <div className="panel-heading">
+              <div>
+                <h3>Manual Credit/Debit</h3>
+                <p className="muted">Accountants submit requests; admin approval posts the credit or debit.</p>
+              </div>
+            </div>
+            <label>
+              Customer
+              <select
+                value={adjustmentForm.customer_id}
+                onChange={(event) => setAdjustmentField("customer_id", event.target.value)}
+                required
+              >
+                <option value="">Select customer</option>
+                {customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.acc_number} - {customer.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Type
+              <select
+                value={adjustmentForm.adjustment_type}
+                onChange={(event) => setAdjustmentField("adjustment_type", event.target.value)}
+              >
+                <option value="credit">Credit customer</option>
+                <option value="debit">Debit customer</option>
+              </select>
+            </label>
+            <label>
+              Amount
+              <input
+                value={adjustmentForm.amount}
+                onChange={(event) => setAdjustmentField("amount", event.target.value)}
+                type="number"
+                min="1"
+                required
+              />
+            </label>
+            <label>
+              Date
+              <input
+                value={adjustmentForm.adjustment_date}
+                onChange={(event) => setAdjustmentField("adjustment_date", event.target.value)}
+                type="date"
+              />
+            </label>
+            <label>
+              Reason
+              <textarea
+                value={adjustmentForm.reason}
+                onChange={(event) => setAdjustmentField("reason", event.target.value)}
+                rows="3"
+                required
+              />
+            </label>
+            <button className="primary-button" type="submit">
+              Submit for approval
+            </button>
           </form>
 
           <div className="panel form-grid">
@@ -622,6 +747,69 @@ function PaymentsPage() {
                       </td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-heading">
+              <h3>Adjustment Approvals</h3>
+            </div>
+            <TableControls table={adjustmentTable} label="adjustments" placeholder="Search adjustments" />
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Customer</th>
+                    <th>Type</th>
+                    <th>Amount</th>
+                    <th>Date</th>
+                    <th>Reason</th>
+                    <th>Status</th>
+                    <th>Requested</th>
+                    {user.role === "admin" ? <th>Actions</th> : null}
+                  </tr>
+                </thead>
+                <tbody>
+                  {adjustmentTable.visibleRows.map((adjustment) => (
+                    <tr key={adjustment.id}>
+                      <td>
+                        <strong>{adjustment.customer_name}</strong>
+                        <small>{adjustment.acc_number}</small>
+                      </td>
+                      <td>{label(adjustment.adjustment_type)}</td>
+                      <td>{money(adjustment.amount)}</td>
+                      <td>{date(adjustment.adjustment_date)}</td>
+                      <td>{adjustment.reason}</td>
+                      <td>
+                        <span className={`status status-${adjustment.status}`}>{adjustment.status}</span>
+                        {adjustment.review_notes ? <small>{adjustment.review_notes}</small> : null}
+                      </td>
+                      <td>{adjustment.requested_by_name || "-"}</td>
+                      {user.role === "admin" ? (
+                        <td>
+                          {adjustment.status === "pending" ? (
+                            <div className="row-actions">
+                              <button type="button" onClick={() => reviewAdjustment(adjustment, "approved")}>
+                                Approve
+                              </button>
+                              <button type="button" onClick={() => reviewAdjustment(adjustment, "rejected")}>
+                                Reject
+                              </button>
+                            </div>
+                          ) : (
+                            adjustment.reviewed_by_name || "-"
+                          )}
+                        </td>
+                      ) : null}
+                    </tr>
+                  ))}
+                  {!adjustmentTable.total ? (
+                    <tr>
+                      <td colSpan={user.role === "admin" ? "8" : "7"}>No adjustment requests found.</td>
+                    </tr>
+                  ) : null}
                 </tbody>
               </table>
             </div>

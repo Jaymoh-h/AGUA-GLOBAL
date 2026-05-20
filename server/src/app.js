@@ -22,6 +22,7 @@ const expenseRoutes = require("./routes/expense.routes");
 const businessSettingsRoutes = require("./routes/businessSettings.routes");
 const maintenanceRoutes = require("./routes/maintenance.routes");
 const portalRoutes = require("./routes/portal.routes");
+const adjustmentRoutes = require("./routes/adjustment.routes");
 
 const app = express();
 
@@ -52,6 +53,7 @@ app.use("/api/expenses", expenseRoutes);
 app.use("/api/business-settings", businessSettingsRoutes);
 app.use("/api/maintenance-requests", maintenanceRoutes);
 app.use("/api/portal", portalRoutes);
+app.use("/api/adjustments", adjustmentRoutes);
 
 app.use(errorHandler);
 

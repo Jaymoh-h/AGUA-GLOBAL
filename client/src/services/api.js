@@ -134,6 +134,14 @@ export const api = {
       return request(`/audit-events${query.toString() ? `?${query}` : ""}`);
     }
   },
+  adjustments: {
+    list: (params = {}) => {
+      const query = new URLSearchParams(params);
+      return request(`/adjustments${query.toString() ? `?${query}` : ""}`);
+    },
+    create: (payload) => request("/adjustments", { method: "POST", body: payload }),
+    review: (id, payload) => request(`/adjustments/${id}/review`, { method: "PATCH", body: payload })
+  },
   payments: {
     list: () => request("/payments"),
     get: (id) => request(`/payments/${id}`),

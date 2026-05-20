@@ -236,6 +236,7 @@ const commitExpenseImport = asyncHandler(async (req, res) => {
 module.exports = {
   commitExpenseImport,
   createExpense,
+  createExpenseRecord,
   listExpenses,
   previewExpenseImport
 };

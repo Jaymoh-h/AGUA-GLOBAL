@@ -3,12 +3,84 @@ const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
 const { createPaymentWithAllocations } = require("./payment.controller");
+const { createExpenseRecord } = require("./expense.controller");
+const { createBillNumber } = require("../services/billingPeriod.service");
 
 const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
 
 const toMoney = (value) => Number(Number(value || 0).toFixed(2));
 
 const normalizeImportHeader = (value) => String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+
+const getCustomerBalanceDue = async (client, customerId) => {
+  const { rows } = await client.query(
+    `SELECT
+       COALESCE((
+         SELECT SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount))
+         FROM bills b
+         WHERE b.customer_id = $1 AND b.status <> 'paid'
+       ), 0) -
+       COALESCE((
+         SELECT SUM(p.unallocated_amount)
+         FROM payments p
+         WHERE p.customer_id = $1 AND p.status = 'posted'
+       ), 0) AS balance_due`,
+    [customerId]
+  );
+  return toMoney(rows[0]?.balance_due || 0);
+};
+
+const createClosureBill = async (client, customer, settlementDate) => {
+  if (customer.closure_bill_id) {
+    const existing = await client.query("SELECT * FROM bills WHERE id = $1", [customer.closure_bill_id]);
+    if (existing.rows[0]) return existing.rows[0];
+  }
+
+  const billNumber = await createBillNumber(client);
+  const result = await client.query(
+    `INSERT INTO bills (
+       customer_id, bill_number, billing_month, previous_reading, current_reading,
+       units_used, rate, amount, subtotal_amount, total_amount, balance_amount,
+       paid_amount, status, due_date, issued_at
+     )
+     VALUES ($1, $2, $3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'paid', $3, NOW())
+     RETURNING *`,
+    [customer.id, billNumber, settlementDate]
+  );
+  return result.rows[0];
+};
+
+const recordDepositTransaction = async (client, req, payload) => {
+  const result = await client.query(
+    `INSERT INTO customer_deposit_transactions (
+      customer_id, action, amount, transaction_date, target_customer_id, payment_id, expense_id, notes, created_by
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    RETURNING *`,
+    [
+      payload.customer_id,
+      payload.action,
+      toMoney(payload.amount),
+      payload.transaction_date,
+      payload.target_customer_id || null,
+      payload.payment_id || null,
+      payload.expense_id || null,
+      payload.notes || null,
+      req.user.id
+    ]
+  );
+
+  await recordAuditEvent(client, {
+    req,
+    action: `deposit.${payload.action}`,
+    entityType: "customer_deposit_transaction",
+    entityId: result.rows[0].id,
+    afterData: result.rows[0],
+    reason: payload.notes || null
+  });
+
+  return result.rows[0];
+};
 
 const parseCsv = (csvText) => {
   const text = String(csvText || "").replace(/^\uFEFF/, "").trim();
@@ -930,11 +1002,16 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
   const {
     settlement_date = new Date().toISOString().slice(0, 10),
     apply_deposit = true,
+    deposit_remainder_action = "refund",
+    transfer_customer_id,
     notes = ""
   } = req.body;
 
   if (!isDateOnly(settlement_date)) {
     throw new ApiError(400, "Settlement date must use YYYY-MM-DD format.");
+  }
+  if (!["refund", "transfer", "forfeit"].includes(deposit_remainder_action)) {
+    throw new ApiError(400, "Deposit remainder action must be refund, transfer, or forfeit.");
   }
 
   const client = await pool.connect();
@@ -949,31 +1026,143 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
       throw new ApiError(400, "Customer account is already inactive.");
     }
 
+    const closureBill = await createClosureBill(client, before, settlement_date);
+    await recordAuditEvent(client, {
+      req,
+      action: "bill.final_closure_created",
+      entityType: "bill",
+      entityId: closureBill.id,
+      afterData: closureBill,
+      reason: notes || "Final bill generated before account closure"
+    });
+
+    const openingDebt = Math.max(await getCustomerBalanceDue(client, before.id), 0);
+    const depositAvailable =
+      apply_deposit && before.deposit_paid ? Math.max(toMoney(before.deposit_amount), 0) : 0;
+    const depositAppliedAmount = Math.min(depositAvailable, openingDebt);
+    const depositRemainder = toMoney(depositAvailable - depositAppliedAmount);
     let depositSettlement = null;
-    if (apply_deposit && before.deposit_paid && Number(before.deposit_amount || 0) > 0) {
+    const depositTransactions = [];
+
+    if (depositAppliedAmount > 0) {
       depositSettlement = await createPaymentWithAllocations(
         client,
         req,
         {
           customer_id: before.id,
-          amount: Number(before.deposit_amount),
+          amount: depositAppliedAmount,
           payment_date: settlement_date,
           payment_channel: "manual_adjustment",
           external_reference: `DEPOSIT-CLOSE-${before.acc_number}`,
           received_from: before.name,
-          notes: notes || "Deposit applied during account closure"
+          notes: notes || "Deposit applied to debt during account closure"
         },
         { auditReason: "Deposit settlement during account closure" }
       );
+      depositTransactions.push(
+        await recordDepositTransaction(client, req, {
+          customer_id: before.id,
+          action: "applied",
+          amount: depositAppliedAmount,
+          transaction_date: settlement_date,
+          payment_id: depositSettlement.payment.id,
+          notes: notes || "Deposit applied to debt during account closure"
+        })
+      );
     }
 
+    let depositRefund = null;
+    let depositTransfer = null;
+    if (depositRemainder > 0) {
+      if (deposit_remainder_action === "refund") {
+        depositRefund = await createExpenseRecord(
+          client,
+          req,
+          {
+            expense_date: settlement_date,
+            category: "Deposit Refund",
+            vendor: before.name,
+            description: `Deposit refund for ${before.acc_number}`,
+            amount: depositRemainder,
+            payment_channel: "manual_adjustment",
+            reference: `DEPOSIT-REFUND-${before.acc_number}`,
+            notes: notes || "Deposit refunded during account closure"
+          },
+          { auditReason: "Deposit refund during account closure" }
+        );
+        depositTransactions.push(
+          await recordDepositTransaction(client, req, {
+            customer_id: before.id,
+            action: "refunded",
+            amount: depositRemainder,
+            transaction_date: settlement_date,
+            expense_id: depositRefund.id,
+            notes: notes || "Deposit refunded during account closure"
+          })
+        );
+      } else if (deposit_remainder_action === "transfer") {
+        const targetCustomerId = Number(transfer_customer_id);
+        if (!targetCustomerId || targetCustomerId === Number(before.id)) {
+          throw new ApiError(400, "Choose another customer account to receive the deposit transfer.");
+        }
+        const targetResult = await client.query("SELECT * FROM customers WHERE id = $1 FOR UPDATE", [
+          targetCustomerId
+        ]);
+        const targetCustomer = targetResult.rows[0];
+        if (!targetCustomer) throw new ApiError(404, "Transfer target customer not found.");
+        depositTransfer = await createPaymentWithAllocations(
+          client,
+          req,
+          {
+            customer_id: targetCustomer.id,
+            amount: depositRemainder,
+            payment_date: settlement_date,
+            payment_channel: "manual_adjustment",
+            external_reference: `DEPOSIT-TRANSFER-${before.acc_number}`,
+            received_from: before.name,
+            notes: `Deposit transferred from ${before.acc_number}. ${notes}`.trim()
+          },
+          { auditReason: `Deposit transferred from closed account ${before.acc_number}` }
+        );
+        depositTransactions.push(
+          await recordDepositTransaction(client, req, {
+            customer_id: before.id,
+            action: "transferred",
+            amount: depositRemainder,
+            transaction_date: settlement_date,
+            target_customer_id: targetCustomer.id,
+            payment_id: depositTransfer.payment.id,
+            notes: `Deposit transferred to ${targetCustomer.acc_number}`
+          })
+        );
+      } else {
+        depositTransactions.push(
+          await recordDepositTransaction(client, req, {
+            customer_id: before.id,
+            action: "forfeited",
+            amount: depositRemainder,
+            transaction_date: settlement_date,
+            notes: notes || "Deposit forfeited during account closure"
+          })
+        );
+      }
+    }
+
+    const closingBalance = await getCustomerBalanceDue(client, before.id);
     const updatedResult = await client.query(
       `UPDATE customers
        SET status = 'inactive',
+           deposit_amount = CASE WHEN $5::numeric > 0 THEN 0 ELSE deposit_amount END,
+           deposit_paid = CASE WHEN $5::numeric > 0 THEN FALSE ELSE deposit_paid END,
+           deposit_paid_at = CASE WHEN $5::numeric > 0 THEN NULL ELSE deposit_paid_at END,
+           closed_at = NOW(),
+           closed_by = $2,
+           closure_bill_id = $3,
+           closure_reason = $4,
            updated_at = NOW()
        WHERE id = $1
        RETURNING *`,
-      [before.id]
+      [before.id, req.user.id, closureBill.id, notes || null, depositAvailable]
     );
     const after = updatedResult.rows[0];
 
@@ -985,13 +1174,28 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
       beforeData: before,
       afterData: {
         customer: after,
-        deposit_settlement: depositSettlement?.payment || null
+        final_bill: closureBill,
+        opening_debt: openingDebt,
+        closing_balance: closingBalance,
+        deposit_settlement: depositSettlement?.payment || null,
+        deposit_refund: depositRefund,
+        deposit_transfer: depositTransfer?.payment || null,
+        deposit_transactions: depositTransactions
       },
       reason: notes || "Account closed"
     });
 
     await client.query("COMMIT");
-    res.json({ customer: after, deposit_settlement: depositSettlement });
+    res.json({
+      customer: after,
+      final_bill: closureBill,
+      opening_debt: openingDebt,
+      closing_balance: closingBalance,
+      deposit_settlement: depositSettlement,
+      deposit_refund: depositRefund,
+      deposit_transfer: depositTransfer,
+      deposit_transactions: depositTransactions
+    });
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
