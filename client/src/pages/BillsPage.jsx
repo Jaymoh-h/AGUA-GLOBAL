@@ -1,8 +1,10 @@
 import { CheckCircle2, Printer, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import AuditPanel from "../components/AuditPanel";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
+import { downloadCsvRows } from "../utils/csvTemplate";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const date = (value) => (value ? new Date(value).toLocaleDateString() : "-");
@@ -50,6 +52,24 @@ function BillsPage({ user }) {
   const billTable = useTableControls(bills, {
     searchFields: ["customer_name", "acc_number", "billing_period_name", "billing_month", "bill_number", "status"]
   });
+  const exportBills = () => {
+    downloadCsvRows(
+      "bills.csv",
+      [
+        { header: "Bill", value: (row) => row.bill_number },
+        { header: "Customer", value: (row) => row.customer_name },
+        { header: "Account", value: (row) => row.acc_number },
+        { header: "Period", value: (row) => row.billing_period_name || row.billing_month },
+        { header: "Due Date", value: (row) => row.due_date },
+        { header: "Units", value: (row) => row.units_used },
+        { header: "Total", value: (row) => row.total_amount || row.amount },
+        { header: "Paid", value: (row) => row.paid_amount },
+        { header: "Balance", value: (row) => billBalance(row) },
+        { header: "Status", value: (row) => row.status }
+      ],
+      billTable.filteredRows
+    );
+  };
 
   return (
     <section className="page-stack">
@@ -68,6 +88,12 @@ function BillsPage({ user }) {
 
       {message ? <p className="form-note">{message}</p> : null}
       <div className="panel">
+        <div className="panel-heading">
+          <h3>Bill Register</h3>
+          <button type="button" onClick={exportBills}>
+            Export
+          </button>
+        </div>
         <TableControls table={billTable} label="bills" placeholder="Search bills" />
         <div className="table-wrap">
           <table>
@@ -260,6 +286,7 @@ function BillsPage({ user }) {
             {businessSettings?.receipt_footer_note ? <p>{businessSettings.receipt_footer_note}</p> : null}
             <small>{businessSettings?.business_name || "Water Billing"} customer bill</small>
           </div>
+          <AuditPanel entityType="bill" entityId={selectedBill.id} title="Bill Audit" />
         </div>
       ) : null}
     </section>

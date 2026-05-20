@@ -41,7 +41,12 @@ function BillingSetupPage() {
         penalty_type: settings.penalty_type,
         penalty_value: Number(settings.penalty_value || 0),
         deposit_required: Boolean(settings.deposit_required),
-        default_deposit_amount: Number(settings.default_deposit_amount || 0)
+        default_deposit_amount: Number(settings.default_deposit_amount || 0),
+        bill_number_prefix: settings.bill_number_prefix || "BILL",
+        bill_number_next: Number(settings.bill_number_next || 1),
+        receipt_number_prefix: settings.receipt_number_prefix || "RCPT",
+        receipt_number_next: Number(settings.receipt_number_next || 1),
+        number_padding: Number(settings.number_padding || 6)
       });
       setSettings(updated);
       setPenaltyPreview(null);
@@ -176,6 +181,26 @@ function BillingSetupPage() {
                   type="number"
                   min="0"
                 />
+              </label>
+              <label>
+                Bill prefix
+                <input value={settings.bill_number_prefix || ""} onChange={(event) => updateSettingsField("bill_number_prefix", event.target.value)} />
+              </label>
+              <label>
+                Next bill number
+                <input value={settings.bill_number_next || 1} onChange={(event) => updateSettingsField("bill_number_next", event.target.value)} type="number" min="1" />
+              </label>
+              <label>
+                Receipt prefix
+                <input value={settings.receipt_number_prefix || ""} onChange={(event) => updateSettingsField("receipt_number_prefix", event.target.value)} />
+              </label>
+              <label>
+                Next receipt number
+                <input value={settings.receipt_number_next || 1} onChange={(event) => updateSettingsField("receipt_number_next", event.target.value)} type="number" min="1" />
+              </label>
+              <label>
+                Number padding
+                <input value={settings.number_padding || 6} onChange={(event) => updateSettingsField("number_padding", event.target.value)} type="number" min="3" max="12" />
               </label>
               <button className="primary-button" type="submit">
                 <Save size={17} />

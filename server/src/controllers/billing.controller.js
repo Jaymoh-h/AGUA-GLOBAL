@@ -194,7 +194,12 @@ const updateBillingSettings = asyncHandler(async (req, res) => {
     penalty_type = "none",
     penalty_value = 0,
     deposit_required = false,
-    default_deposit_amount = 0
+    default_deposit_amount = 0,
+    bill_number_prefix = "BILL",
+    bill_number_next = 1,
+    receipt_number_prefix = "RCPT",
+    receipt_number_next = 1,
+    number_padding = 6
   } = req.body;
 
   if (!["none", "fixed"].includes(penalty_type)) {
@@ -204,9 +209,21 @@ const updateBillingSettings = asyncHandler(async (req, res) => {
   const penaltyGraceDays = Number(penalty_grace_days);
   const penaltyValue = Number(penalty_value);
   const defaultDepositAmount = Number(default_deposit_amount);
+  const nextBillNumber = Number(bill_number_next);
+  const nextReceiptNumber = Number(receipt_number_next);
+  const nextNumberPadding = Number(number_padding);
 
   if (penaltyGraceDays < 0 || penaltyValue < 0 || defaultDepositAmount < 0) {
     throw new ApiError(400, "Settings amounts and grace days cannot be negative.");
+  }
+  if (!Number.isInteger(nextBillNumber) || nextBillNumber <= 0 || !Number.isInteger(nextReceiptNumber) || nextReceiptNumber <= 0) {
+    throw new ApiError(400, "Next bill and receipt numbers must be positive whole numbers.");
+  }
+  if (!Number.isInteger(nextNumberPadding) || nextNumberPadding < 3 || nextNumberPadding > 12) {
+    throw new ApiError(400, "Number padding must be between 3 and 12.");
+  }
+  if (!String(bill_number_prefix).trim() || !String(receipt_number_prefix).trim()) {
+    throw new ApiError(400, "Bill and receipt prefixes are required.");
   }
 
   const client = await pool.connect();
@@ -217,9 +234,10 @@ const updateBillingSettings = asyncHandler(async (req, res) => {
     const { rows } = await client.query(
       `INSERT INTO billing_settings (
         id, due_rule, penalty_grace_days, penalty_type, penalty_value,
-        deposit_required, default_deposit_amount, updated_by, updated_at
+        deposit_required, default_deposit_amount, bill_number_prefix, bill_number_next,
+        receipt_number_prefix, receipt_number_next, number_padding, updated_by, updated_at
       )
-      VALUES (1, 'next_month_end', $1, $2, $3, $4, $5, $6, NOW())
+      VALUES (1, 'next_month_end', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
       ON CONFLICT (id) DO UPDATE
       SET due_rule = 'next_month_end',
           penalty_grace_days = EXCLUDED.penalty_grace_days,
@@ -227,6 +245,11 @@ const updateBillingSettings = asyncHandler(async (req, res) => {
           penalty_value = EXCLUDED.penalty_value,
           deposit_required = EXCLUDED.deposit_required,
           default_deposit_amount = EXCLUDED.default_deposit_amount,
+          bill_number_prefix = EXCLUDED.bill_number_prefix,
+          bill_number_next = EXCLUDED.bill_number_next,
+          receipt_number_prefix = EXCLUDED.receipt_number_prefix,
+          receipt_number_next = EXCLUDED.receipt_number_next,
+          number_padding = EXCLUDED.number_padding,
           updated_by = EXCLUDED.updated_by,
           updated_at = NOW()
       RETURNING *`,
@@ -236,6 +259,11 @@ const updateBillingSettings = asyncHandler(async (req, res) => {
         penaltyValue,
         Boolean(deposit_required),
         defaultDepositAmount,
+        String(bill_number_prefix).trim().toUpperCase(),
+        nextBillNumber,
+        String(receipt_number_prefix).trim().toUpperCase(),
+        nextReceiptNumber,
+        nextNumberPadding,
         req.user.id
       ]
     );

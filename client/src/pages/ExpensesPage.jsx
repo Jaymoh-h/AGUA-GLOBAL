@@ -2,7 +2,7 @@ import { Banknote, Download, Eye, FileUp, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
-import { downloadCsvTemplate } from "../utils/csvTemplate";
+import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const expenseImportHeaders = [
@@ -33,6 +33,10 @@ function ExpensesPage() {
   const [csvText, setCsvText] = useState("expense_date,category,vendor,description,amount,payment_channel,reference,receipt_number,notes\n");
   const [importPreview, setImportPreview] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [channelFilter, setChannelFilter] = useState("");
+  const [dateFromFilter, setDateFromFilter] = useState("");
+  const [dateToFilter, setDateToFilter] = useState("");
   const [message, setMessage] = useState("");
 
   const importReady = useMemo(
@@ -112,7 +116,16 @@ function ExpensesPage() {
       setImporting(false);
     }
   };
-  const expenseTable = useTableControls(expenses, {
+  const expenseCategories = [...new Set(expenses.map((expense) => expense.category).filter(Boolean))].sort();
+  const filteredExpenses = expenses.filter((expense) => {
+    const dateValue = expense.expense_date?.slice(0, 10) || "";
+    const categoryMatch = !categoryFilter || expense.category === categoryFilter;
+    const channelMatch = !channelFilter || expense.payment_channel === channelFilter;
+    const fromMatch = !dateFromFilter || dateValue >= dateFromFilter;
+    const toMatch = !dateToFilter || dateValue <= dateToFilter;
+    return categoryMatch && channelMatch && fromMatch && toMatch;
+  });
+  const expenseTable = useTableControls(filteredExpenses, {
     searchFields: [
       "expense_date",
       "category",
@@ -125,6 +138,22 @@ function ExpensesPage() {
       "recorded_by_name"
     ]
   });
+  const exportExpenses = () => {
+    downloadCsvRows(
+      "expenses.csv",
+      [
+        { header: "Date", value: (row) => row.expense_date },
+        { header: "Category", value: (row) => row.category },
+        { header: "Vendor", value: (row) => row.vendor },
+        { header: "Description", value: (row) => row.description },
+        { header: "Amount", value: (row) => row.amount },
+        { header: "Channel", value: (row) => row.payment_channel },
+        { header: "Reference", value: (row) => row.reference || row.receipt_number },
+        { header: "Recorded By", value: (row) => row.recorded_by_name }
+      ],
+      expenseTable.filteredRows
+    );
+  };
 
   return (
     <section className="page-stack">
@@ -293,6 +322,41 @@ function ExpensesPage() {
           <div className="panel">
             <div className="panel-heading">
               <h3>Expense History</h3>
+              <button type="button" onClick={exportExpenses}>
+                <Download size={16} />
+                Export
+              </button>
+            </div>
+            <div className="table-toolbar">
+              <label>
+                Category
+                <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+                  <option value="">All categories</option>
+                  {expenseCategories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Channel
+                <select value={channelFilter} onChange={(event) => setChannelFilter(event.target.value)}>
+                  <option value="">All channels</option>
+                  <option value="cash">Cash</option>
+                  <option value="bank">Bank</option>
+                  <option value="mpesa_paybill">M-Pesa/paybill</option>
+                  <option value="manual_adjustment">Manual adjustment</option>
+                </select>
+              </label>
+              <label>
+                From
+                <input value={dateFromFilter} onChange={(event) => setDateFromFilter(event.target.value)} type="date" />
+              </label>
+              <label>
+                To
+                <input value={dateToFilter} onChange={(event) => setDateToFilter(event.target.value)} type="date" />
+              </label>
             </div>
             <TableControls table={expenseTable} label="expenses" placeholder="Search expenses" />
             <div className="table-wrap">

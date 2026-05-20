@@ -1,8 +1,9 @@
 import { Download, Eye, FileUp, Gauge, Replace, Save, Send } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import AuditPanel from "../components/AuditPanel";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
-import { downloadCsvTemplate } from "../utils/csvTemplate";
+import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
 
 const readingImportHeaders = ["acc_number", "reading_date", "reading_value", "meter_number", "notes"];
 
@@ -25,6 +26,9 @@ function ReadingsPage() {
   const [importPreview, setImportPreview] = useState(null);
   const [importing, setImporting] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [customerFilter, setCustomerFilter] = useState("");
+  const [dateFromFilter, setDateFromFilter] = useState("");
+  const [dateToFilter, setDateToFilter] = useState("");
   const [message, setMessage] = useState("");
 
   const load = async () => {
@@ -216,12 +220,34 @@ function ReadingsPage() {
       setImporting(false);
     }
   };
-  const readingTable = useTableControls(readings, {
+  const filteredReadings = readings.filter((reading) => {
+    const dateValue = reading.reading_date?.slice(0, 10) || "";
+    const customerMatch = !customerFilter || Number(reading.customer_id) === Number(customerFilter);
+    const fromMatch = !dateFromFilter || dateValue >= dateFromFilter;
+    const toMatch = !dateToFilter || dateValue <= dateToFilter;
+    return customerMatch && fromMatch && toMatch;
+  });
+  const readingTable = useTableControls(filteredReadings, {
     searchFields: ["customer_name", "acc_number", "meter_number", "reading_value", "reading_date", "created_by_name"]
   });
   const meterEventTable = useTableControls(meterEvents, {
     searchFields: ["customer_name", "acc_number", "event_date", "old_meter_number", "new_meter_number", "reason"]
   });
+  const exportReadings = () => {
+    downloadCsvRows(
+      "meter-readings.csv",
+      [
+        { header: "Customer", value: (row) => row.customer_name },
+        { header: "Account", value: (row) => row.acc_number },
+        { header: "Meter", value: (row) => row.meter_number },
+        { header: "Previous", value: (row) => row.previous_reading_value },
+        { header: "Reading", value: (row) => row.reading_value },
+        { header: "Date", value: (row) => row.reading_date },
+        { header: "Reader", value: (row) => row.created_by_name }
+      ],
+      readingTable.filteredRows
+    );
+  };
 
   return (
     <section className="page-stack">
@@ -295,6 +321,7 @@ function ReadingsPage() {
                 Cancel edit
               </button>
             ) : null}
+            {editingId ? <AuditPanel entityType="meter_reading" entityId={editingId} title="Reading Audit" /> : null}
           </form>
 
           <form className="panel form-grid" onSubmit={submitReplacement}>
@@ -494,7 +521,34 @@ function ReadingsPage() {
           <div className="panel">
             <div className="panel-heading">
               <h3>Recent Readings</h3>
-              <Gauge size={18} />
+              <div className="row-actions">
+                <Gauge size={18} />
+                <button type="button" onClick={exportReadings}>
+                  <Download size={16} />
+                  Export
+                </button>
+              </div>
+            </div>
+            <div className="table-toolbar">
+              <label>
+                Customer
+                <select value={customerFilter} onChange={(event) => setCustomerFilter(event.target.value)}>
+                  <option value="">All customers</option>
+                  {customers.map((customer) => (
+                    <option key={customer.id} value={customer.id}>
+                      {customer.acc_number} - {customer.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                From
+                <input value={dateFromFilter} onChange={(event) => setDateFromFilter(event.target.value)} type="date" />
+              </label>
+              <label>
+                To
+                <input value={dateToFilter} onChange={(event) => setDateToFilter(event.target.value)} type="date" />
+              </label>
             </div>
             <TableControls table={readingTable} label="readings" placeholder="Search readings" />
             <div className="table-wrap">

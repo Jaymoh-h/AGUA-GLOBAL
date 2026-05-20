@@ -7,6 +7,7 @@ const {
   commitCustomerImport,
   previewOpeningBalanceImport,
   commitOpeningBalanceImport,
+  closeCustomerAccount,
   createCustomer,
   updateCustomer,
   deleteCustomer
@@ -24,6 +25,7 @@ router.post("/opening-balances/imports/commit", authorize("admin", "accountant")
 router.get("/:id/statement", authorize("admin", "accountant"), getCustomerStatement);
 router.get("/:id", getCustomer);
 router.post("/", authorize("admin", "accountant"), createCustomer);
+router.post("/:id/close", authorize("admin", "accountant"), closeCustomerAccount);
 router.put("/:id", authorize("admin", "accountant"), updateCustomer);
 router.delete("/:id", authorize("admin"), deleteCustomer);
 

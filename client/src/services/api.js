@@ -71,6 +71,7 @@ export const api = {
       request("/customers/opening-balances/imports/preview", { method: "POST", body: { csv } }),
     commitOpeningBalanceImport: (csv) =>
       request("/customers/opening-balances/imports/commit", { method: "POST", body: { csv } }),
+    closeAccount: (id, payload) => request(`/customers/${id}/close`, { method: "POST", body: payload }),
     create: (payload) => request("/customers", { method: "POST", body: payload }),
     update: (id, payload) => request(`/customers/${id}`, { method: "PUT", body: payload }),
     remove: (id) => request(`/customers/${id}`, { method: "DELETE" })
@@ -128,7 +129,10 @@ export const api = {
     replace: (payload) => request("/meters/replace", { method: "POST", body: payload })
   },
   auditEvents: {
-    list: () => request("/audit-events")
+    list: (params = {}) => {
+      const query = new URLSearchParams(params);
+      return request(`/audit-events${query.toString() ? `?${query}` : ""}`);
+    }
   },
   payments: {
     list: () => request("/payments"),

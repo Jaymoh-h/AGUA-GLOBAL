@@ -21,6 +21,7 @@
     "db:migrate:customer-opening-balances": "node src/db/runSqlFile.js database/migrations/013_customer_opening_balances.sql",
     "db:migrate:migration-balance-bills": "node src/db/runSqlFile.js database/migrations/014_migration_balance_bills.sql",
     "db:migrate:customer-credits": "node src/db/runSqlFile.js database/migrations/015_customer_credits.sql",
+    "db:migrate:numbering": "node src/db/runSqlFile.js database/migrations/016_numbering_and_account_closure.sql",
     "payment:check": "node src/db/paymentCheck.js",
     "db:seed": "node src/db/seed.js"
   },

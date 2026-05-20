@@ -1,8 +1,9 @@
 import { CircleDollarSign, Download, Eye, FileUp, Printer, Save, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import AuditPanel from "../components/AuditPanel";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
-import { downloadCsvTemplate } from "../utils/csvTemplate";
+import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const date = (value) => value?.slice(0, 10) || "-";
@@ -41,6 +42,9 @@ function PaymentsPage() {
     notes: ""
   });
   const [editingId, setEditingId] = useState(null);
+  const [channelFilter, setChannelFilter] = useState("");
+  const [dateFromFilter, setDateFromFilter] = useState("");
+  const [dateToFilter, setDateToFilter] = useState("");
   const [message, setMessage] = useState("");
   const selectedCustomer = customers.find((customer) => Number(customer.id) === Number(form.customer_id));
   const selectedBalance = Number(selectedCustomer?.balance_due || 0);
@@ -205,7 +209,14 @@ function PaymentsPage() {
       notes: ""
     });
   };
-  const paymentTable = useTableControls(payments, {
+  const filteredPayments = payments.filter((payment) => {
+    const dateValue = payment.payment_date?.slice(0, 10) || "";
+    const channelMatch = !channelFilter || (payment.payment_channel || payment.method) === channelFilter;
+    const fromMatch = !dateFromFilter || dateValue >= dateFromFilter;
+    const toMatch = !dateToFilter || dateValue <= dateToFilter;
+    return channelMatch && fromMatch && toMatch;
+  });
+  const paymentTable = useTableControls(filteredPayments, {
     searchFields: [
       "customer_name",
       "acc_number",
@@ -219,6 +230,23 @@ function PaymentsPage() {
       "bill_numbers"
     ]
   });
+  const exportPayments = () => {
+    downloadCsvRows(
+      "payments.csv",
+      [
+        { header: "Receipt", value: (row) => row.receipt_number },
+        { header: "Customer", value: (row) => row.customer_name },
+        { header: "Account", value: (row) => row.acc_number },
+        { header: "Amount", value: (row) => row.amount },
+        { header: "Date", value: (row) => row.payment_date },
+        { header: "Channel", value: (row) => row.payment_channel || row.method },
+        { header: "Reference", value: (row) => row.external_reference || row.reference },
+        { header: "Bills", value: (row) => row.bill_numbers },
+        { header: "Credit", value: (row) => row.unallocated_amount }
+      ],
+      paymentTable.filteredRows
+    );
+  };
 
   return (
     <section className="page-stack">
@@ -519,12 +547,37 @@ function PaymentsPage() {
                 {businessSettings?.receipt_footer_note ? <p>{businessSettings.receipt_footer_note}</p> : null}
                 <small>Recorded by {receiptDetail.payment.recorded_by_name || "-"}</small>
               </div>
+              <AuditPanel entityType="payment" entityId={receiptDetail.payment.id} title="Payment Audit" />
             </div>
           ) : null}
 
           <div className="panel">
             <div className="panel-heading">
               <h3>Payment History</h3>
+              <button type="button" onClick={exportPayments}>
+                <Download size={16} />
+                Export
+              </button>
+            </div>
+            <div className="table-toolbar">
+              <label>
+                Channel
+                <select value={channelFilter} onChange={(event) => setChannelFilter(event.target.value)}>
+                  <option value="">All channels</option>
+                  <option value="cash">Cash</option>
+                  <option value="bank">Bank</option>
+                  <option value="mpesa_paybill">M-Pesa/paybill</option>
+                  <option value="manual_adjustment">Manual adjustment</option>
+                </select>
+              </label>
+              <label>
+                From
+                <input value={dateFromFilter} onChange={(event) => setDateFromFilter(event.target.value)} type="date" />
+              </label>
+              <label>
+                To
+                <input value={dateToFilter} onChange={(event) => setDateToFilter(event.target.value)} type="date" />
+              </label>
             </div>
             <TableControls table={paymentTable} label="payments" placeholder="Search payments" />
             <div className="table-wrap">

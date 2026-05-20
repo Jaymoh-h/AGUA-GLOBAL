@@ -54,6 +54,14 @@ Use these files in pgAdmin, DBeaver, TablePlus, or another PostgreSQL DBMS:
 - Audit trail migration path: `server/database/migrations/006_audit_events.sql`
 - Expenses migration path: `server/database/migrations/007_expenses.sql`
 - Business settings migration path: `server/database/migrations/008_business_settings.sql`
+- Maintenance requests migration path: `server/database/migrations/009_maintenance_requests.sql`
+- Tariff refinement migration path: `server/database/migrations/010_tariff_refinement.sql`
+- Penalty applications migration path: `server/database/migrations/011_penalty_applications.sql`
+- User password policy migration path: `server/database/migrations/012_user_password_policy.sql`
+- Customer opening balances migration path: `server/database/migrations/013_customer_opening_balances.sql`
+- Migration balance bills path: `server/database/migrations/014_migration_balance_bills.sql`
+- Customer credits migration path: `server/database/migrations/015_customer_credits.sql`
+- Numbering and account closure migration path: `server/database/migrations/016_numbering_and_account_closure.sql`
 
 Run `schema.sql` first, then `seed.sql`.
 
@@ -119,6 +127,13 @@ For shared business profile, logo path, contacts, payment details, and print foo
 ```powershell
 cd server
 npm.cmd run db:migrate:business-settings
+```
+
+For configurable bill/receipt numbering and account closure support, run:
+
+```powershell
+cd server
+npm.cmd run db:migrate:numbering
 ```
 
 ## Local Setup
@@ -197,6 +212,13 @@ server/database/seed.sql
 ```
 
 Use a strong production admin password after the first login. If the database provider requires TLS, set `DATABASE_SSL=true` in the API project's environment variables.
+
+For an existing production database, run the latest migrations before redeploying the API code that uses them. The current first-batch improvements require:
+
+```powershell
+cd server
+npm.cmd run db:migrate:numbering
+```
 
 ### 2. API Project
 

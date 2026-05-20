@@ -82,13 +82,39 @@ const getOrCreateBillingPeriod = async (client, dateValue, actorUserId = null) =
   return rows[0];
 };
 
-const createBillNumber = (billingPeriod, customer, readingId) => {
-  const periodCode = toDateOnly(billingPeriod.period_start).replace(/-/g, "").slice(0, 6);
-  return `BILL-${periodCode}-${customer.acc_number}-${readingId}`;
+const padSequence = (value, padding = 6) => String(value).padStart(Number(padding || 6), "0");
+
+const nextDocumentNumber = async (client, type) => {
+  await getBillingSettings(client);
+  const settingsResult = await client.query("SELECT * FROM billing_settings WHERE id = 1 FOR UPDATE");
+  const settings = settingsResult.rows[0];
+  const prefixColumn = type === "receipt" ? "receipt_number_prefix" : "bill_number_prefix";
+  const nextColumn = type === "receipt" ? "receipt_number_next" : "bill_number_next";
+  const prefix = settings[prefixColumn] || (type === "receipt" ? "RCPT" : "BILL");
+  const nextValue = Number(settings[nextColumn] || 1);
+  const number = `${prefix}-${padSequence(nextValue, settings.number_padding)}`;
+
+  await client.query(
+    `UPDATE billing_settings
+     SET ${nextColumn} = ${nextColumn} + 1,
+         updated_at = NOW()
+     WHERE id = 1`
+  );
+
+  return number;
+};
+
+const createBillNumber = async (client) => {
+  return nextDocumentNumber(client, "bill");
+};
+
+const createReceiptNumber = async (client) => {
+  return nextDocumentNumber(client, "receipt");
 };
 
 module.exports = {
   createBillNumber,
+  createReceiptNumber,
   getBillingSettings,
   getMonthlyPeriodDates,
   getOrCreateBillingPeriod

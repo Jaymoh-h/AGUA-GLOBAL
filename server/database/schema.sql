@@ -115,6 +115,11 @@ CREATE TABLE billing_settings (
   penalty_value NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (penalty_value >= 0),
   deposit_required BOOLEAN NOT NULL DEFAULT FALSE,
   default_deposit_amount NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (default_deposit_amount >= 0),
+  bill_number_prefix VARCHAR(24) NOT NULL DEFAULT 'BILL',
+  bill_number_next INTEGER NOT NULL DEFAULT 1 CHECK (bill_number_next > 0),
+  receipt_number_prefix VARCHAR(24) NOT NULL DEFAULT 'RCPT',
+  receipt_number_next INTEGER NOT NULL DEFAULT 1 CHECK (receipt_number_next > 0),
+  number_padding INTEGER NOT NULL DEFAULT 6 CHECK (number_padding BETWEEN 3 AND 12),
   updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

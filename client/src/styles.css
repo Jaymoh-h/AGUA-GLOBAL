@@ -698,6 +698,37 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.audit-panel {
+  border: 1px solid #dde3ea;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f8fafc;
+  display: grid;
+  gap: 8px;
+}
+
+.audit-list {
+  display: grid;
+  gap: 7px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.audit-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid #edf0f4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.audit-item strong,
+.audit-item span {
+  overflow-wrap: anywhere;
+}
+
 .table-wrap {
   overflow-x: auto;
   overflow-y: auto;

@@ -2,6 +2,7 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
+const { createPaymentWithAllocations } = require("./payment.controller");
 
 const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
 
@@ -925,6 +926,80 @@ const deleteCustomer = asyncHandler(async (req, res) => {
   }
 });
 
+const closeCustomerAccount = asyncHandler(async (req, res) => {
+  const {
+    settlement_date = new Date().toISOString().slice(0, 10),
+    apply_deposit = true,
+    notes = ""
+  } = req.body;
+
+  if (!isDateOnly(settlement_date)) {
+    throw new ApiError(400, "Settlement date must use YYYY-MM-DD format.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query("SELECT * FROM customers WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const before = beforeResult.rows[0];
+    if (!before) {
+      throw new ApiError(404, "Customer not found.");
+    }
+    if (before.status === "inactive") {
+      throw new ApiError(400, "Customer account is already inactive.");
+    }
+
+    let depositSettlement = null;
+    if (apply_deposit && before.deposit_paid && Number(before.deposit_amount || 0) > 0) {
+      depositSettlement = await createPaymentWithAllocations(
+        client,
+        req,
+        {
+          customer_id: before.id,
+          amount: Number(before.deposit_amount),
+          payment_date: settlement_date,
+          payment_channel: "manual_adjustment",
+          external_reference: `DEPOSIT-CLOSE-${before.acc_number}`,
+          received_from: before.name,
+          notes: notes || "Deposit applied during account closure"
+        },
+        { auditReason: "Deposit settlement during account closure" }
+      );
+    }
+
+    const updatedResult = await client.query(
+      `UPDATE customers
+       SET status = 'inactive',
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [before.id]
+    );
+    const after = updatedResult.rows[0];
+
+    await recordAuditEvent(client, {
+      req,
+      action: "customer.account_closed",
+      entityType: "customer",
+      entityId: after.id,
+      beforeData: before,
+      afterData: {
+        customer: after,
+        deposit_settlement: depositSettlement?.payment || null
+      },
+      reason: notes || "Account closed"
+    });
+
+    await client.query("COMMIT");
+    res.json({ customer: after, deposit_settlement: depositSettlement });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = {
   listCustomers,
   getCustomer,
@@ -933,6 +1008,7 @@ module.exports = {
   commitCustomerImport,
   previewOpeningBalanceImport,
   commitOpeningBalanceImport,
+  closeCustomerAccount,
   createCustomer,
   updateCustomer,
   deleteCustomer

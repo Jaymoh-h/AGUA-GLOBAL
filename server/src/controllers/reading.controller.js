@@ -278,7 +278,7 @@ const createReadingWithBill = async (client, req, payload, { source = "field", a
     const unitsUsed = Number(reading_value) - Number(previous.reading_value);
     const tariff = await getTariffWithBlocks(client, customer.rate_id);
     const charge = calculateTariffCharge(tariff || customer, unitsUsed);
-    const billNumber = createBillNumber(billingPeriod, customer, reading.id);
+    const billNumber = await createBillNumber(client);
     const billResult = await client.query(
       `INSERT INTO bills (
         customer_id, billing_period_id, bill_number, previous_reading_id, current_reading_id,
@@ -637,7 +637,7 @@ const recalculateBillForReading = async (client, readingId) => {
     return creditApplication.appliedAmount > 0 ? creditApplication.bill : bill;
   }
 
-  const billNumber = createBillNumber(billingPeriod, reading, reading.id);
+  const billNumber = await createBillNumber(client);
   const billResult = await client.query(
     `INSERT INTO bills (
       customer_id, billing_period_id, bill_number, previous_reading_id, current_reading_id,

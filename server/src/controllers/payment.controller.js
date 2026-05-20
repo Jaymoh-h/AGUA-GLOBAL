@@ -2,6 +2,7 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
+const { createReceiptNumber } = require("../services/billingPeriod.service");
 
 const paymentChannels = ["cash", "bank", "mpesa_paybill", "manual_adjustment"];
 
@@ -212,7 +213,7 @@ const reverseAllocations = async (client, paymentId) => {
   return { allocations, bills: updatedBills };
 };
 
-const buildReceiptNumber = (payment) => `RCPT-${String(payment.id).padStart(6, "0")}`;
+const buildReceiptNumber = async (client) => createReceiptNumber(client);
 
 const createPaymentWithAllocations = async (
   client,
@@ -287,6 +288,7 @@ const createPaymentWithAllocations = async (
   const { allocations, bills, unallocatedAmount } = await allocatePayment(client, payment.id, customer.id, paymentAmount, bill_id);
   const firstBillId = allocations[0]?.bill_id || null;
   const totalAllocated = allocations.reduce((sum, allocation) => sum + Number(allocation.amount), 0);
+  const nextReceiptNumber = receipt_number || (await buildReceiptNumber(client));
 
   const updatedPayment = await client.query(
     `UPDATE payments
@@ -298,7 +300,7 @@ const createPaymentWithAllocations = async (
          updated_at = NOW()
      WHERE id = $6
      RETURNING *`,
-    [firstBillId, buildReceiptNumber(payment), totalAllocated, unallocatedAmount, req.user.id, payment.id]
+    [firstBillId, nextReceiptNumber, totalAllocated, unallocatedAmount, req.user.id, payment.id]
   );
   await recordAuditEvent(client, {
     req,
@@ -742,7 +744,7 @@ const updatePayment = asyncHandler(async (req, res) => {
         payment_date || null,
         nextChannel,
         nextExternalReference || null,
-        nextReceiptNumber || buildReceiptNumber(payment),
+        nextReceiptNumber || (await buildReceiptNumber(client)),
         received_from ?? payment.received_from,
         totalAllocated,
         unallocatedAmount,
@@ -778,6 +780,7 @@ const updatePayment = asyncHandler(async (req, res) => {
 
 module.exports = {
   commitPaymentImport,
+  createPaymentWithAllocations,
   getPayment,
   listPayments,
   createPayment,

@@ -1,7 +1,8 @@
-import { History } from "lucide-react";
+import { Download, History } from "lucide-react";
 import { useEffect, useState } from "react";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
+import { downloadCsvRows } from "../utils/csvTemplate";
 
 const formatDate = (value) => {
   if (!value) return "-";
@@ -28,6 +29,21 @@ function AuditTrailPage() {
   const eventTable = useTableControls(events, {
     searchFields: ["actor_name", "actor_email", "action", "entity_type", "entity_id", "reason", "created_at"]
   });
+  const exportEvents = () => {
+    downloadCsvRows(
+      "audit-trail.csv",
+      [
+        { header: "Time", value: (row) => row.created_at },
+        { header: "Actor", value: (row) => row.actor_name || "System" },
+        { header: "Actor Email", value: (row) => row.actor_email },
+        { header: "Action", value: (row) => row.action },
+        { header: "Entity", value: (row) => row.entity_type },
+        { header: "Entity ID", value: (row) => row.entity_id },
+        { header: "Reason", value: (row) => row.reason }
+      ],
+      eventTable.filteredRows
+    );
+  };
 
   return (
     <section className="page-stack">
@@ -42,7 +58,13 @@ function AuditTrailPage() {
       <div className="panel">
         <div className="panel-heading">
           <h3>Recent Events</h3>
-          <History size={18} />
+          <div className="row-actions">
+            <History size={18} />
+            <button type="button" onClick={exportEvents}>
+              <Download size={16} />
+              Export
+            </button>
+          </div>
         </div>
         <TableControls table={eventTable} label="events" placeholder="Search audit events" />
         <div className="table-wrap">

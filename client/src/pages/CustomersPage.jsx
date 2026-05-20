@@ -1,8 +1,9 @@
 import { Download, FileText, Plus, Printer, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import AuditPanel from "../components/AuditPanel";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
-import { downloadCsvTemplate } from "../utils/csvTemplate";
+import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const moneyAbs = (value) => `KES ${Math.abs(Number(value || 0)).toLocaleString()}`;
@@ -51,6 +52,14 @@ function CustomersPage({ user }) {
   const [importPreview, setImportPreview] = useState(null);
   const [openingCsvText, setOpeningCsvText] = useState("");
   const [openingImportPreview, setOpeningImportPreview] = useState(null);
+  const [statusFilter, setStatusFilter] = useState("");
+  const [zoneFilter, setZoneFilter] = useState("");
+  const [closingCustomer, setClosingCustomer] = useState(null);
+  const [closureForm, setClosureForm] = useState({
+    settlement_date: new Date().toISOString().slice(0, 10),
+    apply_deposit: true,
+    notes: ""
+  });
   const [importing, setImporting] = useState(false);
   const [message, setMessage] = useState("");
   const canWrite = ["admin", "accountant"].includes(user.role);
@@ -202,9 +211,54 @@ function CustomersPage({ user }) {
   const importReady = importPreview?.summary?.valid > 0 && importPreview?.summary?.invalid === 0;
   const openingImportReady =
     openingImportPreview?.summary?.valid > 0 && openingImportPreview?.summary?.invalid === 0;
-  const customerTable = useTableControls(customers, {
+  const filteredCustomers = customers.filter((customer) => {
+    const statusMatch = !statusFilter || customer.status === statusFilter;
+    const zoneMatch = !zoneFilter || Number(customer.zone_id) === Number(zoneFilter);
+    return statusMatch && zoneMatch;
+  });
+  const customerTable = useTableControls(filteredCustomers, {
     searchFields: ["name", "acc_number", "phone", "zone_name", "location", "rate_name", "status"]
   });
+
+  const exportCustomers = () => {
+    downloadCsvRows(
+      "customers.csv",
+      [
+        { header: "Account", value: (row) => row.acc_number },
+        { header: "Name", value: (row) => row.name },
+        { header: "Phone", value: (row) => row.phone },
+        { header: "Zone", value: (row) => row.zone_name || row.location },
+        { header: "Rate", value: (row) => row.rate_name },
+        { header: "Deposit", value: (row) => row.deposit_amount },
+        { header: "Deposit Paid", value: (row) => (row.deposit_paid ? "yes" : "no") },
+        { header: "Opening Balance", value: (row) => row.opening_balance_amount },
+        { header: "Balance Due", value: (row) => row.balance_due },
+        { header: "Status", value: (row) => row.status }
+      ],
+      customerTable.filteredRows
+    );
+  };
+
+  const setClosureField = (field, value) =>
+    setClosureForm((current) => ({ ...current, [field]: value }));
+
+  const closeAccount = async () => {
+    if (!closingCustomer) return;
+    setMessage("");
+    try {
+      await api.customers.closeAccount(closingCustomer.id, closureForm);
+      setClosingCustomer(null);
+      setClosureForm({
+        settlement_date: new Date().toISOString().slice(0, 10),
+        apply_deposit: true,
+        notes: ""
+      });
+      await load();
+      setMessage("Customer account closed.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
 
   const previewOpeningBalanceImport = async () => {
     setMessage("");
@@ -331,6 +385,7 @@ function CustomersPage({ user }) {
                 required={Number(form.opening_balance_amount || 0) !== 0}
               />
             </label>
+            {editingId ? <AuditPanel entityType="customer" entityId={editingId} title="Customer Audit" /> : null}
             {message ? <p className="form-note">{message}</p> : null}
             <button className="primary-button" type="submit">
               {editingId ? <Save size={17} /> : <Plus size={17} />}
@@ -342,6 +397,31 @@ function CustomersPage({ user }) {
         <div className="panel wide-panel">
           <div className="panel-heading">
             <h3>Customer List</h3>
+            <button type="button" onClick={exportCustomers}>
+              <Download size={16} />
+              Export
+            </button>
+          </div>
+          <div className="table-toolbar">
+            <label>
+              Status
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                <option value="">All statuses</option>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+            </label>
+            <label>
+              Zone
+              <select value={zoneFilter} onChange={(event) => setZoneFilter(event.target.value)}>
+                <option value="">All zones</option>
+                {zones.map((zone) => (
+                  <option key={zone.id} value={zone.id}>
+                    {zone.name}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
           <TableControls table={customerTable} label="customers" placeholder="Search customers" />
           <div className="table-wrap">
@@ -393,6 +473,11 @@ function CustomersPage({ user }) {
                         {user.role === "admin" ? (
                           <button className="danger-button" type="button" onClick={() => remove(customer.id)} title="Delete customer">
                             <Trash2 size={15} />
+                          </button>
+                        ) : null}
+                        {customer.status !== "inactive" ? (
+                          <button type="button" onClick={() => setClosingCustomer(customer)}>
+                            Close
                           </button>
                         ) : null}
                       </td>
@@ -485,6 +570,50 @@ function CustomersPage({ user }) {
               </table>
             </div>
           ) : null}
+        </section>
+      ) : null}
+
+      {canWrite && closingCustomer ? (
+        <section className="panel full-span form-grid">
+          <div className="panel-heading">
+            <div>
+              <h3>Close Account</h3>
+              <p className="muted">
+                {closingCustomer.acc_number} - {closingCustomer.name}
+              </p>
+            </div>
+            <button type="button" onClick={() => setClosingCustomer(null)}>
+              Cancel
+            </button>
+          </div>
+          <label>
+            Settlement date
+            <input
+              value={closureForm.settlement_date}
+              onChange={(event) => setClosureField("settlement_date", event.target.value)}
+              type="date"
+            />
+          </label>
+          <label className="checkbox-row">
+            <input
+              checked={Boolean(closureForm.apply_deposit)}
+              onChange={(event) => setClosureField("apply_deposit", event.target.checked)}
+              type="checkbox"
+            />
+            Apply paid deposit to outstanding bills or credit
+          </label>
+          <label>
+            Notes
+            <textarea
+              value={closureForm.notes}
+              onChange={(event) => setClosureField("notes", event.target.value)}
+              rows="3"
+              placeholder="Reason for account closure"
+            />
+          </label>
+          <button className="primary-button" type="button" onClick={closeAccount}>
+            Close account
+          </button>
         </section>
       ) : null}
 
