@@ -2,6 +2,7 @@ import { FileSpreadsheet, Printer, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import StatCard from "../components/StatCard";
+import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
@@ -67,6 +68,7 @@ function ReportsPage() {
   const [filters, setFilters] = useState(defaultFilters);
   const [message, setMessage] = useState("");
   const [accountantMessage, setAccountantMessage] = useState("");
+  const [printAllRows, setPrintAllRows] = useState(false);
 
   useEffect(() => {
     api.reports.summary().then(setData).catch((err) => setMessage(err.message));
@@ -127,12 +129,46 @@ function ReportsPage() {
     flushSync(() => {
       setPrintScope(scope);
       setPrintTarget(target);
+      setPrintAllRows(true);
     });
     window.print();
+    setPrintAllRows(false);
   };
 
   const managementPrintTitle = managementReportTitles[printScope === "management" ? printTarget : "all"] || "Management Reports";
   const accountantPrintTitle = accountantReportTitles[printScope === "accountant" ? printTarget : "all"] || "Accountant Report";
+  const maintenanceRegisterTable = useTableControls(data?.maintenanceRegister || [], {
+    searchFields: ["request_number", "title", "customer_name", "acc_number", "zone_name", "category", "priority", "status", "assigned_to_name"]
+  });
+  const customerBalanceTable = useTableControls(data?.customerBalances || [], {
+    searchFields: ["name", "acc_number", "zone_name", "open_bills", "oldest_due_date", "balance_due"]
+  });
+  const billingRegisterTable = useTableControls(accountantData?.billingRegister || [], {
+    searchFields: ["bill_number", "billing_period_name", "billing_month", "customer_name", "acc_number", "zone_name", "balance_amount"]
+  });
+  const receiptRegisterTable = useTableControls(accountantData?.receiptRegister || [], {
+    searchFields: ["receipt_number", "payment_date", "customer_name", "acc_number", "payment_channel", "external_reference", "recorded_by_name"]
+  });
+  const allocationLedgerTable = useTableControls(accountantData?.allocationLedger || [], {
+    searchFields: ["receipt_number", "payment_date", "customer_name", "acc_number", "bill_number", "billing_month", "payment_channel"]
+  });
+  const receivablesAgingTable = useTableControls(accountantData?.receivablesAging || [], {
+    searchFields: ["customer_name", "acc_number", "zone_name", "bill_number", "billing_month", "due_date", "aging_bucket"]
+  });
+  const depositRegisterTable = useTableControls(accountantData?.depositRegister || [], {
+    searchFields: ["customer_name", "acc_number", "zone_name", "deposit_amount", "deposit_paid", "deposit_paid_at"]
+  });
+  const expenseRegisterTable = useTableControls(accountantData?.expenseRegister || [], {
+    searchFields: ["expense_date", "category", "vendor", "description", "payment_channel", "reference", "receipt_number", "recorded_by_name", "amount"]
+  });
+  const maintenanceRegisterRows = printAllRows ? maintenanceRegisterTable.filteredRows : maintenanceRegisterTable.visibleRows;
+  const customerBalanceRows = printAllRows ? customerBalanceTable.filteredRows : customerBalanceTable.visibleRows;
+  const billingRegisterRows = printAllRows ? billingRegisterTable.filteredRows : billingRegisterTable.visibleRows;
+  const receiptRegisterRows = printAllRows ? receiptRegisterTable.filteredRows : receiptRegisterTable.visibleRows;
+  const allocationLedgerRows = printAllRows ? allocationLedgerTable.filteredRows : allocationLedgerTable.visibleRows;
+  const receivablesAgingRows = printAllRows ? receivablesAgingTable.filteredRows : receivablesAgingTable.visibleRows;
+  const depositRegisterRows = printAllRows ? depositRegisterTable.filteredRows : depositRegisterTable.visibleRows;
+  const expenseRegisterRows = printAllRows ? expenseRegisterTable.filteredRows : expenseRegisterTable.visibleRows;
 
   if (message) return <p className="form-error">{message}</p>;
   if (!data || !totals) return <p className="muted">Loading reports...</p>;
@@ -458,6 +494,7 @@ function ReportsPage() {
               <Printer size={17} />
             </button>
           </div>
+          <TableControls table={maintenanceRegisterTable} label="requests" placeholder="Search maintenance" />
           <div className="table-wrap">
             <table>
               <thead>
@@ -473,8 +510,8 @@ function ReportsPage() {
                 </tr>
               </thead>
               <tbody>
-                {data.maintenanceRegister?.length ? (
-                  data.maintenanceRegister.map((row) => (
+                {maintenanceRegisterTable.total ? (
+                  maintenanceRegisterRows.map((row) => (
                     <tr key={row.id}>
                       <td>
                         {row.request_number || `MR-${row.id}`}
@@ -508,6 +545,7 @@ function ReportsPage() {
               <Printer size={17} />
             </button>
           </div>
+          <TableControls table={customerBalanceTable} label="customers" placeholder="Search balances" />
           <div className="table-wrap">
             <table>
               <thead>
@@ -521,16 +559,20 @@ function ReportsPage() {
                 </tr>
               </thead>
               <tbody>
-                {data.customerBalances.map((row) => (
-                  <tr key={row.id}>
-                    <td>{row.name}</td>
-                    <td>{row.acc_number}</td>
-                    <td>{row.zone_name}</td>
-                    <td>{number(row.open_bills)}</td>
-                    <td>{date(row.oldest_due_date)}</td>
-                    <td>{money(row.balance_due)}</td>
-                  </tr>
-                ))}
+                {customerBalanceTable.total ? (
+                  customerBalanceRows.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.name}</td>
+                      <td>{row.acc_number}</td>
+                      <td>{row.zone_name}</td>
+                      <td>{number(row.open_bills)}</td>
+                      <td>{date(row.oldest_due_date)}</td>
+                      <td>{money(row.balance_due)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <EmptyRow colSpan={6} />
+                )}
               </tbody>
             </table>
           </div>
@@ -722,6 +764,7 @@ function ReportsPage() {
                     </button>
                   </div>
                 </div>
+                <TableControls table={billingRegisterTable} label="bills" placeholder="Search billing register" />
                 <div className="table-wrap">
                   <table>
                     <thead>
@@ -743,8 +786,8 @@ function ReportsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {accountantData.billingRegister.length ? (
-                        accountantData.billingRegister.map((row) => (
+                      {billingRegisterTable.total ? (
+                        billingRegisterRows.map((row) => (
                           <tr key={row.id}>
                             <td>
                               {row.bill_number || `Bill ${row.id}`}
@@ -783,6 +826,7 @@ function ReportsPage() {
                     <Printer size={17} />
                   </button>
                 </div>
+                <TableControls table={receiptRegisterTable} label="receipts" placeholder="Search receipts" />
                 <div className="table-wrap">
                   <table>
                     <thead>
@@ -798,8 +842,8 @@ function ReportsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {accountantData.receiptRegister.length ? (
-                        accountantData.receiptRegister.map((row) => (
+                      {receiptRegisterTable.total ? (
+                        receiptRegisterRows.map((row) => (
                           <tr key={row.id}>
                             <td>{row.receipt_number}</td>
                             <td>{date(row.payment_date)}</td>
@@ -829,6 +873,7 @@ function ReportsPage() {
                     <Printer size={17} />
                   </button>
                 </div>
+                <TableControls table={allocationLedgerTable} label="allocations" placeholder="Search allocations" />
                 <div className="table-wrap">
                   <table>
                     <thead>
@@ -843,8 +888,8 @@ function ReportsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {accountantData.allocationLedger.length ? (
-                        accountantData.allocationLedger.map((row) => (
+                      {allocationLedgerTable.total ? (
+                        allocationLedgerRows.map((row) => (
                           <tr key={row.id}>
                             <td>{row.receipt_number}</td>
                             <td>{date(row.payment_date)}</td>
@@ -873,6 +918,7 @@ function ReportsPage() {
                     <Printer size={17} />
                   </button>
                 </div>
+                <TableControls table={receivablesAgingTable} label="bills" placeholder="Search aging detail" />
                 <div className="table-wrap">
                   <table>
                     <thead>
@@ -887,8 +933,8 @@ function ReportsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {accountantData.receivablesAging.length ? (
-                        accountantData.receivablesAging.map((row) => (
+                      {receivablesAgingTable.total ? (
+                        receivablesAgingRows.map((row) => (
                           <tr key={row.id}>
                             <td>
                               {row.customer_name}
@@ -917,6 +963,7 @@ function ReportsPage() {
                     <Printer size={17} />
                   </button>
                 </div>
+                <TableControls table={depositRegisterTable} label="deposits" placeholder="Search deposits" />
                 <div className="table-wrap">
                   <table>
                     <thead>
@@ -929,8 +976,8 @@ function ReportsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {accountantData.depositRegister.length ? (
-                        accountantData.depositRegister.map((row) => (
+                      {depositRegisterTable.total ? (
+                        depositRegisterRows.map((row) => (
                           <tr key={row.id}>
                             <td>
                               {row.customer_name}
@@ -990,6 +1037,7 @@ function ReportsPage() {
                     <Printer size={17} />
                   </button>
                 </div>
+                <TableControls table={expenseRegisterTable} label="expenses" placeholder="Search expense register" />
                 <div className="table-wrap">
                   <table>
                     <thead>
@@ -1005,8 +1053,8 @@ function ReportsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {accountantData.expenseRegister.length ? (
-                        accountantData.expenseRegister.map((row) => (
+                      {expenseRegisterTable.total ? (
+                        expenseRegisterRows.map((row) => (
                           <tr key={row.id}>
                             <td>{date(row.expense_date)}</td>
                             <td>{row.category}</td>

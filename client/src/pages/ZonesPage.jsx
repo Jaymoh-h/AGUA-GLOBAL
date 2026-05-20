@@ -1,5 +1,6 @@
 import { MapPin, Plus, Save } from "lucide-react";
 import { useEffect, useState } from "react";
+import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 
 const blank = { name: "", description: "", is_active: true };
@@ -44,6 +45,9 @@ function ZonesPage() {
       is_active: zone.is_active
     });
   };
+  const zoneTable = useTableControls(zones, {
+    searchFields: ["name", "description", "is_active"]
+  });
 
   return (
     <section className="page-stack">
@@ -87,6 +91,7 @@ function ZonesPage() {
           <div className="panel-heading">
             <h3>Zone/Location List</h3>
           </div>
+          <TableControls table={zoneTable} label="zones" placeholder="Search zones" />
           <div className="table-wrap">
             <table>
               <thead>
@@ -98,7 +103,7 @@ function ZonesPage() {
                 </tr>
               </thead>
               <tbody>
-                {zones.map((zone) => (
+                {zoneTable.visibleRows.map((zone) => (
                   <tr key={zone.id}>
                     <td>{zone.name}</td>
                     <td>{zone.is_active ? "Active" : "Inactive"}</td>
@@ -118,4 +123,3 @@ function ZonesPage() {
 }
 
 export default ZonesPage;
-

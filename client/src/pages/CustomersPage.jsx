@@ -1,5 +1,6 @@
 import { Download, FileText, Plus, Printer, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
 import { downloadCsvTemplate } from "../utils/csvTemplate";
 
@@ -201,6 +202,9 @@ function CustomersPage({ user }) {
   const importReady = importPreview?.summary?.valid > 0 && importPreview?.summary?.invalid === 0;
   const openingImportReady =
     openingImportPreview?.summary?.valid > 0 && openingImportPreview?.summary?.invalid === 0;
+  const customerTable = useTableControls(customers, {
+    searchFields: ["name", "acc_number", "phone", "zone_name", "location", "rate_name", "status"]
+  });
 
   const previewOpeningBalanceImport = async () => {
     setMessage("");
@@ -339,6 +343,7 @@ function CustomersPage({ user }) {
           <div className="panel-heading">
             <h3>Customer List</h3>
           </div>
+          <TableControls table={customerTable} label="customers" placeholder="Search customers" />
           <div className="table-wrap">
             <table>
               <thead>
@@ -354,7 +359,7 @@ function CustomersPage({ user }) {
                 </tr>
               </thead>
               <tbody>
-                {customers.map((customer) => (
+                {customerTable.visibleRows.map((customer) => (
                   <tr key={customer.id}>
                     <td>
                       <strong>{customer.name}</strong>

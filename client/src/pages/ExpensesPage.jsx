@@ -1,5 +1,6 @@
 import { Banknote, Download, Eye, FileUp, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 import { downloadCsvTemplate } from "../utils/csvTemplate";
 
@@ -111,6 +112,19 @@ function ExpensesPage() {
       setImporting(false);
     }
   };
+  const expenseTable = useTableControls(expenses, {
+    searchFields: [
+      "expense_date",
+      "category",
+      "vendor",
+      "description",
+      "amount",
+      "payment_channel",
+      "reference",
+      "receipt_number",
+      "recorded_by_name"
+    ]
+  });
 
   return (
     <section className="page-stack">
@@ -280,6 +294,7 @@ function ExpensesPage() {
             <div className="panel-heading">
               <h3>Expense History</h3>
             </div>
+            <TableControls table={expenseTable} label="expenses" placeholder="Search expenses" />
             <div className="table-wrap">
               <table>
                 <thead>
@@ -295,7 +310,7 @@ function ExpensesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {expenses.map((expense) => (
+                  {expenseTable.visibleRows.map((expense) => (
                     <tr key={expense.id}>
                       <td>{expense.expense_date?.slice(0, 10)}</td>
                       <td>{expense.category}</td>

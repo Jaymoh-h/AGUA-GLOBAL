@@ -1,6 +1,7 @@
 import { CheckCircle2, Printer, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import StatusBadge from "../components/StatusBadge";
+import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
@@ -46,6 +47,9 @@ function BillsPage({ user }) {
     if (!selectedBill) return;
     window.print();
   };
+  const billTable = useTableControls(bills, {
+    searchFields: ["customer_name", "acc_number", "billing_period_name", "billing_month", "bill_number", "status"]
+  });
 
   return (
     <section className="page-stack">
@@ -64,6 +68,7 @@ function BillsPage({ user }) {
 
       {message ? <p className="form-note">{message}</p> : null}
       <div className="panel">
+        <TableControls table={billTable} label="bills" placeholder="Search bills" />
         <div className="table-wrap">
           <table>
             <thead>
@@ -81,7 +86,7 @@ function BillsPage({ user }) {
               </tr>
             </thead>
             <tbody>
-              {bills.map((bill) => (
+              {billTable.visibleRows.map((bill) => (
                 <tr key={bill.id}>
                   <td>
                     <strong>{bill.customer_name}</strong>

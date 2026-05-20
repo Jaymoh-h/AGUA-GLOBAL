@@ -1,5 +1,6 @@
 import { Layers3, Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
@@ -123,6 +124,9 @@ function RatesPage() {
     });
     setBlocks(rate.blocks?.length ? rate.blocks : [emptyBlock()]);
   };
+  const rateTable = useTableControls(rates, {
+    searchFields: ["name", "description", "tariff_type", "amount", "fixed_charge_amount", "vat_rate", "is_active"]
+  });
 
   return (
     <section className="page-stack">
@@ -297,6 +301,7 @@ function RatesPage() {
           <div className="panel-heading">
             <h3>Tariff List</h3>
           </div>
+          <TableControls table={rateTable} label="tariffs" placeholder="Search tariffs" />
           <div className="table-wrap">
             <table>
               <thead>
@@ -313,7 +318,7 @@ function RatesPage() {
                 </tr>
               </thead>
               <tbody>
-                {rates.map((rate) => (
+                {rateTable.visibleRows.map((rate) => (
                   <tr key={rate.id}>
                     <td>
                       {rate.name}

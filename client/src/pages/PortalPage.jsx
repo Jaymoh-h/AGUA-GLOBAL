@@ -2,6 +2,7 @@ import { FileText, LifeBuoy, Printer, ReceiptText, Send, X } from "lucide-react"
 import { useEffect, useMemo, useState } from "react";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
+import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
@@ -39,6 +40,15 @@ function PortalPage() {
 
   const openBalance = useMemo(() => Number(data?.summary?.balance_due || 0), [data]);
   const activeRequests = useMemo(() => Number(data?.summary?.active_requests || 0), [data]);
+  const billTable = useTableControls(data?.bills || [], {
+    searchFields: ["bill_number", "billing_period_name", "billing_month", "due_date", "status"]
+  });
+  const receiptTable = useTableControls(data?.payments || [], {
+    searchFields: ["receipt_number", "bill_numbers", "payment_date", "payment_channel", "amount"]
+  });
+  const requestTable = useTableControls(data?.serviceRequests || [], {
+    searchFields: ["request_number", "title", "category", "status", "reported_at"]
+  });
 
   const load = async () => {
     setData(await api.portal.dashboard());
@@ -170,6 +180,7 @@ function PortalPage() {
               <h3>Recent Bills</h3>
               <FileText size={18} />
             </div>
+            <TableControls table={billTable} label="bills" placeholder="Search bills" />
             <div className="table-wrap">
               <table>
                 <thead>
@@ -184,8 +195,8 @@ function PortalPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.bills.length ? (
-                    data.bills.map((bill) => (
+                  {billTable.total ? (
+                    billTable.visibleRows.map((bill) => (
                       <tr key={bill.id}>
                         <td>
                           {bill.bill_number || `Bill ${bill.id}`}
@@ -222,6 +233,7 @@ function PortalPage() {
               <h3>Receipts</h3>
               <ReceiptText size={18} />
             </div>
+            <TableControls table={receiptTable} label="receipts" placeholder="Search receipts" />
             <div className="table-wrap">
               <table>
                 <thead>
@@ -235,8 +247,8 @@ function PortalPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.payments.length ? (
-                    data.payments.map((payment) => (
+                  {receiptTable.total ? (
+                    receiptTable.visibleRows.map((payment) => (
                       <tr key={payment.id}>
                         <td>
                           {payment.receipt_number}
@@ -326,6 +338,7 @@ function PortalPage() {
             <div className="panel-heading">
               <h3>Service Requests</h3>
             </div>
+            <TableControls table={requestTable} label="requests" placeholder="Search requests" />
             <div className="table-wrap">
               <table>
                 <thead>
@@ -337,8 +350,8 @@ function PortalPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.serviceRequests.length ? (
-                    data.serviceRequests.map((request) => (
+                  {requestTable.total ? (
+                    requestTable.visibleRows.map((request) => (
                       <tr key={request.id}>
                         <td>
                           {request.request_number || `Request ${request.id}`}

@@ -1,5 +1,6 @@
 import { History } from "lucide-react";
 import { useEffect, useState } from "react";
+import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 
 const formatDate = (value) => {
@@ -24,6 +25,9 @@ function AuditTrailPage() {
   useEffect(() => {
     api.auditEvents.list().then(setEvents).catch((err) => setMessage(err.message));
   }, []);
+  const eventTable = useTableControls(events, {
+    searchFields: ["actor_name", "actor_email", "action", "entity_type", "entity_id", "reason", "created_at"]
+  });
 
   return (
     <section className="page-stack">
@@ -40,6 +44,7 @@ function AuditTrailPage() {
           <h3>Recent Events</h3>
           <History size={18} />
         </div>
+        <TableControls table={eventTable} label="events" placeholder="Search audit events" />
         <div className="table-wrap">
           <table>
             <thead>
@@ -53,7 +58,7 @@ function AuditTrailPage() {
               </tr>
             </thead>
             <tbody>
-              {events.map((event) => (
+              {eventTable.visibleRows.map((event) => (
                 <tr key={event.id}>
                   <td>{formatDate(event.created_at)}</td>
                   <td>

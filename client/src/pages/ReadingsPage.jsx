@@ -1,5 +1,6 @@
 import { Download, Eye, FileUp, Gauge, Replace, Save, Send } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 import { downloadCsvTemplate } from "../utils/csvTemplate";
 
@@ -215,6 +216,12 @@ function ReadingsPage() {
       setImporting(false);
     }
   };
+  const readingTable = useTableControls(readings, {
+    searchFields: ["customer_name", "acc_number", "meter_number", "reading_value", "reading_date", "created_by_name"]
+  });
+  const meterEventTable = useTableControls(meterEvents, {
+    searchFields: ["customer_name", "acc_number", "event_date", "old_meter_number", "new_meter_number", "reason"]
+  });
 
   return (
     <section className="page-stack">
@@ -489,6 +496,7 @@ function ReadingsPage() {
               <h3>Recent Readings</h3>
               <Gauge size={18} />
             </div>
+            <TableControls table={readingTable} label="readings" placeholder="Search readings" />
             <div className="table-wrap">
               <table>
                 <thead>
@@ -504,7 +512,7 @@ function ReadingsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {readings.map((reading) => (
+                  {readingTable.visibleRows.map((reading) => (
                     <tr key={reading.id}>
                       <td>{reading.customer_name}</td>
                       <td>{reading.acc_number}</td>
@@ -533,6 +541,7 @@ function ReadingsPage() {
               <h3>Meter Events</h3>
               <Replace size={18} />
             </div>
+            <TableControls table={meterEventTable} label="events" placeholder="Search meter events" />
             <div className="table-wrap">
               <table>
                 <thead>
@@ -547,7 +556,7 @@ function ReadingsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {meterEvents.map((event) => (
+                  {meterEventTable.visibleRows.map((event) => (
                     <tr key={event.id}>
                       <td>
                         <strong>{event.customer_name}</strong>

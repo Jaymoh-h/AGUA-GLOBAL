@@ -1,5 +1,6 @@
 import { Edit3, RotateCcw, Save, UserPlus } from "lucide-react";
 import { useEffect, useState } from "react";
+import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 
 const blank = {
@@ -99,6 +100,9 @@ function UsersPage({ user: currentUser }) {
       setMessage(err.message);
     }
   };
+  const userTable = useTableControls(users, {
+    searchFields: ["name", "email", "phone", "role", "customer_acc_number", "customer_name", "is_active"]
+  });
 
   return (
     <section className="page-stack">
@@ -182,6 +186,7 @@ function UsersPage({ user: currentUser }) {
           <div className="panel-heading">
             <h3>User Accounts</h3>
           </div>
+          <TableControls table={userTable} label="users" placeholder="Search users" />
           <div className="table-wrap">
             <table>
               <thead>
@@ -196,7 +201,7 @@ function UsersPage({ user: currentUser }) {
                 </tr>
               </thead>
               <tbody>
-                {users.map((account) => (
+                {userTable.visibleRows.map((account) => (
                   <tr key={account.id}>
                     <td>
                       <strong>{account.name}</strong>

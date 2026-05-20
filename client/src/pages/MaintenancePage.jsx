@@ -1,6 +1,7 @@
 import { Ban, CheckCircle2, Play, RefreshCw, Save, Wrench } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import StatusBadge from "../components/StatusBadge";
+import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -120,6 +121,20 @@ function MaintenancePage() {
       setSaving(false);
     }
   };
+  const requestTable = useTableControls(requests, {
+    searchFields: [
+      "request_number",
+      "title",
+      "customer_name",
+      "acc_number",
+      "zone_name",
+      "category",
+      "priority",
+      "status",
+      "assigned_to_name",
+      "resolution_notes"
+    ]
+  });
 
   return (
     <section className="page-stack">
@@ -260,6 +275,7 @@ function MaintenancePage() {
           <div className="panel-heading">
             <h3>Maintenance Register</h3>
           </div>
+          <TableControls table={requestTable} label="requests" placeholder="Search maintenance" />
           <div className="table-wrap">
             <table>
               <thead>
@@ -275,8 +291,8 @@ function MaintenancePage() {
                 </tr>
               </thead>
               <tbody>
-                {requests.length ? (
-                  requests.map((request) => (
+                {requestTable.total ? (
+                  requestTable.visibleRows.map((request) => (
                     <tr key={request.id}>
                       <td>
                         <strong>{request.request_number || `Request ${request.id}`}</strong>

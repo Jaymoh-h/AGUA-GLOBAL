@@ -1,6 +1,7 @@
 import { CalendarPlus, Eye, ReceiptText, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import StatusBadge from "../components/StatusBadge";
+import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
@@ -107,6 +108,9 @@ function BillingSetupPage() {
       setPenaltyBusy(false);
     }
   };
+  const periodTable = useTableControls(periods, {
+    searchFields: ["name", "period_start", "closing_date", "due_date", "status"]
+  });
 
   return (
     <section className="page-stack">
@@ -254,6 +258,7 @@ function BillingSetupPage() {
           <div className="panel-heading">
             <h3>Billing Periods</h3>
           </div>
+          <TableControls table={periodTable} label="periods" placeholder="Search periods" />
           <div className="table-wrap">
             <table>
               <thead>
@@ -269,7 +274,7 @@ function BillingSetupPage() {
                 </tr>
               </thead>
               <tbody>
-                {periods.map((period) => (
+                {periodTable.visibleRows.map((period) => (
                   <tr key={period.id}>
                     <td>
                       <strong>{period.name}</strong>

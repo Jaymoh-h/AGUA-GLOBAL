@@ -1,5 +1,6 @@
 import { CircleDollarSign, Download, Eye, FileUp, Printer, Save, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
 import { downloadCsvTemplate } from "../utils/csvTemplate";
 
@@ -204,6 +205,20 @@ function PaymentsPage() {
       notes: ""
     });
   };
+  const paymentTable = useTableControls(payments, {
+    searchFields: [
+      "customer_name",
+      "acc_number",
+      "receipt_number",
+      "amount",
+      "payment_date",
+      "payment_channel",
+      "method",
+      "external_reference",
+      "reference",
+      "bill_numbers"
+    ]
+  });
 
   return (
     <section className="page-stack">
@@ -511,6 +526,7 @@ function PaymentsPage() {
             <div className="panel-heading">
               <h3>Payment History</h3>
             </div>
+            <TableControls table={paymentTable} label="payments" placeholder="Search payments" />
             <div className="table-wrap">
               <table>
                 <thead>
@@ -527,7 +543,7 @@ function PaymentsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {payments.map((payment) => (
+                  {paymentTable.visibleRows.map((payment) => (
                     <tr key={payment.id}>
                       <td>
                         <strong>{payment.customer_name}</strong>
