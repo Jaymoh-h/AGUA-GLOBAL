@@ -80,7 +80,8 @@ export const api = {
     list: () => request("/rates"),
     create: (payload) => request("/rates", { method: "POST", body: payload }),
     update: (id, payload) => request(`/rates/${id}`, { method: "PUT", body: payload }),
-    replaceBlocks: (id, blocks) => request(`/rates/${id}/blocks`, { method: "PUT", body: { blocks } })
+    replaceBlocks: (id, blocks, effectiveFrom = "") =>
+      request(`/rates/${id}/blocks`, { method: "PUT", body: { blocks, effective_from: effectiveFrom } })
   },
   zones: {
     list: () => request("/zones"),

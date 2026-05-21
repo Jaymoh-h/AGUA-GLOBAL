@@ -2,18 +2,53 @@ const toNumber = (value) => Number(value || 0);
 
 const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 
-const getTariffWithBlocks = async (client, rateId) => {
-  const rateResult = await client.query("SELECT * FROM rates WHERE id = $1", [rateId]);
+const getTariffWithBlocks = async (client, rateId, effectiveDate = null) => {
+  const rateResult = effectiveDate
+    ? await client.query(
+        `SELECT
+          rv.rate_id AS id,
+          rv.id AS version_id,
+          rv.effective_from,
+          rv.name,
+          rv.amount,
+          rv.tariff_type,
+          rv.fixed_charge_amount,
+          rv.vat_enabled,
+          rv.vat_rate,
+          rv.vat_exempt,
+          rv.reconnection_fee_amount,
+          rv.exemption_notes,
+          rv.description,
+          r.is_active
+         FROM rate_versions rv
+         JOIN rates r ON r.id = rv.rate_id
+         WHERE rv.rate_id = $1 AND rv.effective_from <= $2::date
+         ORDER BY rv.effective_from DESC, rv.id DESC
+         LIMIT 1`,
+        [rateId, effectiveDate]
+      )
+    : await client.query("SELECT *, NULL::integer AS version_id FROM rates WHERE id = $1", [rateId]);
   const rate = rateResult.rows[0];
+  if (!rate && effectiveDate) {
+    return getTariffWithBlocks(client, rateId, null);
+  }
   if (!rate) return null;
 
-  const blockResult = await client.query(
-    `SELECT id, min_units, max_units, unit_rate, sort_order
-     FROM tariff_blocks
-     WHERE rate_id = $1
-     ORDER BY sort_order ASC, min_units ASC, id ASC`,
-    [rateId]
-  );
+  const blockResult = rate.version_id
+    ? await client.query(
+        `SELECT id, min_units, max_units, unit_rate, sort_order
+         FROM rate_version_blocks
+         WHERE rate_version_id = $1
+         ORDER BY sort_order ASC, min_units ASC, id ASC`,
+        [rate.version_id]
+      )
+    : await client.query(
+        `SELECT id, min_units, max_units, unit_rate, sort_order
+         FROM tariff_blocks
+         WHERE rate_id = $1
+         ORDER BY sort_order ASC, min_units ASC, id ASC`,
+        [rateId]
+      );
 
   return {
     ...rate,
@@ -61,7 +96,9 @@ const calculateTariffCharge = (tariff, unitsUsedValue) => {
     totalAmount,
     tariffSnapshot: {
       id: tariff.id,
+      version_id: tariff.version_id || null,
       name: tariff.name,
+      effective_from: tariff.effective_from || null,
       tariff_type: tariff.tariff_type || "flat",
       flat_rate_amount: toNumber(fallbackRateAmount),
       fixed_charge_amount: fixedChargeAmount,

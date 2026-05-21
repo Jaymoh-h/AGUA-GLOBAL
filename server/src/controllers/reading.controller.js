@@ -292,7 +292,7 @@ const createReadingWithBill = async (
   let bill = null;
   if (previous) {
     const unitsUsed = Number(reading_value) - Number(previous.reading_value);
-    const tariff = await getTariffWithBlocks(client, customer.rate_id);
+    const tariff = await getTariffWithBlocks(client, customer.rate_id, reading_date);
     const charge = calculateTariffCharge(tariff || customer, unitsUsed);
     const billNumber = await createBillNumber(client);
     const billResult = await client.query(
@@ -606,7 +606,7 @@ const recalculateBillForReading = async (client, readingId, { req = null, correc
   }
 
   const unitsUsed = Number(reading.reading_value) - Number(previous.reading_value);
-  const tariff = await getTariffWithBlocks(client, reading.rate_id);
+  const tariff = await getTariffWithBlocks(client, reading.rate_id, reading.reading_date);
   const charge = calculateTariffCharge(tariff || reading, unitsUsed);
   const totalAmount = charge.totalAmount;
 

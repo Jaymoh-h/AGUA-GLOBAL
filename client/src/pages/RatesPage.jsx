@@ -4,11 +4,14 @@ import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
+const dateOnly = (value) => (value ? String(value).slice(0, 10) : "");
+const today = () => new Date().toISOString().slice(0, 10);
 
-const blank = {
+const makeBlank = () => ({
   name: "",
   amount: "",
   tariff_type: "flat",
+  effective_from: today(),
   fixed_charge_amount: 0,
   vat_enabled: false,
   vat_rate: 0,
@@ -17,7 +20,7 @@ const blank = {
   exemption_notes: "",
   description: "",
   is_active: true
-};
+});
 
 const emptyBlock = (sortOrder = 0) => ({
   min_units: sortOrder === 0 ? 0 : "",
@@ -38,7 +41,7 @@ const cleanBlocks = (blocks) =>
 
 function RatesPage() {
   const [rates, setRates] = useState([]);
-  const [form, setForm] = useState(blank);
+  const [form, setForm] = useState(() => makeBlank());
   const [blocks, setBlocks] = useState([emptyBlock()]);
   const [editingId, setEditingId] = useState(null);
   const [message, setMessage] = useState("");
@@ -59,7 +62,7 @@ function RatesPage() {
   };
 
   const resetForm = () => {
-    setForm(blank);
+    setForm(makeBlank());
     setBlocks([emptyBlock()]);
     setEditingId(null);
   };
@@ -80,7 +83,7 @@ function RatesPage() {
       const payload = payloadFromForm();
       const saved = editingId ? await api.rates.update(editingId, payload) : await api.rates.create(payload);
       if (payload.tariff_type === "block") {
-        await api.rates.replaceBlocks(saved.id, cleanBlocks(blocks));
+        await api.rates.replaceBlocks(saved.id, cleanBlocks(blocks), payload.effective_from);
       }
       resetForm();
       await load();
@@ -97,7 +100,7 @@ function RatesPage() {
     setMessage("");
     setSaving(true);
     try {
-      await api.rates.replaceBlocks(editingId, cleanBlocks(blocks));
+      await api.rates.replaceBlocks(editingId, cleanBlocks(blocks), form.effective_from);
       await load();
       setMessage("Tariff blocks saved.");
     } catch (err) {
@@ -113,6 +116,7 @@ function RatesPage() {
       name: rate.name || "",
       amount: rate.amount || "",
       tariff_type: rate.tariff_type || "flat",
+      effective_from: dateOnly(rate.effective_from) || today(),
       fixed_charge_amount: rate.fixed_charge_amount || 0,
       vat_enabled: Boolean(rate.vat_enabled),
       vat_rate: rate.vat_rate || 0,
@@ -125,8 +129,9 @@ function RatesPage() {
     setBlocks(rate.blocks?.length ? rate.blocks : [emptyBlock()]);
   };
   const rateTable = useTableControls(rates, {
-    searchFields: ["name", "description", "tariff_type", "amount", "fixed_charge_amount", "vat_rate", "is_active"]
+    searchFields: ["name", "description", "tariff_type", "amount", "fixed_charge_amount", "vat_rate", "effective_from", "is_active"]
   });
+  const selectedRate = rates.find((rate) => Number(rate.id) === Number(editingId));
 
   return (
     <section className="page-stack">
@@ -154,6 +159,10 @@ function RatesPage() {
                 <option value="flat">Flat rate</option>
                 <option value="block">Block tariff</option>
               </select>
+            </label>
+            <label>
+              Effective from
+              <input value={form.effective_from} onChange={(event) => setField("effective_from", event.target.value)} type="date" required />
             </label>
             <label>
               Flat / fallback unit rate
@@ -295,6 +304,41 @@ function RatesPage() {
               <p className="muted">Leave the final "To units" blank for the open-ended block.</p>
             </div>
           ) : null}
+
+          {editingId && selectedRate?.versions?.length ? (
+            <div className="panel">
+              <div className="panel-heading">
+                <h3>Tariff History</h3>
+                <Layers3 size={18} />
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Effective From</th>
+                      <th>Type</th>
+                      <th>Unit Rate</th>
+                      <th>Fixed</th>
+                      <th>VAT</th>
+                      <th>Blocks</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedRate.versions.map((version) => (
+                      <tr key={version.id}>
+                        <td>{dateOnly(version.effective_from)}</td>
+                        <td>{version.tariff_type || "flat"}</td>
+                        <td>{money(version.amount)}</td>
+                        <td>{money(version.fixed_charge_amount)}</td>
+                        <td>{version.vat_enabled && !version.vat_exempt ? `${Number(version.vat_rate || 0)}%` : "Off"}</td>
+                        <td>{version.blocks?.length || 0}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="panel wide-panel">
@@ -309,11 +353,13 @@ function RatesPage() {
                   <th>Name</th>
                   <th>Type</th>
                   <th>Unit Rate</th>
+                  <th>Effective From</th>
                   <th>Fixed</th>
                   <th>VAT</th>
                   <th>Reconnect</th>
                   <th>Status</th>
                   <th>Blocks</th>
+                  <th>Versions</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -326,11 +372,13 @@ function RatesPage() {
                     </td>
                     <td>{rate.tariff_type || "flat"}</td>
                     <td>{money(rate.amount)}</td>
+                    <td>{dateOnly(rate.effective_from) || "-"}</td>
                     <td>{money(rate.fixed_charge_amount)}</td>
                     <td>{rate.vat_enabled && !rate.vat_exempt ? `${Number(rate.vat_rate || 0)}%` : "Off"}</td>
                     <td>{money(rate.reconnection_fee_amount)}</td>
                     <td>{rate.is_active ? "Active" : "Inactive"}</td>
                     <td>{rate.blocks?.length || 0}</td>
+                    <td>{rate.versions?.length || 0}</td>
                     <td>
                       <button type="button" onClick={() => edit(rate)}>
                         Edit

@@ -17,6 +17,7 @@ AGUA-GLOBAL/
 - Roles: `admin`, `meter_reader`, `accountant`, `customer`
 - Customer CRUD with account numbers and customer rates
 - Rate and zone/location management for customer dropdowns
+- Effective-dated tariff versions so billing uses the tariff active on the reading date
 - Meter reading submission linked to customers
 - Active meter tracking with previous reading visibility during reading entry
 - Meter replacement workflow with old final readings, new meter baselines, and event history
@@ -65,6 +66,7 @@ Use these files in pgAdmin, DBeaver, TablePlus, or another PostgreSQL DBMS:
 - Numbering and account closure migration path: `server/database/migrations/016_numbering_and_account_closure.sql`
 - Account closure and adjustments migration path: `server/database/migrations/017_account_closure_and_adjustments.sql`
 - Penalty policy and waivers migration path: `server/database/migrations/018_penalty_policy_and_waivers.sql`
+- Tariff effective dates migration path: `server/database/migrations/019_tariff_effective_dates.sql`
 
 Run `schema.sql` first, then `seed.sql`.
 
@@ -153,6 +155,13 @@ cd server
 npm.cmd run db:migrate:penalty-policy
 ```
 
+For effective-dated tariff history and historical billing, run:
+
+```powershell
+cd server
+npm.cmd run db:migrate:tariff-effective-dates
+```
+
 ## Local Setup
 
 Prerequisites: Node.js with npm, PostgreSQL, and a PostgreSQL DBMS such as pgAdmin or DBeaver if you want visual monitoring.
@@ -230,13 +239,14 @@ server/database/seed.sql
 
 Use a strong production admin password after the first login. If the database provider requires TLS, set `DATABASE_SSL=true` in the API project's environment variables.
 
-For an existing production database, run the latest migrations before redeploying the API code that uses them. The current first-batch improvements require:
+For an existing production database, run the latest migrations before redeploying the API code that uses them. The current improvement batches require:
 
 ```powershell
 cd server
 npm.cmd run db:migrate:numbering
 npm.cmd run db:migrate:account-adjustments
 npm.cmd run db:migrate:penalty-policy
+npm.cmd run db:migrate:tariff-effective-dates
 ```
 
 ### 2. API Project
