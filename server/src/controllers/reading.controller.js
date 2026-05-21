@@ -2,6 +2,10 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { createBillNumber, getMonthlyPeriodDates, getOrCreateBillingPeriod } = require("../services/billingPeriod.service");
+const {
+  assertBillingPeriodEditableById,
+  normalizeCorrectionReason
+} = require("../services/billingPeriodGuard.service");
 const { recordAuditEvent } = require("../services/audit.service");
 const { applyCustomerCreditToBill } = require("../services/credit.service");
 const { calculateTariffCharge, getTariffWithBlocks } = require("../services/tariff.service");
@@ -206,7 +210,12 @@ const resolveReadingImportRows = async (client, csvText, { commitMode = false } 
   return resolvedRows;
 };
 
-const createReadingWithBill = async (client, req, payload, { source = "field", auditReason = null } = {}) => {
+const createReadingWithBill = async (
+  client,
+  req,
+  payload,
+  { source = "field", auditReason = null, correctionReason = null } = {}
+) => {
   const { customer_id, meter_id, reading_value, reading_date, notes } = payload;
 
   const customerResult = await client.query(
@@ -237,6 +246,13 @@ const createReadingWithBill = async (client, req, payload, { source = "field", a
   }
 
   const billingPeriod = await getOrCreateBillingPeriod(client, reading_date, req.user.id);
+  const periodReason = await assertBillingPeriodEditableById(
+    client,
+    billingPeriod.id,
+    req,
+    correctionReason || auditReason,
+    "create a reading"
+  );
   const previous = await getPreviousReadingForMeter(client, activeMeter.id, reading_date);
 
   if (previous && Number(reading_value) < Number(previous.reading_value)) {
@@ -270,7 +286,7 @@ const createReadingWithBill = async (client, req, payload, { source = "field", a
     entityType: "meter_reading",
     entityId: reading.id,
     afterData: reading,
-    reason: auditReason
+    reason: periodReason || auditReason
   });
 
   let bill = null;
@@ -328,7 +344,7 @@ const createReadingWithBill = async (client, req, payload, { source = "field", a
           allocations: creditApplication.allocations,
           appliedAmount: creditApplication.appliedAmount
         },
-        reason: auditReason || "Customer credit auto-applied to new bill"
+        reason: periodReason || auditReason || "Customer credit auto-applied to new bill"
       });
     }
     await recordAuditEvent(client, {
@@ -337,7 +353,7 @@ const createReadingWithBill = async (client, req, payload, { source = "field", a
       entityType: "bill",
       entityId: bill.id,
       afterData: bill,
-      reason: auditReason
+      reason: periodReason || auditReason
     });
   }
 
@@ -355,6 +371,7 @@ const listReadings = asyncHandler(async (req, res) => {
             m.meter_number,
             prev.reading_date AS previous_reading_date,
             bp.name AS billing_period_name,
+            bp.status AS billing_period_status,
             u.name AS created_by_name
      FROM meter_readings mr
      JOIN customers c ON c.id = mr.customer_id
@@ -393,6 +410,10 @@ const getReadingContext = asyncHandler(async (req, res) => {
     const activeMeter = await ensureActiveMeter(client, customer);
     const previousReading = await getPreviousReadingForMeter(client, activeMeter.id, readingDate);
     const period = getMonthlyPeriodDates(readingDate);
+    const periodResult = await client.query("SELECT id, status FROM billing_periods WHERE period_start = $1", [
+      period.periodStart
+    ]);
+    const savedPeriod = periodResult.rows[0] || null;
 
     res.json({
       customer: {
@@ -402,7 +423,11 @@ const getReadingContext = asyncHandler(async (req, res) => {
       },
       activeMeter,
       previousReading,
-      billingPeriod: period
+      billingPeriod: {
+        ...period,
+        id: savedPeriod?.id || null,
+        status: savedPeriod?.status || "open"
+      }
     });
   } finally {
     client.release();
@@ -423,7 +448,7 @@ const createReading = asyncHandler(async (req, res) => {
       client,
       req,
       { customer_id, meter_id, reading_value, reading_date, notes },
-      { source: "field" }
+      { source: "field", correctionReason: normalizeCorrectionReason(req.body) }
     );
 
     await client.query("COMMIT");
@@ -453,6 +478,7 @@ const commitReadingImport = asyncHandler(async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const correctionReason = normalizeCorrectionReason(req.body);
     const rows = await resolveReadingImportRows(client, req.body.csv, { commitMode: true });
     const invalidRows = rows.filter((row) => row.errors.length);
 
@@ -477,7 +503,11 @@ const commitReadingImport = asyncHandler(async (req, res) => {
           reading_date: row.reading_date,
           notes: row.notes
         },
-        { source: "csv_import", auditReason: `CSV reading import row ${row.rowNumber}` }
+        {
+          source: "csv_import",
+          auditReason: `CSV reading import row ${row.rowNumber}`,
+          correctionReason
+        }
       );
 
       imported.push({
@@ -519,7 +549,7 @@ const commitReadingImport = asyncHandler(async (req, res) => {
   }
 });
 
-const recalculateBillForReading = async (client, readingId) => {
+const recalculateBillForReading = async (client, readingId, { req = null, correctionReason = null, action = "recalculate a bill" } = {}) => {
   const readingResult = await client.query(
     `SELECT mr.*, c.rate, c.rate_id, c.acc_number, c.name AS customer_name
      FROM meter_readings mr
@@ -537,7 +567,10 @@ const recalculateBillForReading = async (client, readingId) => {
   const activeMeter = reading.meter_id
     ? { id: reading.meter_id, customer_id: reading.customer_id }
     : await ensureActiveMeter(client, customer);
-  const billingPeriod = await getOrCreateBillingPeriod(client, reading.reading_date);
+  const billingPeriod = await getOrCreateBillingPeriod(client, reading.reading_date, req?.user?.id || null);
+  if (req) {
+    await assertBillingPeriodEditableById(client, billingPeriod.id, req, correctionReason, action);
+  }
   const previous = await getPreviousReadingForMeter(client, activeMeter.id, reading.reading_date, reading.id);
 
   await client.query(
@@ -680,6 +713,7 @@ const recalculateBillForReading = async (client, readingId) => {
 
 const updateReading = asyncHandler(async (req, res) => {
   const { customer_id, reading_value, reading_date } = req.body;
+  const correctionReason = normalizeCorrectionReason(req.body);
 
   if (!customer_id || reading_value === undefined || !reading_date) {
     throw new ApiError(400, "Customer, reading value, and reading date are required.");
@@ -696,6 +730,13 @@ const updateReading = asyncHandler(async (req, res) => {
     if (!existing) {
       throw new ApiError(404, "Reading not found.");
     }
+    await assertBillingPeriodEditableById(
+      client,
+      existing.billing_period_id,
+      req,
+      correctionReason,
+      "edit an existing reading"
+    );
 
     const oldNextResult = await client.query(
       `SELECT id FROM meter_readings
@@ -723,6 +764,13 @@ const updateReading = asyncHandler(async (req, res) => {
 
     assertMeterBelongsToCustomer(activeMeter, customer_id);
     const billingPeriod = await getOrCreateBillingPeriod(client, reading_date, req.user.id);
+    await assertBillingPeriodEditableById(
+      client,
+      billingPeriod.id,
+      req,
+      correctionReason,
+      "move a reading into this period"
+    );
     const previous = await getPreviousReadingForMeter(client, activeMeter.id, reading_date, req.params.id);
 
     if (previous && Number(reading_value) < Number(previous.reading_value)) {
@@ -760,10 +808,15 @@ const updateReading = asyncHandler(async (req, res) => {
       entityType: "meter_reading",
       entityId: updatedResult.rows[0].id,
       beforeData: existing,
-      afterData: updatedResult.rows[0]
+      afterData: updatedResult.rows[0],
+      reason: correctionReason || null
     });
 
-    const bill = await recalculateBillForReading(client, updatedResult.rows[0].id);
+    const bill = await recalculateBillForReading(client, updatedResult.rows[0].id, {
+      req,
+      correctionReason,
+      action: "recalculate a bill after editing a reading"
+    });
     if (bill) {
       await recordAuditEvent(client, {
         req,
@@ -771,7 +824,7 @@ const updateReading = asyncHandler(async (req, res) => {
         entityType: "bill",
         entityId: bill.id,
         afterData: bill,
-        reason: "Reading update recalculated bill"
+        reason: correctionReason || "Reading update recalculated bill"
       });
     }
 
@@ -785,7 +838,11 @@ const updateReading = asyncHandler(async (req, res) => {
 
     let nextBill = null;
     if (nextResult.rows[0]) {
-      nextBill = await recalculateBillForReading(client, nextResult.rows[0].id);
+      nextBill = await recalculateBillForReading(client, nextResult.rows[0].id, {
+        req,
+        correctionReason,
+        action: "recalculate an adjacent bill after editing a reading"
+      });
       if (nextBill) {
         await recordAuditEvent(client, {
           req,
@@ -793,7 +850,7 @@ const updateReading = asyncHandler(async (req, res) => {
           entityType: "bill",
           entityId: nextBill.id,
           afterData: nextBill,
-          reason: "Adjacent reading update recalculated bill"
+          reason: correctionReason || "Adjacent reading update recalculated bill"
         });
       }
     }
@@ -804,7 +861,11 @@ const updateReading = asyncHandler(async (req, res) => {
       oldNextResult.rows[0].id !== updatedResult.rows[0].id &&
       oldNextResult.rows[0].id !== nextResult.rows[0]?.id
     ) {
-      oldNextBill = await recalculateBillForReading(client, oldNextResult.rows[0].id);
+      oldNextBill = await recalculateBillForReading(client, oldNextResult.rows[0].id, {
+        req,
+        correctionReason,
+        action: "recalculate a previous sequence bill after editing a reading"
+      });
       if (oldNextBill) {
         await recordAuditEvent(client, {
           req,
@@ -812,7 +873,7 @@ const updateReading = asyncHandler(async (req, res) => {
           entityType: "bill",
           entityId: oldNextBill.id,
           afterData: oldNextBill,
-          reason: "Previous meter sequence recalculated bill"
+          reason: correctionReason || "Previous meter sequence recalculated bill"
         });
       }
     }

@@ -27,7 +27,13 @@ function BillsPage({ user }) {
   }, [status]);
 
   const markPaid = async (id) => {
-    await api.bills.markStatus(id, "paid");
+    const bill = bills.find((row) => row.id === id);
+    const restrictedPeriod = ["closed", "locked"].includes(bill?.billing_period_status);
+    const correctionReason = restrictedPeriod
+      ? window.prompt(`Reason required to update a ${bill.billing_period_status} period bill:`)
+      : "";
+    if (restrictedPeriod && !correctionReason) return;
+    await api.bills.markStatus(id, "paid", correctionReason || "");
     await load();
   };
 
@@ -120,7 +126,10 @@ function BillsPage({ user }) {
                   </td>
                   <td>
                     <strong>{bill.billing_period_name || bill.billing_month?.slice(0, 10)}</strong>
-                    <small>{bill.bill_number || "-"}</small>
+                    <small>
+                      {bill.bill_number || "-"}
+                      {bill.billing_period_status ? ` | ${bill.billing_period_status}` : ""}
+                    </small>
                   </td>
                   <td>{bill.due_date?.slice(0, 10) || "-"}</td>
                   <td>{Number(bill.units_used).toLocaleString()}</td>

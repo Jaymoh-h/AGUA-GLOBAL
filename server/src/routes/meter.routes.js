@@ -7,6 +7,6 @@ const router = express.Router();
 router.use(authenticate);
 router.get("/", authorize("admin", "meter_reader", "accountant"), listMeters);
 router.get("/events", authorize("admin", "meter_reader", "accountant"), listMeterEvents);
-router.post("/replace", authorize("admin", "meter_reader"), replaceMeter);
+router.post("/replace", authorize("admin", "meter_reader", "accountant"), replaceMeter);
 
 module.exports = router;

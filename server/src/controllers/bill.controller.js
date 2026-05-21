@@ -2,6 +2,7 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
+const { assertBillEditable, normalizeCorrectionReason } = require("../services/billingPeriodGuard.service");
 
 const listBills = asyncHandler(async (req, res) => {
   const status = req.query.status;
@@ -19,7 +20,9 @@ const listBills = asyncHandler(async (req, res) => {
   }
 
   const { rows } = await pool.query(
-    `SELECT b.*, c.name AS customer_name, c.acc_number, c.phone, bp.name AS billing_period_name
+    `SELECT b.*, c.name AS customer_name, c.acc_number, c.phone,
+            bp.name AS billing_period_name,
+            bp.status AS billing_period_status
      FROM bills b
      JOIN customers c ON c.id = b.customer_id
      LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
@@ -33,7 +36,8 @@ const listBills = asyncHandler(async (req, res) => {
 const getBill = asyncHandler(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT b.*, c.name AS customer_name, c.acc_number, c.phone, c.location, z.name AS zone_name,
-            bp.name AS billing_period_name
+            bp.name AS billing_period_name,
+            bp.status AS billing_period_status
      FROM bills b
      JOIN customers c ON c.id = b.customer_id
      LEFT JOIN zones z ON z.id = c.zone_id
@@ -51,6 +55,7 @@ const getBill = asyncHandler(async (req, res) => {
 
 const markBillStatus = asyncHandler(async (req, res) => {
   const { status } = req.body;
+  const correctionReason = normalizeCorrectionReason(req.body);
   if (!["unpaid", "partial", "paid"].includes(status)) {
     throw new ApiError(400, "Status must be unpaid, partial, or paid.");
   }
@@ -63,6 +68,7 @@ const markBillStatus = asyncHandler(async (req, res) => {
     if (!before) {
       throw new ApiError(404, "Bill not found.");
     }
+    await assertBillEditable(client, before.id, req, correctionReason, "manually update a bill status");
     const { rows } = await client.query(
       `UPDATE bills
        SET status = $1,
@@ -79,7 +85,8 @@ const markBillStatus = asyncHandler(async (req, res) => {
       entityType: "bill",
       entityId: rows[0].id,
       beforeData: before,
-      afterData: rows[0]
+      afterData: rows[0],
+      reason: correctionReason || null
     });
     await client.query("COMMIT");
     res.json(rows[0]);

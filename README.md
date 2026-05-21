@@ -24,6 +24,7 @@ AGUA-GLOBAL/
 - Automatic bill creation from current and previous readings
 - Editable meter readings that recalculate the affected bills
 - Monthly billing periods with due dates on the last day of the following month
+- Closed billing periods allow admin/accountant corrections only with an audit reason; locked periods require admin correction
 - Billing settings for fixed penalties and default deposit rules
 - Customer deposit tracking as paid or not paid
 - Bill tracking with `unpaid`, `partial`, and `paid` states

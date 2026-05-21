@@ -23,7 +23,7 @@ const access = {
   portal: ["customer"],
   dashboard: ["admin", "meter_reader", "accountant"],
   customers: ["admin", "meter_reader", "accountant"],
-  readings: ["admin", "meter_reader"],
+  readings: ["admin", "meter_reader", "accountant"],
   bills: ["admin", "accountant", "customer"],
   billing: ["admin", "accountant"],
   business: ["admin", "accountant"],

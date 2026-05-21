@@ -22,7 +22,7 @@ const navItems = [
   { key: "portal", label: "Portal", icon: MonitorSmartphone, roles: ["customer"] },
   { key: "dashboard", label: "Dashboard", icon: BarChart3, roles: ["admin", "meter_reader", "accountant"] },
   { key: "customers", label: "Customers", icon: Users, roles: ["admin", "meter_reader", "accountant"] },
-  { key: "readings", label: "Readings", icon: Gauge, roles: ["admin", "meter_reader"] },
+  { key: "readings", label: "Readings", icon: Gauge, roles: ["admin", "meter_reader", "accountant"] },
   { key: "bills", label: "Bills", icon: FileText, roles: ["admin", "accountant", "customer"] },
   { key: "billing", label: "Billing Setup", icon: Settings2, roles: ["admin", "accountant"] },
   { key: "business", label: "Business Settings", icon: Building2, roles: ["admin", "accountant"] },

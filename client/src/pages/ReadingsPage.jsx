@@ -11,7 +11,12 @@ function ReadingsPage() {
   const [customers, setCustomers] = useState([]);
   const [readings, setReadings] = useState([]);
   const [meterEvents, setMeterEvents] = useState([]);
-  const [form, setForm] = useState({ customer_id: "", reading_value: "", reading_date: new Date().toISOString().slice(0, 10) });
+  const [form, setForm] = useState({
+    customer_id: "",
+    reading_value: "",
+    reading_date: new Date().toISOString().slice(0, 10),
+    correction_reason: ""
+  });
   const [replacementForm, setReplacementForm] = useState({
     customer_id: "",
     old_final_reading: "",
@@ -23,6 +28,7 @@ function ReadingsPage() {
   const [replacementContext, setReplacementContext] = useState(null);
   const [readingContext, setReadingContext] = useState(null);
   const [csvText, setCsvText] = useState("acc_number,reading_date,reading_value,notes\n");
+  const [importCorrectionReason, setImportCorrectionReason] = useState("");
   const [importPreview, setImportPreview] = useState(null);
   const [importing, setImporting] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -49,6 +55,8 @@ function ReadingsPage() {
   const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
   const setReplacementField = (field, value) =>
     setReplacementForm((current) => ({ ...current, [field]: value }));
+  const restrictedReadingPeriod = ["closed", "locked"].includes(readingContext?.billingPeriod?.status);
+  const restrictedReplacementPeriod = ["closed", "locked"].includes(replacementContext?.billingPeriod?.status);
 
   const importReady = useMemo(
     () => importPreview?.rows?.length > 0 && importPreview.summary.invalid === 0,
@@ -122,12 +130,13 @@ function ReadingsPage() {
         customer_id: Number(form.customer_id),
         meter_id: readingContext?.activeMeter?.id,
         reading_value: Number(form.reading_value),
-        reading_date: form.reading_date
+        reading_date: form.reading_date,
+        correction_reason: form.correction_reason
       };
       const result = editingId
         ? await api.readings.update(editingId, payload)
         : await api.readings.create(payload);
-      setForm({ customer_id: "", reading_value: "", reading_date: new Date().toISOString().slice(0, 10) });
+      setForm({ customer_id: "", reading_value: "", reading_date: new Date().toISOString().slice(0, 10), correction_reason: "" });
       setReadingContext(null);
       setEditingId(null);
       await load();
@@ -142,14 +151,15 @@ function ReadingsPage() {
     setForm({
       customer_id: reading.customer_id || "",
       reading_value: reading.reading_value || "",
-      reading_date: reading.reading_date?.slice(0, 10) || new Date().toISOString().slice(0, 10)
+      reading_date: reading.reading_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
+      correction_reason: ""
     });
   };
 
   const cancelEdit = () => {
     setEditingId(null);
     setReadingContext(null);
-    setForm({ customer_id: "", reading_value: "", reading_date: new Date().toISOString().slice(0, 10) });
+    setForm({ customer_id: "", reading_value: "", reading_date: new Date().toISOString().slice(0, 10), correction_reason: "" });
   };
 
   const submitReplacement = async (event) => {
@@ -210,7 +220,7 @@ function ReadingsPage() {
     setMessage("");
     setImporting(true);
     try {
-      const result = await api.readings.commitImport(csvText);
+      const result = await api.readings.commitImport(csvText, importCorrectionReason);
       await load();
       setImportPreview(null);
       setMessage(`Imported ${result.summary.imported} reading(s) and created ${result.summary.billsCreated} bill(s).`);
@@ -293,7 +303,9 @@ function ReadingsPage() {
                 <div>
                   <span>Billing period</span>
                   <strong>{readingContext.billingPeriod?.name}</strong>
-                  <small>Due {readingContext.billingPeriod?.dueDate}</small>
+                  <small>
+                    {readingContext.billingPeriod?.status || "open"} | Due {readingContext.billingPeriod?.dueDate}
+                  </small>
                 </div>
               </div>
             ) : null}
@@ -311,6 +323,18 @@ function ReadingsPage() {
               Reading date
               <input value={form.reading_date} onChange={(event) => setField("reading_date", event.target.value)} type="date" required />
             </label>
+            {editingId || restrictedReadingPeriod ? (
+              <label>
+                Correction reason
+                <textarea
+                  value={form.correction_reason}
+                  onChange={(event) => setField("correction_reason", event.target.value)}
+                  rows="2"
+                  required={restrictedReadingPeriod}
+                  placeholder={restrictedReadingPeriod ? "Required for closed or locked periods" : "Optional audit note"}
+                />
+              </label>
+            ) : null}
             {message ? <p className="form-note">{message}</p> : null}
             <button className="primary-button" type="submit">
               {editingId ? <Save size={17} /> : <Send size={17} />}
@@ -359,6 +383,11 @@ function ReadingsPage() {
                   </strong>
                   <small>{replacementContext.previousReading?.reading_date?.slice(0, 10) || "Record a final reading"}</small>
                 </div>
+                <div>
+                  <span>Billing period</span>
+                  <strong>{replacementContext.billingPeriod?.name}</strong>
+                  <small>{replacementContext.billingPeriod?.status || "open"}</small>
+                </div>
               </div>
             ) : null}
             <label>
@@ -404,6 +433,8 @@ function ReadingsPage() {
                 value={replacementForm.reason}
                 onChange={(event) => setReplacementField("reason", event.target.value)}
                 rows="3"
+                required={restrictedReplacementPeriod}
+                placeholder={restrictedReplacementPeriod ? "Required for closed or locked periods" : ""}
               />
             </label>
             <button className="primary-button" type="submit">
@@ -437,6 +468,15 @@ function ReadingsPage() {
                 }}
                 rows="7"
                 placeholder={"acc_number,reading_date,reading_value,notes\nAG-0001,2026-06-30,240,End month route reading"}
+              />
+            </label>
+            <label>
+              Correction reason
+              <textarea
+                value={importCorrectionReason}
+                onChange={(event) => setImportCorrectionReason(event.target.value)}
+                rows="2"
+                placeholder="Required if imported readings touch closed or locked periods"
               />
             </label>
             <p className="muted">

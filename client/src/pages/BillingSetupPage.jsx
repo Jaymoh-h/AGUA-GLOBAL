@@ -68,10 +68,15 @@ function BillingSetupPage() {
     }
   };
 
-  const updateStatus = async (id, status) => {
+  const updateStatus = async (period, status) => {
     setMessage("");
     try {
-      await api.billing.periods.updateStatus(id, status);
+      const restrictedCurrent = ["closed", "locked"].includes(period.status);
+      const correctionReason = restrictedCurrent
+        ? window.prompt(`Reason required to change a ${period.status} period:`)
+        : "";
+      if (restrictedCurrent && !correctionReason) return;
+      await api.billing.periods.updateStatus(period.id, status, correctionReason || "");
       await load();
     } catch (err) {
       setMessage(err.message);
@@ -314,7 +319,7 @@ function BillingSetupPage() {
                       <StatusBadge status={period.status} />
                     </td>
                     <td>
-                      <select value={period.status} onChange={(event) => updateStatus(period.id, event.target.value)}>
+                      <select value={period.status} onChange={(event) => updateStatus(period, event.target.value)}>
                         <option value="draft">Draft</option>
                         <option value="open">Open</option>
                         <option value="closed">Closed</option>

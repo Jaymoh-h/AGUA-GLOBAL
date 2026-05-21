@@ -2,6 +2,7 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { getOrCreateBillingPeriod } = require("../services/billingPeriod.service");
+const { assertBillingPeriodEditableById, normalizeCorrectionReason } = require("../services/billingPeriodGuard.service");
 const { ensureActiveMeter, getMeterHistory, getPreviousReadingForMeter } = require("../services/meter.service");
 const { recalculateBillForReading } = require("./reading.controller");
 const { recordAuditEvent } = require("../services/audit.service");
@@ -77,6 +78,7 @@ const replaceMeter = asyncHandler(async (req, res) => {
     event_date,
     reason
   } = req.body;
+  const correctionReason = normalizeCorrectionReason(req.body);
 
   if (!customer_id || old_final_reading === undefined || !new_meter_number || event_date === undefined) {
     throw new ApiError(400, "Customer, old final reading, new meter number, and replacement date are required.");
@@ -118,6 +120,13 @@ const replaceMeter = asyncHandler(async (req, res) => {
     }
 
     const billingPeriod = await getOrCreateBillingPeriod(client, event_date, req.user.id);
+    await assertBillingPeriodEditableById(
+      client,
+      billingPeriod.id,
+      req,
+      correctionReason,
+      "replace a meter"
+    );
 
     let finalReading = null;
     let createdFinalReading = false;
@@ -160,7 +169,11 @@ const replaceMeter = asyncHandler(async (req, res) => {
       createdFinalReading = true;
     }
 
-    const bill = await recalculateBillForReading(client, finalReading.id);
+    const bill = await recalculateBillForReading(client, finalReading.id, {
+      req,
+      correctionReason,
+      action: "recalculate the final old-meter bill"
+    });
     if (createdFinalReading) {
       await recordAuditEvent(client, {
         req,
@@ -168,7 +181,7 @@ const replaceMeter = asyncHandler(async (req, res) => {
         entityType: "meter_reading",
         entityId: finalReading.id,
         afterData: finalReading,
-        reason: "Final old-meter reading during replacement"
+        reason: correctionReason || "Final old-meter reading during replacement"
       });
     }
     if (bill) {
@@ -178,7 +191,7 @@ const replaceMeter = asyncHandler(async (req, res) => {
         entityType: "bill",
         entityId: bill.id,
         afterData: bill,
-        reason: "Meter replacement final reading"
+        reason: correctionReason || "Meter replacement final reading"
       });
     }
 
@@ -215,7 +228,7 @@ const replaceMeter = asyncHandler(async (req, res) => {
       entityType: "meter",
       entityId: newMeterResult.rows[0].id,
       afterData: newMeterResult.rows[0],
-      reason: "Meter replacement"
+      reason: correctionReason || "Meter replacement"
     });
 
     const newBaselineReadingResult = await client.query(
@@ -241,7 +254,7 @@ const replaceMeter = asyncHandler(async (req, res) => {
       entityType: "meter_reading",
       entityId: newBaselineReadingResult.rows[0].id,
       afterData: newBaselineReadingResult.rows[0],
-      reason: "New meter baseline during replacement"
+      reason: correctionReason || "New meter baseline during replacement"
     });
 
     const eventResult = await client.query(

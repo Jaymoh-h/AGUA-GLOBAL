@@ -3,6 +3,11 @@ const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { getMonthlyPeriodDates } = require("../services/billingPeriod.service");
 const { recordAuditEvent } = require("../services/audit.service");
+const {
+  assertBillEditable,
+  assertBillingPeriodEditable,
+  normalizeCorrectionReason
+} = require("../services/billingPeriodGuard.service");
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -80,6 +85,7 @@ const listBillingPeriods = asyncHandler(async (_req, res) => {
 
 const createBillingPeriod = asyncHandler(async (req, res) => {
   const { period_start, status = "open" } = req.body;
+  const reason = normalizeCorrectionReason(req.body);
   if (!period_start) {
     throw new ApiError(400, "Period start date is required.");
   }
@@ -96,6 +102,7 @@ const createBillingPeriod = asyncHandler(async (req, res) => {
       dates.periodStart
     ]);
     const before = beforeResult.rows[0] || null;
+    assertBillingPeriodEditable(before, req, reason, "update this billing period");
     const { rows } = await client.query(
       `INSERT INTO billing_periods (
         name, period_start, period_end, closing_date, bill_date, due_date, status, created_by
@@ -127,7 +134,8 @@ const createBillingPeriod = asyncHandler(async (req, res) => {
       entityType: "billing_period",
       entityId: rows[0].id,
       beforeData: before,
-      afterData: rows[0]
+      afterData: rows[0],
+      reason: reason || null
     });
     await client.query("COMMIT");
     res.status(201).json(rows[0]);
@@ -141,6 +149,7 @@ const createBillingPeriod = asyncHandler(async (req, res) => {
 
 const updateBillingPeriodStatus = asyncHandler(async (req, res) => {
   const { status } = req.body;
+  const reason = normalizeCorrectionReason(req.body);
   if (!["draft", "open", "closed", "locked"].includes(status)) {
     throw new ApiError(400, "Status must be draft, open, closed, or locked.");
   }
@@ -153,6 +162,7 @@ const updateBillingPeriodStatus = asyncHandler(async (req, res) => {
     if (!before) {
       throw new ApiError(404, "Billing period not found.");
     }
+    assertBillingPeriodEditable(before, req, reason, "change this billing period status");
     const { rows } = await client.query(
       `UPDATE billing_periods
        SET status = $1,
@@ -167,7 +177,8 @@ const updateBillingPeriodStatus = asyncHandler(async (req, res) => {
       entityType: "billing_period",
       entityId: rows[0].id,
       beforeData: before,
-      afterData: rows[0]
+      afterData: rows[0],
+      reason: reason || null
     });
     await client.query("COMMIT");
     res.json(rows[0]);
@@ -331,6 +342,7 @@ const applyPenaltyApplications = asyncHandler(async (req, res) => {
       if (!before || before.status === "paid") continue;
 
       const penaltyAmount = Number(row.penalty_to_apply || 0);
+      await assertBillEditable(client, before.id, req, reason, "apply a penalty");
       const insertResult = await client.query(
         `INSERT INTO bill_penalty_applications (
           bill_id, billing_period_id, application_month, applied_on, amount, applied_by, reason

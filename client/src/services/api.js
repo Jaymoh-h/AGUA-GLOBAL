@@ -93,19 +93,22 @@ export const api = {
       request(`/readings/context?customer_id=${customerId}&reading_date=${readingDate}`),
     create: (payload) => request("/readings", { method: "POST", body: payload }),
     previewImport: (csv) => request("/readings/imports/preview", { method: "POST", body: { csv } }),
-    commitImport: (csv) => request("/readings/imports/commit", { method: "POST", body: { csv } }),
+    commitImport: (csv, correctionReason = "") =>
+      request("/readings/imports/commit", { method: "POST", body: { csv, correction_reason: correctionReason } }),
     update: (id, payload) => request(`/readings/${id}`, { method: "PUT", body: payload })
   },
   bills: {
     list: (status = "") => request(`/bills${status ? `?status=${status}` : ""}`),
     get: (id) => request(`/bills/${id}`),
-    markStatus: (id, status) => request(`/bills/${id}/status`, { method: "PATCH", body: { status } })
+    markStatus: (id, status, correctionReason = "") =>
+      request(`/bills/${id}/status`, { method: "PATCH", body: { status, correction_reason: correctionReason } })
   },
   billing: {
     periods: {
       list: () => request("/billing/periods"),
       create: (payload) => request("/billing/periods", { method: "POST", body: payload }),
-      updateStatus: (id, status) => request(`/billing/periods/${id}/status`, { method: "PATCH", body: { status } })
+      updateStatus: (id, status, correctionReason = "") =>
+        request(`/billing/periods/${id}/status`, { method: "PATCH", body: { status, correction_reason: correctionReason } })
     },
     settings: {
       get: () => request("/billing/settings"),
