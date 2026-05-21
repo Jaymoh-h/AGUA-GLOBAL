@@ -64,6 +64,7 @@ Use these files in pgAdmin, DBeaver, TablePlus, or another PostgreSQL DBMS:
 - Customer credits migration path: `server/database/migrations/015_customer_credits.sql`
 - Numbering and account closure migration path: `server/database/migrations/016_numbering_and_account_closure.sql`
 - Account closure and adjustments migration path: `server/database/migrations/017_account_closure_and_adjustments.sql`
+- Penalty policy and waivers migration path: `server/database/migrations/018_penalty_policy_and_waivers.sql`
 
 Run `schema.sql` first, then `seed.sql`.
 
@@ -143,6 +144,13 @@ For final account closure tracking, deposit settlement history, and manual adjus
 ```powershell
 cd server
 npm.cmd run db:migrate:account-adjustments
+```
+
+For percentage penalties and penalty waiver tracking, run:
+
+```powershell
+cd server
+npm.cmd run db:migrate:penalty-policy
 ```
 
 ## Local Setup
@@ -228,6 +236,7 @@ For an existing production database, run the latest migrations before redeployin
 cd server
 npm.cmd run db:migrate:numbering
 npm.cmd run db:migrate:account-adjustments
+npm.cmd run db:migrate:penalty-policy
 ```
 
 ### 2. API Project

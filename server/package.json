@@ -23,6 +23,7 @@
     "db:migrate:customer-credits": "node src/db/runSqlFile.js database/migrations/015_customer_credits.sql",
     "db:migrate:numbering": "node src/db/runSqlFile.js database/migrations/016_numbering_and_account_closure.sql",
     "db:migrate:account-adjustments": "node src/db/runSqlFile.js database/migrations/017_account_closure_and_adjustments.sql",
+    "db:migrate:penalty-policy": "node src/db/runSqlFile.js database/migrations/018_penalty_policy_and_waivers.sql",
     "payment:check": "node src/db/paymentCheck.js",
     "db:seed": "node src/db/seed.js"
   },

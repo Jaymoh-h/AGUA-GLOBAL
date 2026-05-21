@@ -8,6 +8,7 @@ const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 
 function BillingSetupPage() {
   const [periods, setPeriods] = useState([]);
+  const [penaltyApplications, setPenaltyApplications] = useState([]);
   const [settings, setSettings] = useState(null);
   const [periodStart, setPeriodStart] = useState(new Date().toISOString().slice(0, 7) + "-01");
   const [penaltyDate, setPenaltyDate] = useState(new Date().toISOString().slice(0, 10));
@@ -16,12 +17,14 @@ function BillingSetupPage() {
   const [message, setMessage] = useState("");
 
   const load = async () => {
-    const [periodRows, settingsRow] = await Promise.all([
+    const [periodRows, settingsRow, penaltyRows] = await Promise.all([
       api.billing.periods.list(),
-      api.billing.settings.get()
+      api.billing.settings.get(),
+      api.billing.penalties.list()
     ]);
     setPeriods(periodRows);
     setSettings(settingsRow);
+    setPenaltyApplications(penaltyRows);
   };
 
   useEffect(() => {
@@ -92,7 +95,7 @@ function BillingSetupPage() {
       setMessage(
         preview.summary.enabled
           ? `${preview.summary.eligible_bills} bill(s) eligible for ${money(preview.summary.total_penalties)} in penalties.`
-          : "Fixed penalties are disabled. Enable fixed penalties in settings before applying."
+          : "Penalties are disabled. Enable fixed or percentage penalties in settings before applying."
       );
     } catch (err) {
       setMessage(err.message);
@@ -121,6 +124,32 @@ function BillingSetupPage() {
   const periodTable = useTableControls(periods, {
     searchFields: ["name", "period_start", "closing_date", "due_date", "status"]
   });
+  const penaltyApplicationTable = useTableControls(penaltyApplications, {
+    searchFields: [
+      "bill_number",
+      "customer_name",
+      "acc_number",
+      "billing_period_name",
+      "application_month",
+      "penalty_type",
+      "amount",
+      "reason",
+      "waiver_reason"
+    ]
+  });
+
+  const waivePenalty = async (application) => {
+    const reason = window.prompt("Reason for waiving this penalty:");
+    if (!reason) return;
+    setMessage("");
+    try {
+      await api.billing.penalties.waive(application.id, { reason });
+      await load();
+      setMessage("Penalty waived.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
 
   return (
     <section className="page-stack">
@@ -150,15 +179,18 @@ function BillingSetupPage() {
                 >
                   <option value="none">Disabled</option>
                   <option value="fixed">Fixed amount</option>
+                  <option value="percentage">Percentage of unpaid principal</option>
                 </select>
               </label>
               <label>
-                Penalty amount
+                {settings.penalty_type === "percentage" ? "Penalty percentage" : "Penalty amount"}
                 <input
                   value={settings.penalty_value}
                   onChange={(event) => updateSettingsField("penalty_value", event.target.value)}
                   type="number"
                   min="0"
+                  max={settings.penalty_type === "percentage" ? "100" : undefined}
+                  step={settings.penalty_type === "percentage" ? "0.01" : "1"}
                 />
               </label>
               <label>
@@ -240,11 +272,21 @@ function BillingSetupPage() {
             <div className="reading-context">
               <div>
                 <span>Mode</span>
-                <strong>{settings?.penalty_type === "fixed" ? "Fixed amount" : "Disabled"}</strong>
+                <strong>
+                  {settings?.penalty_type === "fixed"
+                    ? "Fixed amount"
+                    : settings?.penalty_type === "percentage"
+                      ? "Percentage"
+                      : "Disabled"}
+                </strong>
               </div>
               <div>
-                <span>Amount</span>
-                <strong>{money(settings?.penalty_value)}</strong>
+                <span>{settings?.penalty_type === "percentage" ? "Rate" : "Amount"}</span>
+                <strong>
+                  {settings?.penalty_type === "percentage"
+                    ? `${Number(settings?.penalty_value || 0).toLocaleString()}%`
+                    : money(settings?.penalty_value)}
+                </strong>
               </div>
               <div>
                 <span>Grace days</span>
@@ -348,6 +390,7 @@ function BillingSetupPage() {
                   <th>Period</th>
                   <th>Due</th>
                   <th>Balance</th>
+                  <th>Principal</th>
                   <th>Penalty</th>
                   <th>Eligible From</th>
                 </tr>
@@ -363,6 +406,7 @@ function BillingSetupPage() {
                     <td>{row.billing_period_name || row.billing_month?.slice(0, 10)}</td>
                     <td>{row.due_date?.slice(0, 10) || "-"}</td>
                     <td>{money(row.balance_amount)}</td>
+                    <td>{money(row.unpaid_principal)}</td>
                     <td>{money(row.penalty_to_apply)}</td>
                     <td>{row.penalty_eligible_at?.slice(0, 10) || "-"}</td>
                   </tr>
@@ -372,6 +416,76 @@ function BillingSetupPage() {
           </div>
         </div>
       ) : null}
+
+      <div className="panel">
+        <div className="panel-heading">
+          <h3>Penalty Applications</h3>
+        </div>
+        <TableControls table={penaltyApplicationTable} label="penalties" placeholder="Search penalties" />
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Bill</th>
+                <th>Customer</th>
+                <th>Month</th>
+                <th>Type</th>
+                <th>Principal</th>
+                <th>Penalty</th>
+                <th>Status</th>
+                <th>Waiver</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {penaltyApplicationTable.visibleRows.map((application) => (
+                <tr key={application.id}>
+                  <td>
+                    <strong>{application.bill_number || `Bill ${application.bill_id}`}</strong>
+                    <small>{application.billing_period_name || "-"}</small>
+                  </td>
+                  <td>
+                    {application.customer_name}
+                    <small>{application.acc_number}</small>
+                  </td>
+                  <td>{application.application_month?.slice(0, 10)}</td>
+                  <td>
+                    {application.penalty_type || "fixed"}
+                    {application.penalty_type === "percentage" ? (
+                      <small>{Number(application.penalty_value || 0).toLocaleString()}%</small>
+                    ) : null}
+                  </td>
+                  <td>{money(application.principal_amount)}</td>
+                  <td>{money(application.amount)}</td>
+                  <td>
+                    <span className={`status ${application.waived_at ? "status-rejected" : "status-valid"}`}>
+                      {application.waived_at ? "waived" : "applied"}
+                    </span>
+                  </td>
+                  <td>
+                    {application.waiver_reason || "-"}
+                    {application.waived_by_name ? <small>{application.waived_by_name}</small> : null}
+                  </td>
+                  <td>
+                    {!application.waived_at ? (
+                      <button type="button" onClick={() => waivePenalty(application)}>
+                        Waive
+                      </button>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {!penaltyApplicationTable.total ? (
+                <tr>
+                  <td colSpan="9">No penalties applied yet.</td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </section>
   );
 }

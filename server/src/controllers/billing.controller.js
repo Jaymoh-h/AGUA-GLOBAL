@@ -29,6 +29,13 @@ const buildPenaltyEligibilityQuery = () => `
       $1::date AS application_date
     FROM billing_settings
     WHERE id = 1
+  ),
+  bill_base AS (
+    SELECT
+      b.*,
+      GREATEST(COALESCE(NULLIF(b.total_amount, 0), b.amount) - COALESCE(b.penalty_amount, 0), 0) AS principal_total,
+      GREATEST(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount) - COALESCE(b.penalty_amount, 0), 0) AS unpaid_principal
+    FROM bills b
   )
   SELECT
     b.id,
@@ -43,13 +50,21 @@ const buildPenaltyEligibilityQuery = () => `
     b.status,
     b.penalty_amount,
     COALESCE(NULLIF(b.total_amount, 0), b.amount) AS total_amount,
+    b.principal_total,
+    b.unpaid_principal,
     b.paid_amount,
     COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount) AS balance_amount,
-    settings.penalty_value AS penalty_to_apply,
+    settings.penalty_type,
+    settings.penalty_value,
+    CASE
+      WHEN settings.penalty_type = 'fixed' THEN settings.penalty_value
+      WHEN settings.penalty_type = 'percentage' THEN ROUND((b.unpaid_principal * settings.penalty_value / 100.0)::numeric, 2)
+      ELSE 0
+    END AS penalty_to_apply,
     settings.application_month,
     settings.application_date,
     b.due_date + (settings.penalty_grace_days || ' days')::interval AS penalty_eligible_at
-  FROM bills b
+  FROM bill_base b
   JOIN customers c ON c.id = b.customer_id
   JOIN zones z ON z.id = c.zone_id
   LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
@@ -57,13 +72,18 @@ const buildPenaltyEligibilityQuery = () => `
   LEFT JOIN bill_penalty_applications bpa
     ON bpa.bill_id = b.id
    AND bpa.application_month = settings.application_month
-  WHERE settings.penalty_type = 'fixed'
+  WHERE settings.penalty_type IN ('fixed', 'percentage')
     AND settings.penalty_value > 0
     AND b.status <> 'paid'
-    AND COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount) > 0
+    AND b.unpaid_principal > 0
     AND b.due_date IS NOT NULL
     AND settings.application_date > (b.due_date + (settings.penalty_grace_days || ' days')::interval)::date
     AND bpa.id IS NULL
+    AND CASE
+      WHEN settings.penalty_type = 'fixed' THEN settings.penalty_value
+      WHEN settings.penalty_type = 'percentage' THEN ROUND((b.unpaid_principal * settings.penalty_value / 100.0)::numeric, 2)
+      ELSE 0
+    END > 0
   ORDER BY b.due_date ASC, c.acc_number ASC
 `;
 
@@ -213,8 +233,8 @@ const updateBillingSettings = asyncHandler(async (req, res) => {
     number_padding = 6
   } = req.body;
 
-  if (!["none", "fixed"].includes(penalty_type)) {
-    throw new ApiError(400, "Penalty type must be none or fixed.");
+  if (!["none", "fixed", "percentage"].includes(penalty_type)) {
+    throw new ApiError(400, "Penalty type must be none, fixed, or percentage.");
   }
 
   const penaltyGraceDays = Number(penalty_grace_days);
@@ -226,6 +246,9 @@ const updateBillingSettings = asyncHandler(async (req, res) => {
 
   if (penaltyGraceDays < 0 || penaltyValue < 0 || defaultDepositAmount < 0) {
     throw new ApiError(400, "Settings amounts and grace days cannot be negative.");
+  }
+  if (penalty_type === "percentage" && penaltyValue > 100) {
+    throw new ApiError(400, "Percentage penalty cannot exceed 100%.");
   }
   if (!Number.isInteger(nextBillNumber) || nextBillNumber <= 0 || !Number.isInteger(nextReceiptNumber) || nextReceiptNumber <= 0) {
     throw new ApiError(400, "Next bill and receipt numbers must be positive whole numbers.");
@@ -314,10 +337,33 @@ const previewPenaltyApplications = asyncHandler(async (req, res) => {
     summary: {
       eligible_bills: rows.length,
       penalty_amount: Number(settings.penalty_value || 0),
+      penalty_type: settings.penalty_type,
       total_penalties: rows.reduce((sum, row) => sum + Number(row.penalty_to_apply || 0), 0),
-      enabled: settings.penalty_type === "fixed" && Number(settings.penalty_value || 0) > 0
+      enabled: ["fixed", "percentage"].includes(settings.penalty_type) && Number(settings.penalty_value || 0) > 0
     }
   });
+});
+
+const listPenaltyApplications = asyncHandler(async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT bpa.*,
+            b.bill_number,
+            b.status AS bill_status,
+            COALESCE(bp.name, to_char(b.billing_month, 'FMMonth YYYY')) AS billing_period_name,
+            c.name AS customer_name,
+            c.acc_number,
+            applied.name AS applied_by_name,
+            waived.name AS waived_by_name
+     FROM bill_penalty_applications bpa
+     JOIN bills b ON b.id = bpa.bill_id
+     JOIN customers c ON c.id = b.customer_id
+     LEFT JOIN billing_periods bp ON bp.id = bpa.billing_period_id
+     LEFT JOIN users applied ON applied.id = bpa.applied_by
+     LEFT JOIN users waived ON waived.id = bpa.waived_by
+     ORDER BY bpa.application_month DESC, bpa.created_at DESC
+     LIMIT 300`
+  );
+  res.json(rows);
 });
 
 const applyPenaltyApplications = asyncHandler(async (req, res) => {
@@ -329,8 +375,8 @@ const applyPenaltyApplications = asyncHandler(async (req, res) => {
     await client.query("BEGIN");
     const settingsResult = await client.query("SELECT * FROM billing_settings WHERE id = 1 FOR UPDATE");
     const settings = settingsResult.rows[0];
-    if (!settings || settings.penalty_type !== "fixed" || Number(settings.penalty_value || 0) <= 0) {
-      throw new ApiError(400, "Fixed penalties are disabled or have no amount configured.");
+    if (!settings || !["fixed", "percentage"].includes(settings.penalty_type) || Number(settings.penalty_value || 0) <= 0) {
+      throw new ApiError(400, "Penalties are disabled or have no value configured.");
     }
 
     const eligibleResult = await client.query(buildPenaltyEligibilityQuery(), [applicationDate]);
@@ -345,12 +391,24 @@ const applyPenaltyApplications = asyncHandler(async (req, res) => {
       await assertBillEditable(client, before.id, req, reason, "apply a penalty");
       const insertResult = await client.query(
         `INSERT INTO bill_penalty_applications (
-          bill_id, billing_period_id, application_month, applied_on, amount, applied_by, reason
+          bill_id, billing_period_id, application_month, applied_on, amount,
+          penalty_type, penalty_value, principal_amount, applied_by, reason
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (bill_id, application_month) DO NOTHING
         RETURNING *`,
-        [row.id, row.billing_period_id, row.application_month, applicationDate, penaltyAmount, req.user.id, reason]
+        [
+          row.id,
+          row.billing_period_id,
+          row.application_month,
+          applicationDate,
+          penaltyAmount,
+          row.penalty_type,
+          Number(row.penalty_value || 0),
+          Number(row.unpaid_principal || 0),
+          req.user.id,
+          reason
+        ]
       );
 
       if (!insertResult.rows[0]) continue;
@@ -426,12 +484,140 @@ const applyPenaltyApplications = asyncHandler(async (req, res) => {
   }
 });
 
+const waivePenaltyApplication = asyncHandler(async (req, res) => {
+  const reason = normalizeCorrectionReason(req.body);
+  if (!reason) {
+    throw new ApiError(400, "Waiver reason is required.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const applicationResult = await client.query(
+      "SELECT * FROM bill_penalty_applications WHERE id = $1 FOR UPDATE",
+      [req.params.id]
+    );
+    const application = applicationResult.rows[0];
+    if (!application) throw new ApiError(404, "Penalty application not found.");
+    if (application.waived_at) throw new ApiError(400, "Penalty has already been waived.");
+
+    const beforeResult = await client.query("SELECT * FROM bills WHERE id = $1 FOR UPDATE", [
+      application.bill_id
+    ]);
+    const before = beforeResult.rows[0];
+    if (!before) throw new ApiError(404, "Bill not found.");
+    await assertBillEditable(client, before.id, req, reason, "waive a penalty");
+
+    const penaltyAmount = Number(application.amount || 0);
+    const nextTotal = Math.max(Number(before.total_amount || before.amount || 0) - penaltyAmount, 0);
+    const nextPenalty = Math.max(Number(before.penalty_amount || 0) - penaltyAmount, 0);
+    let nextPaidAmount = Number(before.paid_amount || 0);
+    let releasedCredit = 0;
+
+    if (nextPaidAmount > nextTotal) {
+      let remainingRelease = nextPaidAmount - nextTotal;
+      const allocationResult = await client.query(
+        `SELECT pa.*, p.customer_id
+         FROM payment_allocations pa
+         JOIN payments p ON p.id = pa.payment_id
+         WHERE pa.bill_id = $1
+         ORDER BY pa.created_at DESC, pa.id DESC
+         FOR UPDATE`,
+        [before.id]
+      );
+
+      for (const allocation of allocationResult.rows) {
+        if (remainingRelease <= 0) break;
+        const releaseAmount = Math.min(Number(allocation.amount || 0), remainingRelease);
+        if (releaseAmount <= 0) continue;
+
+        if (releaseAmount >= Number(allocation.amount || 0)) {
+          await client.query("DELETE FROM payment_allocations WHERE id = $1", [allocation.id]);
+        } else {
+          await client.query("UPDATE payment_allocations SET amount = amount - $1 WHERE id = $2", [
+            releaseAmount,
+            allocation.id
+          ]);
+        }
+
+        await client.query(
+          `UPDATE payments
+           SET total_allocated_amount = GREATEST(total_allocated_amount - $1, 0),
+               unallocated_amount = unallocated_amount + $1,
+               updated_at = NOW()
+           WHERE id = $2`,
+          [releaseAmount, allocation.payment_id]
+        );
+
+        remainingRelease -= releaseAmount;
+        releasedCredit += releaseAmount;
+      }
+
+      nextPaidAmount = Math.max(nextPaidAmount - releasedCredit, 0);
+    }
+
+    const nextBalance = Math.max(nextTotal - nextPaidAmount, 0);
+    const nextStatus = nextBalance <= 0 ? "paid" : nextPaidAmount > 0 ? "partial" : "unpaid";
+
+    const updatedBill = await client.query(
+      `UPDATE bills
+       SET amount = GREATEST(amount - $1, 0),
+           penalty_amount = $2,
+           total_amount = $3,
+           balance_amount = $4,
+           paid_amount = $5,
+           status = $6::varchar,
+           paid_at = CASE WHEN $6::text = 'paid' THEN COALESCE(paid_at, NOW()) ELSE NULL END
+       WHERE id = $7
+       RETURNING *`,
+      [penaltyAmount, nextPenalty, nextTotal, nextBalance, nextPaidAmount, nextStatus, before.id]
+    );
+
+    const updatedApplication = await client.query(
+      `UPDATE bill_penalty_applications
+       SET waived_by = $1,
+           waived_at = NOW(),
+           waiver_reason = $2
+       WHERE id = $3
+       RETURNING *`,
+      [req.user.id, reason, application.id]
+    );
+
+    await recordAuditEvent(client, {
+      req,
+      action: "bill.penalty_waived",
+      entityType: "bill",
+      entityId: before.id,
+      beforeData: {
+        bill: before,
+        penalty_application: application
+      },
+      afterData: {
+        bill: updatedBill.rows[0],
+        penalty_application: updatedApplication.rows[0],
+        released_credit: releasedCredit
+      },
+      reason
+    });
+
+    await client.query("COMMIT");
+    res.json({ bill: updatedBill.rows[0], penalty_application: updatedApplication.rows[0] });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = {
   applyPenaltyApplications,
   createBillingPeriod,
   getBillingSettings,
+  listPenaltyApplications,
   listBillingPeriods,
   previewPenaltyApplications,
+  waivePenaltyApplication,
   updateBillingPeriodStatus,
   updateBillingSettings
 };

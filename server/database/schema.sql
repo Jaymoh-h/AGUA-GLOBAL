@@ -117,7 +117,7 @@ CREATE TABLE billing_settings (
   id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
   due_rule VARCHAR(40) NOT NULL DEFAULT 'next_month_end' CHECK (due_rule IN ('next_month_end')),
   penalty_grace_days INTEGER NOT NULL DEFAULT 0 CHECK (penalty_grace_days >= 0),
-  penalty_type VARCHAR(20) NOT NULL DEFAULT 'none' CHECK (penalty_type IN ('none', 'fixed')),
+  penalty_type VARCHAR(20) NOT NULL DEFAULT 'none' CHECK (penalty_type IN ('none', 'fixed', 'percentage')),
   penalty_value NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (penalty_value >= 0),
   deposit_required BOOLEAN NOT NULL DEFAULT FALSE,
   default_deposit_amount NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (default_deposit_amount >= 0),
@@ -275,8 +275,14 @@ CREATE TABLE bill_penalty_applications (
   application_month DATE NOT NULL,
   applied_on DATE NOT NULL DEFAULT CURRENT_DATE,
   amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
+  penalty_type VARCHAR(20),
+  penalty_value NUMERIC(12, 2),
+  principal_amount NUMERIC(12, 2),
   applied_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   reason TEXT,
+  waived_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  waived_at TIMESTAMPTZ,
+  waiver_reason TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (bill_id, application_month)
 );
@@ -390,6 +396,7 @@ CREATE INDEX idx_payment_allocations_payment_id ON payment_allocations(payment_i
 CREATE INDEX idx_payment_allocations_bill_id ON payment_allocations(bill_id);
 CREATE INDEX idx_bill_penalty_applications_bill_id ON bill_penalty_applications(bill_id);
 CREATE INDEX idx_bill_penalty_applications_application_month ON bill_penalty_applications(application_month DESC);
+CREATE INDEX idx_bill_penalty_applications_waived_at ON bill_penalty_applications(waived_at);
 CREATE INDEX idx_expenses_date ON expenses(expense_date DESC);
 CREATE INDEX idx_expenses_category ON expenses(category);
 CREATE INDEX idx_expenses_recorded_by ON expenses(recorded_by);
