@@ -855,6 +855,7 @@ const createCustomer = asyncHandler(async (req, res) => {
 });
 
 const updateCustomer = asyncHandler(async (req, res) => {
+  const payload = req.body || {};
   const {
     name,
     phone,
@@ -867,7 +868,7 @@ const updateCustomer = asyncHandler(async (req, res) => {
     deposit_paid_at,
     opening_balance_amount,
     opening_balance_date
-  } = req.body;
+  } = payload;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -876,64 +877,71 @@ const updateCustomer = asyncHandler(async (req, res) => {
     if (!before) {
       throw new ApiError(404, "Customer not found.");
     }
+    const hasField = (field) => Object.prototype.hasOwnProperty.call(payload, field);
     const openingBalance =
-      opening_balance_amount === undefined && opening_balance_date === undefined
+      !hasField("opening_balance_amount") && !hasField("opening_balance_date")
         ? null
         : normalizeOpeningBalance(
-            opening_balance_amount === undefined ? before.opening_balance_amount : opening_balance_amount,
-            opening_balance_date === undefined ? before.opening_balance_date : opening_balance_date
+            hasField("opening_balance_amount") ? opening_balance_amount : before.opening_balance_amount,
+            hasField("opening_balance_date") ? opening_balance_date : before.opening_balance_date
           );
+    const selectedRate = hasField("rate_id")
+      ? (await client.query("SELECT id, amount FROM rates WHERE id = $1 AND is_active = TRUE", [rate_id || null])).rows[0]
+      : null;
+    if (hasField("rate_id") && !selectedRate) {
+      throw new ApiError(404, "Selected rate is inactive.");
+    }
+    const selectedZone = hasField("zone_id")
+      ? (await client.query("SELECT id, name FROM zones WHERE id = $1 AND is_active = TRUE", [zone_id || null])).rows[0]
+      : null;
+    if (hasField("zone_id") && !selectedZone) {
+      throw new ApiError(404, "Selected zone is inactive.");
+    }
+    const nextValues = {
+      name: hasField("name") ? name : before.name,
+      phone: hasField("phone") ? phone || null : before.phone,
+      acc_number: hasField("acc_number") ? acc_number : before.acc_number,
+      rate_id: selectedRate ? selectedRate.id : before.rate_id,
+      zone_id: selectedZone ? selectedZone.id : before.zone_id,
+      rate: selectedRate ? selectedRate.amount : before.rate,
+      location: selectedZone ? selectedZone.name : before.location,
+      status: hasField("status") ? status : before.status,
+      deposit_amount: hasField("deposit_amount") ? Number(deposit_amount || 0) : Number(before.deposit_amount || 0),
+      deposit_paid: hasField("deposit_paid") ? Boolean(deposit_paid) : Boolean(before.deposit_paid),
+      deposit_paid_at: hasField("deposit_paid_at") ? deposit_paid_at || null : before.deposit_paid_at,
+      opening_balance_amount: openingBalance ? openingBalance.balanceAmount : Number(before.opening_balance_amount || 0),
+      opening_balance_date: openingBalance ? openingBalance.balanceDate : before.opening_balance_date
+    };
+    if (!nextValues.deposit_paid) {
+      nextValues.deposit_paid_at = null;
+    } else if (!before.deposit_paid && nextValues.deposit_paid && !nextValues.deposit_paid_at) {
+      nextValues.deposit_paid_at = new Date().toISOString().slice(0, 10);
+    }
+    if (Number(nextValues.opening_balance_amount || 0) === 0) {
+      nextValues.opening_balance_date = null;
+    }
+    const numericCustomerFields = new Set(["rate_id", "zone_id", "rate", "deposit_amount", "opening_balance_amount"]);
+    const comparable = (field, value) => {
+      if (numericCustomerFields.has(field)) return Number(value || 0).toFixed(2);
+      if (field === "deposit_paid") return Boolean(value) ? "true" : "false";
+      if (value instanceof Date) return value.toISOString().slice(0, 10);
+      if (value === null || value === undefined) return "";
+      return String(value);
+    };
+    const changedFields = Object.keys(nextValues).filter((field) => comparable(field, nextValues[field]) !== comparable(field, before[field]));
+    if (!changedFields.length) {
+      await client.query("COMMIT");
+      return res.json({ ...before, unchanged: true });
+    }
+    const setClauses = changedFields.map((field, index) => `${field} = $${index + 1}`);
+    const updateValues = changedFields.map((field) => nextValues[field]);
     const { rows } = await client.query(
-      `WITH selected AS (
-         SELECT
-           COALESCE($4::integer, c.rate_id) AS next_rate_id,
-           COALESCE($5::integer, c.zone_id) AS next_zone_id
-         FROM customers c
-         WHERE c.id = $7
-       )
-       UPDATE customers c
-       SET name = COALESCE($1, c.name),
-           phone = COALESCE($2, c.phone),
-           acc_number = COALESCE($3, c.acc_number),
-           rate_id = r.id,
-           zone_id = z.id,
-           rate = r.amount,
-           location = z.name,
-           status = COALESCE($6, c.status),
-           deposit_amount = COALESCE($8::numeric, c.deposit_amount),
-           deposit_paid = COALESCE($9::boolean, c.deposit_paid),
-           deposit_paid_at = CASE
-             WHEN COALESCE($9::boolean, c.deposit_paid) = FALSE THEN NULL
-             WHEN $10::date IS NOT NULL THEN $10::date
-             WHEN c.deposit_paid = FALSE AND COALESCE($9::boolean, c.deposit_paid) = TRUE THEN CURRENT_DATE
-             ELSE c.deposit_paid_at
-           END,
-           opening_balance_amount = COALESCE($11::numeric, c.opening_balance_amount),
-           opening_balance_date = CASE
-             WHEN COALESCE($11::numeric, c.opening_balance_amount) = 0 THEN NULL
-             WHEN $12::date IS NOT NULL THEN $12::date
-             ELSE c.opening_balance_date
-           END,
+      `UPDATE customers c
+       SET ${setClauses.join(", ")},
            updated_at = NOW()
-       FROM selected s
-       JOIN rates r ON r.id = s.next_rate_id AND r.is_active = TRUE
-       JOIN zones z ON z.id = s.next_zone_id AND z.is_active = TRUE
-       WHERE c.id = $7
+       WHERE c.id = $${updateValues.length + 1}
        RETURNING c.*`,
-      [
-        name,
-        phone,
-        acc_number,
-        rate_id || null,
-        zone_id || null,
-        status,
-        req.params.id,
-        deposit_amount === undefined ? null : Number(deposit_amount),
-        deposit_paid === undefined ? null : Boolean(deposit_paid),
-        deposit_paid_at || null,
-        openingBalance ? openingBalance.balanceAmount : null,
-        openingBalance ? openingBalance.balanceDate : null
-      ]
+      [...updateValues, req.params.id]
     );
 
     if (!rows[0]) {
@@ -952,8 +960,8 @@ const updateCustomer = asyncHandler(async (req, res) => {
       action: "customer.updated",
       entityType: "customer",
       entityId: rows[0].id,
-      beforeData: before,
-      afterData: rows[0]
+      beforeData: Object.fromEntries(changedFields.map((field) => [field, before[field]])),
+      afterData: Object.fromEntries(changedFields.map((field) => [field, rows[0][field]]))
     });
     if (migrationBill) {
       await recordAuditEvent(client, {

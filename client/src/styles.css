@@ -912,7 +912,8 @@ td {
 }
 
 .status-open,
-.status-pending {
+.status-pending,
+.status-held {
   background: #dbeafe;
   color: #1e40af;
 }
@@ -924,12 +925,14 @@ td {
 }
 
 .status-resolved,
-.status-low {
+.status-low,
+.status-reapplied {
   background: #dcfce7;
   color: #166534;
 }
 
-.status-cancelled {
+.status-cancelled,
+.status-discarded {
   background: #f4f4f5;
   color: #52525b;
 }

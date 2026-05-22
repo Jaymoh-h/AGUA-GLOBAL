@@ -279,7 +279,7 @@ CREATE TABLE payments (
   payment_channel VARCHAR(30) NOT NULL DEFAULT 'cash' CHECK (payment_channel IN ('cash', 'bank', 'mpesa_paybill', 'manual_adjustment')),
   external_reference VARCHAR(120),
   received_from VARCHAR(160),
-  status VARCHAR(20) NOT NULL DEFAULT 'posted' CHECK (status IN ('posted', 'void')),
+  status VARCHAR(20) NOT NULL DEFAULT 'posted' CHECK (status IN ('posted', 'void', 'voided_to_suspense')),
   total_allocated_amount NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (total_allocated_amount >= 0),
   unallocated_amount NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (unallocated_amount >= 0),
   voided_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -298,6 +298,26 @@ CREATE TABLE payment_allocations (
   amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (payment_id, bill_id)
+);
+
+CREATE TABLE payment_suspense_items (
+  id SERIAL PRIMARY KEY,
+  source_payment_id INTEGER NOT NULL REFERENCES payments(id) ON DELETE CASCADE,
+  customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+  amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
+  receipt_number VARCHAR(80),
+  payment_channel VARCHAR(30),
+  external_reference VARCHAR(120),
+  received_from VARCHAR(160),
+  payment_date DATE,
+  reason TEXT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'held' CHECK (status IN ('held', 'reapplied', 'discarded')),
+  reapplied_payment_id INTEGER REFERENCES payments(id) ON DELETE SET NULL,
+  discard_reason TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  resolved_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE bill_penalty_applications (
@@ -428,6 +448,9 @@ CREATE INDEX idx_payments_customer_date ON payments(customer_id, payment_date DE
 CREATE INDEX idx_payments_receipt_number ON payments(receipt_number);
 CREATE INDEX idx_payment_allocations_payment_id ON payment_allocations(payment_id);
 CREATE INDEX idx_payment_allocations_bill_id ON payment_allocations(bill_id);
+CREATE INDEX idx_payment_suspense_status ON payment_suspense_items(status);
+CREATE INDEX idx_payment_suspense_source_payment ON payment_suspense_items(source_payment_id);
+CREATE INDEX idx_payment_suspense_customer ON payment_suspense_items(customer_id);
 CREATE INDEX idx_bill_penalty_applications_bill_id ON bill_penalty_applications(bill_id);
 CREATE INDEX idx_bill_penalty_applications_application_month ON bill_penalty_applications(application_month DESC);
 CREATE INDEX idx_bill_penalty_applications_waived_at ON bill_penalty_applications(waived_at);

@@ -76,7 +76,7 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
      FROM payments p
      LEFT JOIN payment_allocations pa ON pa.payment_id = p.id
      LEFT JOIN bills b ON b.id = pa.bill_id
-     WHERE p.customer_id = $1
+     WHERE p.customer_id = $1 AND p.status = 'posted'
      GROUP BY p.id
      ORDER BY p.payment_date DESC, p.created_at DESC
      LIMIT 300`,
@@ -130,7 +130,7 @@ const getPortalPayment = asyncHandler(async (req, res) => {
      FROM payments p
      JOIN customers c ON c.id = p.customer_id
      JOIN zones z ON z.id = c.zone_id
-     WHERE p.id = $1 AND p.customer_id = $2`,
+     WHERE p.id = $1 AND p.customer_id = $2 AND p.status = 'posted'`,
     [req.params.id, customerId]
   );
   const payment = paymentResult.rows[0];

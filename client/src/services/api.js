@@ -153,11 +153,15 @@ export const api = {
   },
   payments: {
     list: () => request("/payments"),
+    suspense: () => request("/payments/suspense"),
     get: (id) => request(`/payments/${id}`),
     create: (payload) => request("/payments", { method: "POST", body: payload }),
     previewImport: (csv) => request("/payments/imports/preview", { method: "POST", body: { csv } }),
     commitImport: (csv) => request("/payments/imports/commit", { method: "POST", body: { csv } }),
-    update: (id, payload) => request(`/payments/${id}`, { method: "PUT", body: payload })
+    update: (id, payload) => request(`/payments/${id}`, { method: "PUT", body: payload }),
+    voidToSuspense: (id, payload) => request(`/payments/${id}/void`, { method: "POST", body: payload }),
+    reapplySuspense: (id, payload) => request(`/payments/suspense/${id}/reapply`, { method: "POST", body: payload }),
+    discardSuspense: (id, payload) => request(`/payments/suspense/${id}/discard`, { method: "POST", body: payload })
   },
   expenses: {
     list: () => request("/expenses"),

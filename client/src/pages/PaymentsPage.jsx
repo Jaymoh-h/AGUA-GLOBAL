@@ -537,6 +537,7 @@ const bankConfidenceLabel = (score) => {
 
 function PaymentsPage({ user }) {
   const [payments, setPayments] = useState([]);
+  const [suspenseItems, setSuspenseItems] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [adjustments, setAdjustments] = useState([]);
   const [businessSettings, setBusinessSettings] = useState(null);
@@ -596,13 +597,15 @@ function PaymentsPage({ user }) {
     `${businessSettings?.default_currency || "KES"} ${Math.abs(Number(value || 0)).toLocaleString()}`;
 
   const load = async () => {
-    const [paymentRows, customerRows, businessRow, adjustmentRows] = await Promise.all([
+    const [paymentRows, suspenseRows, customerRows, businessRow, adjustmentRows] = await Promise.all([
       api.payments.list(),
+      api.payments.suspense(),
       api.customers.list(),
       api.businessSettings.get(),
       api.adjustments.list()
     ]);
     setPayments(paymentRows);
+    setSuspenseItems(suspenseRows);
     setCustomers(customerRows);
     setBusinessSettings(businessRow);
     setAdjustments(adjustmentRows);
@@ -1013,6 +1016,65 @@ function PaymentsPage({ user }) {
       setMessage(err.message);
     }
   };
+
+  const voidPayment = async (payment) => {
+    const reason = window.prompt(`Reason for voiding receipt ${payment.receipt_number || payment.id} to suspense:`);
+    if (!reason?.trim()) return;
+    setMessage("");
+    try {
+      await api.payments.voidToSuspense(payment.id, { reason: reason.trim() });
+      await load();
+      setReceiptDetail(null);
+      setMessage("Payment voided and moved to suspense.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const reapplySuspense = async (item) => {
+    const account = window.prompt(
+      "Customer account to reapply to. Leave blank to use the original customer.",
+      item.acc_number || ""
+    );
+    if (account === null) return;
+    const customer = account.trim()
+      ? customers.find((row) => row.acc_number.toLowerCase() === account.trim().toLowerCase())
+      : customers.find((row) => Number(row.id) === Number(item.customer_id));
+    if (!customer) {
+      setMessage("Customer account was not found for suspense reapplication.");
+      return;
+    }
+    const notes = window.prompt("Notes for this reapplication:", `Reapplied suspense item #${item.id}`) || "";
+    setMessage("");
+    try {
+      await api.payments.reapplySuspense(item.id, {
+        customer_id: customer.id,
+        payment_date: item.payment_date?.slice(0, 10),
+        payment_channel: item.payment_channel || "bank",
+        external_reference: item.external_reference,
+        received_from: item.received_from,
+        notes
+      });
+      await load();
+      setMessage("Suspense item reapplied as a new payment.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const discardSuspense = async (item) => {
+    const reason = window.prompt(`Reason for discarding suspense item #${item.id}:`);
+    if (!reason?.trim()) return;
+    setMessage("");
+    try {
+      await api.payments.discardSuspense(item.id, { reason: reason.trim() });
+      await load();
+      setMessage("Suspense item discarded.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
   const filteredPayments = payments.filter((payment) => {
     const dateValue = payment.payment_date?.slice(0, 10) || "";
     const channelMatch = !channelFilter || (payment.payment_channel || payment.method) === channelFilter;
@@ -1045,6 +1107,18 @@ function PaymentsPage({ user }) {
       "status",
       "requested_by_name",
       "reviewed_by_name"
+    ]
+  });
+  const suspenseTable = useTableControls(suspenseItems, {
+    searchFields: [
+      "receipt_number",
+      "customer_name",
+      "acc_number",
+      "amount",
+      "status",
+      "reason",
+      "external_reference",
+      "reapplied_receipt_number"
     ]
   });
   const exportPayments = () => {
@@ -1721,6 +1795,7 @@ function PaymentsPage({ user }) {
                     <th>Reference</th>
                     <th>Allocations</th>
                     <th>Credit</th>
+                    <th>Status</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -1743,17 +1818,97 @@ function PaymentsPage({ user }) {
                         </td>
                         <td>{money(payment.unallocated_amount)}</td>
                         <td>
+                          <span className={`status ${payment.status === "posted" ? "status-valid" : "status-rejected"}`}>
+                            {label(payment.status)}
+                          </span>
+                        </td>
+                        <td>
                           <div className="row-actions">
                             <button type="button" onClick={() => openReceipt(payment)} disabled={loadingReceipt}>
                               Print
                             </button>
-                            <button type="button" onClick={() => edit(payment)}>Edit</button>
+                            {payment.status === "posted" ? (
+                              <>
+                                <button type="button" onClick={() => edit(payment)}>Edit</button>
+                                <button type="button" onClick={() => voidPayment(payment)}>Void</button>
+                              </>
+                            ) : null}
                           </div>
                         </td>
                       </tr>
                     ))
                   ) : (
-                    <EmptyTableRow colSpan={9} title="No payments found" detail="Record payments or adjust the filters." />
+                    <EmptyTableRow colSpan={10} title="No payments found" detail="Record payments or adjust the filters." />
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-heading">
+              <h3>Suspense Register</h3>
+            </div>
+            <TableControls table={suspenseTable} label="suspense items" placeholder="Search suspense" />
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Receipt</th>
+                    <th>Customer</th>
+                    <th>Amount</th>
+                    <th>Date</th>
+                    <th>Reference</th>
+                    <th>Reason</th>
+                    <th>Status</th>
+                    <th>Resolution</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {suspenseTable.visibleRows.length ? (
+                    suspenseTable.visibleRows.map((item) => (
+                      <tr key={item.id}>
+                        <td>
+                          {item.receipt_number || `Suspense ${item.id}`}
+                          <small>Payment #{item.source_payment_id}</small>
+                        </td>
+                        <td>
+                          {item.customer_name || "-"}
+                          <small>{item.acc_number || ""}</small>
+                        </td>
+                        <td>{money(item.amount)}</td>
+                        <td>{date(item.payment_date)}</td>
+                        <td>{item.external_reference || "-"}</td>
+                        <td>{item.reason}</td>
+                        <td>
+                          <span className={`status status-${item.status}`}>{label(item.status)}</span>
+                        </td>
+                        <td>
+                          {item.status === "reapplied" ? item.reapplied_receipt_number || `Payment ${item.reapplied_payment_id}` : null}
+                          {item.status === "discarded" ? item.discard_reason || "Discarded" : null}
+                          {item.status === "held" ? "Awaiting action" : null}
+                        </td>
+                        <td>
+                          {item.status === "held" ? (
+                            <div className="row-actions">
+                              <button type="button" onClick={() => reapplySuspense(item)}>
+                                Reapply
+                              </button>
+                              {user.role === "admin" ? (
+                                <button type="button" onClick={() => discardSuspense(item)}>
+                                  Discard
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <EmptyTableRow colSpan={9} title="No suspense items found" detail="Voided payments awaiting action will appear here." />
                   )}
                 </tbody>
               </table>

@@ -9,6 +9,7 @@ import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const moneyAbs = (value) => `KES ${Math.abs(Number(value || 0)).toLocaleString()}`;
 const accountPositionLabel = (value) => (Number(value || 0) < 0 ? "Customer credit" : "Amount due");
+const sameValue = (left, right) => String(left ?? "") === String(right ?? "");
 
 const blank = {
   name: "",
@@ -98,7 +99,7 @@ function CustomersPage({ user }) {
       return;
     }
 
-    const payload = {
+    const normalizedPayload = {
       ...form,
       rate_id: Number(form.rate_id),
       zone_id: Number(form.zone_id),
@@ -107,8 +108,32 @@ function CustomersPage({ user }) {
       opening_balance_amount: Number(form.opening_balance_amount || 0),
       opening_balance_date: Number(form.opening_balance_amount || 0) !== 0 ? form.opening_balance_date : null
     };
+    const existingCustomer = editingId ? customers.find((customer) => Number(customer.id) === Number(editingId)) : null;
+    const payload = existingCustomer
+      ? Object.fromEntries(
+          Object.entries(normalizedPayload).filter(([field, value]) => {
+            if (field === "opening_balance_date") {
+              return !sameValue(value, existingCustomer.opening_balance_date?.slice(0, 10) || null);
+            }
+            if (["rate_id", "zone_id"].includes(field)) {
+              return Number(value) !== Number(existingCustomer[field]);
+            }
+            if (["deposit_amount", "opening_balance_amount"].includes(field)) {
+              return Number(value || 0) !== Number(existingCustomer[field] || 0);
+            }
+            if (field === "deposit_paid") {
+              return Boolean(value) !== Boolean(existingCustomer[field]);
+            }
+            return !sameValue(value, existingCustomer[field]);
+          })
+        )
+      : normalizedPayload;
     try {
       if (editingId) {
+        if (!Object.keys(payload).length) {
+          setMessage("No customer changes detected.");
+          return;
+        }
         await api.customers.update(editingId, payload);
       } else {
         await api.customers.create(payload);

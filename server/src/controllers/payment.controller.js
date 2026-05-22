@@ -417,6 +417,237 @@ const createPayment = asyncHandler(async (req, res) => {
   }
 });
 
+const listPaymentSuspense = asyncHandler(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT psi.*,
+            c.name AS customer_name,
+            c.acc_number,
+            rp.receipt_number AS reapplied_receipt_number,
+            sp.status AS source_payment_status
+     FROM payment_suspense_items psi
+     LEFT JOIN customers c ON c.id = psi.customer_id
+     LEFT JOIN payments rp ON rp.id = psi.reapplied_payment_id
+     JOIN payments sp ON sp.id = psi.source_payment_id
+     ORDER BY
+       CASE psi.status WHEN 'held' THEN 0 WHEN 'reapplied' THEN 1 ELSE 2 END,
+       psi.created_at DESC
+     LIMIT 300`
+  );
+  res.json(rows);
+});
+
+const voidPaymentToSuspense = asyncHandler(async (req, res) => {
+  const { reason = "" } = req.body || {};
+  if (!String(reason).trim()) {
+    throw new ApiError(400, "A void reason is required.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const paymentResult = await client.query("SELECT * FROM payments WHERE id = $1 FOR UPDATE", [
+      req.params.id
+    ]);
+    const payment = paymentResult.rows[0];
+    if (!payment) {
+      throw new ApiError(404, "Payment not found.");
+    }
+    if (payment.status !== "posted") {
+      throw new ApiError(400, "Only posted payments can be voided to suspense.");
+    }
+
+    const existingSuspense = await client.query(
+      "SELECT id FROM payment_suspense_items WHERE source_payment_id = $1 AND status = 'held'",
+      [payment.id]
+    );
+    if (existingSuspense.rows[0]) {
+      throw new ApiError(400, "This payment is already held in suspense.");
+    }
+
+    const beforeAllocationsResult = await client.query(
+      "SELECT * FROM payment_allocations WHERE payment_id = $1 ORDER BY id ASC",
+      [payment.id]
+    );
+    const reversed = await reverseAllocations(client, payment.id);
+    const updatedPayment = await client.query(
+      `UPDATE payments
+       SET status = 'voided_to_suspense',
+           total_allocated_amount = 0,
+           unallocated_amount = 0,
+           voided_by = $1,
+           voided_at = NOW(),
+           updated_by = $1,
+           updated_at = NOW()
+       WHERE id = $2
+       RETURNING *`,
+      [req.user.id, payment.id]
+    );
+    const suspenseResult = await client.query(
+      `INSERT INTO payment_suspense_items (
+         source_payment_id, customer_id, amount, receipt_number, payment_channel,
+         external_reference, received_from, payment_date, reason, created_by
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING *`,
+      [
+        payment.id,
+        payment.customer_id,
+        payment.amount,
+        payment.receipt_number,
+        payment.payment_channel || payment.method,
+        payment.external_reference || payment.reference,
+        payment.received_from,
+        payment.payment_date,
+        reason.trim(),
+        req.user.id
+      ]
+    );
+
+    await recordAuditEvent(client, {
+      req,
+      action: "payment.voided_to_suspense",
+      entityType: "payment",
+      entityId: payment.id,
+      beforeData: { payment, allocations: beforeAllocationsResult.rows },
+      afterData: { payment: updatedPayment.rows[0], suspense: suspenseResult.rows[0], reversedBills: reversed.bills },
+      reason: reason.trim()
+    });
+    await recordAuditEvent(client, {
+      req,
+      action: "payment_suspense.created",
+      entityType: "payment_suspense",
+      entityId: suspenseResult.rows[0].id,
+      afterData: suspenseResult.rows[0],
+      reason: reason.trim()
+    });
+
+    await client.query("COMMIT");
+    res.json({ payment: updatedPayment.rows[0], suspense: suspenseResult.rows[0], bills: reversed.bills });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+const reapplyPaymentSuspense = asyncHandler(async (req, res) => {
+  const { customer_id, bill_id, payment_date, payment_channel, external_reference, received_from, notes } = req.body || {};
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const suspenseResult = await client.query("SELECT * FROM payment_suspense_items WHERE id = $1 FOR UPDATE", [
+      req.params.id
+    ]);
+    const suspense = suspenseResult.rows[0];
+    if (!suspense) {
+      throw new ApiError(404, "Suspense item not found.");
+    }
+    if (suspense.status !== "held") {
+      throw new ApiError(400, "Only held suspense items can be reapplied.");
+    }
+
+    const targetCustomerId = customer_id || suspense.customer_id;
+    if (!targetCustomerId) {
+      throw new ApiError(400, "Choose a customer before reapplying this suspense item.");
+    }
+
+    const result = await createPaymentWithAllocations(
+      client,
+      req,
+      {
+        customer_id: Number(targetCustomerId),
+        bill_id: bill_id || null,
+        amount: suspense.amount,
+        payment_date: payment_date || suspense.payment_date,
+        payment_channel: payment_channel || suspense.payment_channel || "bank",
+        external_reference: external_reference ?? suspense.external_reference,
+        received_from: received_from ?? suspense.received_from,
+        notes: notes || `Reapplied from suspense item #${suspense.id}`
+      },
+      { auditReason: `Reapplied suspense item #${suspense.id}` }
+    );
+
+    const updatedSuspense = await client.query(
+      `UPDATE payment_suspense_items
+       SET status = 'reapplied',
+           reapplied_payment_id = $1,
+           resolved_by = $2,
+           resolved_at = NOW()
+       WHERE id = $3
+       RETURNING *`,
+      [result.payment.id, req.user.id, suspense.id]
+    );
+    await recordAuditEvent(client, {
+      req,
+      action: "payment_suspense.reapplied",
+      entityType: "payment_suspense",
+      entityId: suspense.id,
+      beforeData: suspense,
+      afterData: updatedSuspense.rows[0],
+      reason: `Reapplied as payment ${result.payment.receipt_number || result.payment.id}`
+    });
+
+    await client.query("COMMIT");
+    res.json({ suspense: updatedSuspense.rows[0], ...result });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+const discardPaymentSuspense = asyncHandler(async (req, res) => {
+  const { reason = "" } = req.body || {};
+  if (!String(reason).trim()) {
+    throw new ApiError(400, "A discard reason is required.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const suspenseResult = await client.query("SELECT * FROM payment_suspense_items WHERE id = $1 FOR UPDATE", [
+      req.params.id
+    ]);
+    const suspense = suspenseResult.rows[0];
+    if (!suspense) {
+      throw new ApiError(404, "Suspense item not found.");
+    }
+    if (suspense.status !== "held") {
+      throw new ApiError(400, "Only held suspense items can be discarded.");
+    }
+
+    const updatedSuspense = await client.query(
+      `UPDATE payment_suspense_items
+       SET status = 'discarded',
+           discard_reason = $1,
+           resolved_by = $2,
+           resolved_at = NOW()
+       WHERE id = $3
+       RETURNING *`,
+      [reason.trim(), req.user.id, suspense.id]
+    );
+    await recordAuditEvent(client, {
+      req,
+      action: "payment_suspense.discarded",
+      entityType: "payment_suspense",
+      entityId: suspense.id,
+      beforeData: suspense,
+      afterData: updatedSuspense.rows[0],
+      reason: reason.trim()
+    });
+
+    await client.query("COMMIT");
+    res.json({ suspense: updatedSuspense.rows[0] });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 const getCustomerOpenBalance = async (client, customerId) => {
   const { rows } = await client.query(
     `SELECT COALESCE(SUM(COALESCE(NULLIF(balance_amount, 0), amount - paid_amount)), 0) AS balance
@@ -687,8 +918,8 @@ const updatePayment = asyncHandler(async (req, res) => {
       throw new ApiError(404, "Payment not found.");
     }
 
-    if (payment.status === "void") {
-      throw new ApiError(400, "Voided payments cannot be edited.");
+    if (payment.status !== "posted") {
+      throw new ApiError(400, "Only posted payments can be edited.");
     }
 
     const nextAmount = paymentAmount === undefined ? Number(payment.amount) : paymentAmount;
@@ -785,5 +1016,9 @@ module.exports = {
   listPayments,
   createPayment,
   previewPaymentImport,
+  listPaymentSuspense,
+  voidPaymentToSuspense,
+  reapplyPaymentSuspense,
+  discardPaymentSuspense,
   updatePayment
 };

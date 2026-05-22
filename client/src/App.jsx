@@ -1,23 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import Layout, { pageAccess as access } from "./components/Layout";
-import AuditTrailPage from "./pages/AuditTrailPage";
-import BillsPage from "./pages/BillsPage";
-import BillingSetupPage from "./pages/BillingSetupPage";
-import BusinessSettingsPage from "./pages/BusinessSettingsPage";
-import CustomersPage from "./pages/CustomersPage";
-import DashboardPage from "./pages/DashboardPage";
-import ExpensesPage from "./pages/ExpensesPage";
 import LoginPage from "./pages/LoginPage";
-import MaintenancePage from "./pages/MaintenancePage";
-import PaymentsPage from "./pages/PaymentsPage";
 import PasswordChangePage from "./pages/PasswordChangePage";
-import PortalPage from "./pages/PortalPage";
-import RatesPage from "./pages/RatesPage";
-import ReadingsPage from "./pages/ReadingsPage";
-import ReportsPage from "./pages/ReportsPage";
-import UsersPage from "./pages/UsersPage";
-import ZonesPage from "./pages/ZonesPage";
 import { api } from "./services/api";
+
+const AuditTrailPage = lazy(() => import("./pages/AuditTrailPage"));
+const BillsPage = lazy(() => import("./pages/BillsPage"));
+const BillingSetupPage = lazy(() => import("./pages/BillingSetupPage"));
+const BusinessSettingsPage = lazy(() => import("./pages/BusinessSettingsPage"));
+const CustomersPage = lazy(() => import("./pages/CustomersPage"));
+const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const ExpensesPage = lazy(() => import("./pages/ExpensesPage"));
+const MaintenancePage = lazy(() => import("./pages/MaintenancePage"));
+const PaymentsPage = lazy(() => import("./pages/PaymentsPage"));
+const PortalPage = lazy(() => import("./pages/PortalPage"));
+const RatesPage = lazy(() => import("./pages/RatesPage"));
+const ReadingsPage = lazy(() => import("./pages/ReadingsPage"));
+const ReportsPage = lazy(() => import("./pages/ReportsPage"));
+const UsersPage = lazy(() => import("./pages/UsersPage"));
+const ZonesPage = lazy(() => import("./pages/ZonesPage"));
 
 const getSavedUser = () => {
   const saved = localStorage.getItem("agua_user");
@@ -119,8 +120,25 @@ function App() {
 
   return (
     <Layout appName={appName} user={user} currentPage={currentPage} onNavigate={setCurrentPage} onLogout={handleLogout}>
-      {pages[currentPage] || pages.dashboard}
+      <Suspense
+        fallback={
+          <div className="panel">
+            <EmptyPageMessage />
+          </div>
+        }
+      >
+        {pages[currentPage] || pages.dashboard}
+      </Suspense>
     </Layout>
+  );
+}
+
+function EmptyPageMessage() {
+  return (
+    <div className="empty-state">
+      <strong>Loading page</strong>
+      <span>Please wait.</span>
+    </div>
   );
 }
 

@@ -25,6 +25,7 @@
     "db:migrate:account-adjustments": "node src/db/runSqlFile.js database/migrations/017_account_closure_and_adjustments.sql",
     "db:migrate:penalty-policy": "node src/db/runSqlFile.js database/migrations/018_penalty_policy_and_waivers.sql",
     "db:migrate:tariff-effective-dates": "node src/db/runSqlFile.js database/migrations/019_tariff_effective_dates.sql",
+    "db:migrate:payment-suspense": "node src/db/runSqlFile.js database/migrations/020_payment_suspense.sql",
     "payment:check": "node src/db/paymentCheck.js",
     "db:seed": "node src/db/seed.js"
   },
