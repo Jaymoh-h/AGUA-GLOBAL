@@ -4,6 +4,7 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { jwtSecret, jwtExpiresIn } = require("../config/env");
+const { validatePassword } = require("../utils/passwordPolicy");
 
 const publicUser = (user) => ({
   id: user.id,
@@ -12,7 +13,9 @@ const publicUser = (user) => ({
   phone: user.phone,
   role: user.role,
   customer_id: user.customer_id,
-  must_change_password: Boolean(user.must_change_password)
+  must_change_password: Boolean(user.must_change_password),
+  password_changed_at: user.password_changed_at,
+  last_login_at: user.last_login_at
 });
 
 const login = asyncHandler(async (req, res) => {
@@ -31,7 +34,10 @@ const login = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Invalid email or password.");
   }
 
-  await pool.query("UPDATE users SET last_login_at = NOW() WHERE id = $1", [user.id]);
+  const loginResult = await pool.query(
+    "UPDATE users SET last_login_at = NOW() WHERE id = $1 RETURNING *",
+    [user.id]
+  );
 
   const token = jwt.sign({ id: user.id, role: user.role }, jwtSecret, {
     expiresIn: jwtExpiresIn
@@ -39,7 +45,7 @@ const login = asyncHandler(async (req, res) => {
 
   res.json({
     token,
-    user: publicUser(user)
+    user: publicUser(loginResult.rows[0])
   });
 });
 
@@ -54,8 +60,9 @@ const changePassword = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Current password and new password are required.");
   }
 
-  if (String(new_password).length < 8) {
-    throw new ApiError(400, "New password must be at least 8 characters.");
+  const passwordError = validatePassword(new_password, "New password");
+  if (passwordError) {
+    throw new ApiError(400, passwordError);
   }
 
   const { rows } = await pool.query("SELECT * FROM users WHERE id = $1 AND is_active = TRUE", [req.user.id]);
@@ -73,7 +80,7 @@ const changePassword = asyncHandler(async (req, res) => {
          password_changed_at = NOW(),
          updated_at = NOW()
      WHERE id = $2
-     RETURNING id, customer_id, name, email, phone, role, is_active, must_change_password`,
+     RETURNING id, customer_id, name, email, phone, role, is_active, must_change_password, password_changed_at, last_login_at`,
     [passwordHash, req.user.id]
   );
 

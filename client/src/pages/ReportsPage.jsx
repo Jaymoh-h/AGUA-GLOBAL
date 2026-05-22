@@ -1,9 +1,10 @@
-import { FileSpreadsheet, Printer, RefreshCw } from "lucide-react";
+import { Download, FileSpreadsheet, Printer, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import StatCard from "../components/StatCard";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
+import { downloadJson } from "../utils/csvTemplate";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const number = (value) => Number(value || 0).toLocaleString();
@@ -59,7 +60,7 @@ const accountantReportTitles = {
   expenseRegister: "Expense Register"
 };
 
-function ReportsPage() {
+function ReportsPage({ user }) {
   const [data, setData] = useState(null);
   const [accountantData, setAccountantData] = useState(null);
   const [businessSettings, setBusinessSettings] = useState(null);
@@ -69,9 +70,13 @@ function ReportsPage() {
   const [message, setMessage] = useState("");
   const [accountantMessage, setAccountantMessage] = useState("");
   const [printAllRows, setPrintAllRows] = useState(false);
+  const [backupMessage, setBackupMessage] = useState("");
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [dataQuality, setDataQuality] = useState([]);
 
   useEffect(() => {
     api.reports.summary().then(setData).catch((err) => setMessage(err.message));
+    api.reports.dataQuality().then(setDataQuality).catch(() => {});
     api.businessSettings.get().then(setBusinessSettings).catch(() => {});
   }, []);
 
@@ -135,6 +140,74 @@ function ReportsPage() {
     setPrintAllRows(false);
   };
 
+  const downloadBackupPack = async () => {
+    setBackupMessage("");
+    setBackupLoading(true);
+    try {
+      const [
+        customers,
+        readings,
+        bills,
+        payments,
+        expenses,
+        rates,
+        zones,
+        billingPeriods,
+        billingSettings,
+        businessSettingsRows,
+        maintenanceRequests,
+        users,
+        adjustments,
+        auditEvents
+      ] = await Promise.all([
+        api.customers.list(),
+        api.readings.list(),
+        api.bills.list(),
+        api.payments.list(),
+        api.expenses.list(),
+        api.rates.list(),
+        api.zones.list(),
+        api.billing.periods.list(),
+        api.billing.settings.get(),
+        api.businessSettings.get(),
+        api.maintenance.list(),
+        api.users.list(),
+        api.adjustments.list(),
+        api.auditEvents.list()
+      ]);
+
+      downloadJson(`agua-backup-${localDateInput()}.json`, {
+        exported_at: new Date().toISOString(),
+        exported_by: {
+          id: user?.id,
+          name: user?.name,
+          email: user?.email
+        },
+        datasets: {
+          customers,
+          readings,
+          bills,
+          payments,
+          expenses,
+          rates,
+          zones,
+          billing_periods: billingPeriods,
+          billing_settings: billingSettings,
+          business_settings: businessSettingsRows,
+          maintenance_requests: maintenanceRequests,
+          users,
+          adjustments,
+          audit_events: auditEvents
+        }
+      });
+      setBackupMessage("Backup downloaded.");
+    } catch (err) {
+      setBackupMessage(err.message);
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
   const managementPrintTitle = managementReportTitles[printScope === "management" ? printTarget : "all"] || "Management Reports";
   const accountantPrintTitle = accountantReportTitles[printScope === "accountant" ? printTarget : "all"] || "Accountant Report";
   const maintenanceRegisterTable = useTableControls(data?.maintenanceRegister || [], {
@@ -184,6 +257,54 @@ function ReportsPage() {
           <Printer size={18} />
         </button>
       </header>
+
+      {user?.role === "admin" ? (
+        <div className="panel screen-only">
+          <div className="panel-heading">
+            <h3>Backup Pack</h3>
+            <button type="button" onClick={downloadBackupPack} disabled={backupLoading}>
+              <Download size={17} />
+              {backupLoading ? "Preparing..." : "Download backup"}
+            </button>
+          </div>
+          {backupMessage ? <p className="form-note">{backupMessage}</p> : null}
+        </div>
+      ) : null}
+
+      <div className="panel screen-only">
+        <div className="panel-heading">
+          <h3>Data Quality Checks</h3>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Check</th>
+                <th>Severity</th>
+                <th>Count</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dataQuality.map((check) => (
+                <tr key={check.key}>
+                  <td>{check.label}</td>
+                  <td>{label(check.severity)}</td>
+                  <td>{number(check.count)}</td>
+                  <td>{check.detail}</td>
+                </tr>
+              ))}
+              {!dataQuality.length ? (
+                <tr>
+                  <td colSpan="4" className="muted">
+                    No checks available.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div className={`print-surface report-print report-print-management report-print-${printTarget} ${printScope === "management" ? "active-print-surface" : ""}`}>
         <div className="report-print-header">

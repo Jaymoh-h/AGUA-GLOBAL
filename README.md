@@ -191,7 +191,7 @@ npm run dev
 
 Default API URL: `http://localhost:5000/api`
 
-Demo admin login:
+Temporary demo admin login:
 
 ```text
 Email: admin@agua.local
@@ -205,6 +205,8 @@ reader@agua.local / Reader@123
 accountant@agua.local / Accountant@123
 jane@agua.local / Customer@123
 ```
+
+Seeded users are marked as temporary-password accounts and must set a new password after first login.
 
 ### 3. Run The Client
 

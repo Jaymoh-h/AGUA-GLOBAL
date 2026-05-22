@@ -32,6 +32,10 @@ function DashboardPage() {
         <StatCard label="Cash collected" value={money(data.summary.cash_collected)} detail="Posted payments" />
         <StatCard label="Bills due" value={data.summary.bills_due} detail="Unpaid or partial" />
         <StatCard label="Arrears" value={money(data.summary.arrears)} detail="Outstanding balance" />
+        <StatCard label="Overdue" value={data.operations?.overdue_bills || 0} detail={money(data.operations?.overdue_amount)} />
+        <StatCard label="Missing readings" value={data.operations?.missing_current_readings || 0} detail="Current month" />
+        <StatCard label="Inactive with debt" value={data.operations?.inactive_accounts_with_debt || 0} detail="Closed accounts" />
+        <StatCard label="Open maintenance" value={data.operations?.open_maintenance || 0} detail="Open or in progress" />
       </div>
 
       <section className="workspace-grid">
@@ -76,6 +80,35 @@ function DashboardPage() {
                     <td>
                       <StatusBadge status={bill.status} />
                     </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-heading">
+            <h3>High Consumption</h3>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Period</th>
+                  <th>Units</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data.highConsumption || []).map((bill) => (
+                  <tr key={bill.id}>
+                    <td>
+                      <strong>{bill.customer_name}</strong>
+                      <small>{bill.acc_number}</small>
+                    </td>
+                    <td>{bill.bill_number || bill.billing_month?.slice(0, 10)}</td>
+                    <td>{units(bill.units_used)}</td>
                   </tr>
                 ))}
               </tbody>

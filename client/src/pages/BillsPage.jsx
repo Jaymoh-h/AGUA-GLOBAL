@@ -76,6 +76,9 @@ function BillsPage({ user }) {
       billTable.filteredRows
     );
   };
+  const selectedTariff = selectedBill?.tariff_snapshot || {};
+  const selectedTariffBlocks = Array.isArray(selectedTariff.blocks) ? selectedTariff.blocks : [];
+  const selectedPenalties = selectedBill?.penalty_applications || [];
 
   return (
     <section className="page-stack">
@@ -275,6 +278,95 @@ function BillsPage({ user }) {
               </tbody>
             </table>
           </div>
+
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Calculation Basis</th>
+                  <th>Value</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Tariff</td>
+                  <td>
+                    {selectedTariff.name || "-"}
+                    <small>
+                      {[
+                        selectedTariff.effective_from ? `effective ${date(selectedTariff.effective_from)}` : null,
+                        selectedTariff.version_id ? `version ${selectedTariff.version_id}` : null
+                      ]
+                        .filter(Boolean)
+                        .join(" | ") || "-"}
+                    </small>
+                  </td>
+                </tr>
+                <tr>
+                  <td>Tariff type</td>
+                  <td>{label(selectedTariff.tariff_type || "flat")}</td>
+                </tr>
+                <tr>
+                  <td>Usage formula</td>
+                  <td>
+                    {Number(selectedBill.units_used || 0).toLocaleString()} units x {money(selectedBill.rate)}
+                    <small>Subtotal: {money(selectedBill.subtotal_amount || selectedBill.amount)}</small>
+                  </td>
+                </tr>
+                {selectedTariffBlocks.length ? (
+                  <tr>
+                    <td>Block rows</td>
+                    <td>
+                      {selectedTariffBlocks
+                        .map((block) => {
+                          const from = Number(block.min_units || 0).toLocaleString();
+                          const to = block.max_units === null || block.max_units === undefined ? "above" : Number(block.max_units).toLocaleString();
+                          return `${from}-${to}: ${money(block.unit_rate)}`;
+                        })
+                        .join(" | ")}
+                    </td>
+                  </tr>
+                ) : null}
+                <tr>
+                  <td>Principal basis</td>
+                  <td>
+                    {money(selectedBill.subtotal_amount || selectedBill.amount)} usage + {money(selectedBill.fixed_charge_amount)} fixed
+                    <small>Penalty and VAT are shown separately in the charge table.</small>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {selectedPenalties.length ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Penalty Month</th>
+                    <th>Principal</th>
+                    <th>Penalty</th>
+                    <th>Status</th>
+                    <th>Waiver</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedPenalties.map((penalty) => (
+                    <tr key={penalty.id}>
+                      <td>{date(penalty.application_month)}</td>
+                      <td>{money(penalty.principal_amount)}</td>
+                      <td>{money(penalty.penalty_amount)}</td>
+                      <td>{penalty.status}</td>
+                      <td>
+                        {penalty.waived_at ? date(penalty.waived_at) : "-"}
+                        <small>{penalty.waiver_reason || penalty.waived_by_name || ""}</small>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
 
           <div className="receipt-total">
             <span>Total billed</span>

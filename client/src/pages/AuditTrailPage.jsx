@@ -19,6 +19,17 @@ const summarizeSnapshot = (event) => {
   return "-";
 };
 
+const importSummary = (event) => {
+  const data = event.after_data || {};
+  const parts = [
+    data.totalRows !== undefined ? `${data.totalRows} rows` : null,
+    data.importedRows !== undefined ? `${data.importedRows} imported` : null,
+    data.billCount !== undefined ? `${data.billCount} bills` : null,
+    data.totalAmount !== undefined ? `KES ${Number(data.totalAmount || 0).toLocaleString()}` : null
+  ].filter(Boolean);
+  return parts.length ? parts.join(" | ") : summarizeSnapshot(event);
+};
+
 function AuditTrailPage() {
   const [events, setEvents] = useState([]);
   const [message, setMessage] = useState("");
@@ -28,6 +39,10 @@ function AuditTrailPage() {
   }, []);
   const eventTable = useTableControls(events, {
     searchFields: ["actor_name", "actor_email", "action", "entity_type", "entity_id", "reason", "created_at"]
+  });
+  const importEvents = events.filter((event) => String(event.action || "").includes("_import."));
+  const importTable = useTableControls(importEvents, {
+    searchFields: ["actor_name", "actor_email", "action", "entity_type", "reason", "created_at"]
   });
   const exportEvents = () => {
     downloadCsvRows(
@@ -44,6 +59,20 @@ function AuditTrailPage() {
       eventTable.filteredRows
     );
   };
+  const exportImports = () => {
+    downloadCsvRows(
+      "import-activity.csv",
+      [
+        { header: "Time", value: (row) => row.created_at },
+        { header: "Actor", value: (row) => row.actor_name || "System" },
+        { header: "Actor Email", value: (row) => row.actor_email },
+        { header: "Action", value: (row) => row.action },
+        { header: "Summary", value: importSummary },
+        { header: "Reason", value: (row) => row.reason }
+      ],
+      importTable.filteredRows
+    );
+  };
 
   return (
     <section className="page-stack">
@@ -55,6 +84,53 @@ function AuditTrailPage() {
       </header>
 
       {message ? <p className="form-note">{message}</p> : null}
+      <div className="panel">
+        <div className="panel-heading">
+          <h3>Import Activity</h3>
+          <div className="row-actions">
+            <History size={18} />
+            <button type="button" onClick={exportImports}>
+              <Download size={16} />
+              Export
+            </button>
+          </div>
+        </div>
+        <TableControls table={importTable} label="imports" placeholder="Search imports" />
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Actor</th>
+                <th>Import</th>
+                <th>Summary</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {importTable.visibleRows.map((event) => (
+                <tr key={event.id}>
+                  <td>{formatDate(event.created_at)}</td>
+                  <td>
+                    <strong>{event.actor_name || "System"}</strong>
+                    <small>{event.actor_email || ""}</small>
+                  </td>
+                  <td>{event.action.replace("_import.committed", "")}</td>
+                  <td>{importSummary(event)}</td>
+                  <td>{event.reason || "-"}</td>
+                </tr>
+              ))}
+              {!importTable.visibleRows.length ? (
+                <tr>
+                  <td colSpan="5" className="muted">
+                    No import activity found.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </div>
       <div className="panel">
         <div className="panel-heading">
           <h3>Recent Events</h3>

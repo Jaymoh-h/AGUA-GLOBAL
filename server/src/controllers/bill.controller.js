@@ -50,7 +50,20 @@ const getBill = asyncHandler(async (req, res) => {
   if (!rows[0]) {
     throw new ApiError(404, "Bill not found.");
   }
-  res.json(rows[0]);
+
+  const penalties = await pool.query(
+    `SELECT bpa.*, waived.name AS waived_by_name
+     FROM bill_penalty_applications bpa
+     LEFT JOIN users waived ON waived.id = bpa.waived_by
+     WHERE bpa.bill_id = $1
+     ORDER BY bpa.application_month DESC, bpa.id DESC`,
+    [req.params.id]
+  );
+
+  res.json({
+    ...rows[0],
+    penalty_applications: penalties.rows
+  });
 });
 
 const markBillStatus = asyncHandler(async (req, res) => {

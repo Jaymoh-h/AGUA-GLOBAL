@@ -52,7 +52,8 @@ export const api = {
     accountant: (params = {}) => {
       const query = new URLSearchParams(params);
       return request(`/reports/accountant${query.toString() ? `?${query}` : ""}`);
-    }
+    },
+    dataQuality: () => request("/reports/data-quality")
   },
   portal: {
     dashboard: () => request("/portal/dashboard"),

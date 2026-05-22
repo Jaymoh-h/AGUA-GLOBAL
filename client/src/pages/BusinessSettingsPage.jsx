@@ -1,4 +1,4 @@
-import { Building2, Save, Upload } from "lucide-react";
+import { Building2, Save, Settings2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, assetUrl } from "../services/api";
 
@@ -20,9 +20,11 @@ const blankSettings = {
 };
 
 const valueOrEmpty = (value) => value ?? "";
+const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 
 function BusinessSettingsPage({ user }) {
   const [settings, setSettings] = useState(blankSettings);
+  const [billingSettings, setBillingSettings] = useState(null);
   const [message, setMessage] = useState("");
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const canEdit = user.role === "admin";
@@ -49,6 +51,7 @@ function BusinessSettingsPage({ user }) {
         })
       )
       .catch((err) => setMessage(err.message));
+    api.billing.settings.get().then(setBillingSettings).catch(() => {});
   }, []);
 
   const setField = (field, value) => setSettings((current) => ({ ...current, [field]: value }));
@@ -208,6 +211,54 @@ function BusinessSettingsPage({ user }) {
         </form>
 
         <div className="page-stack wide-panel">
+          {billingSettings ? (
+            <div className="panel">
+              <div className="panel-heading">
+                <h3>Billing Settings Snapshot</h3>
+                <Settings2 size={18} />
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <tbody>
+                    <tr>
+                      <td>Deposit</td>
+                      <td>
+                        {billingSettings.deposit_required ? "Required" : "Optional"}
+                        <small>{money(billingSettings.default_deposit_amount)}</small>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>Penalty</td>
+                      <td>
+                        {billingSettings.penalty_type}
+                        <small>
+                          {billingSettings.penalty_type === "percentage"
+                            ? `${Number(billingSettings.penalty_value || 0)}%`
+                            : money(billingSettings.penalty_value)}
+                          {` | ${billingSettings.penalty_grace_days || 0} grace day(s)`}
+                        </small>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>Bill numbering</td>
+                      <td>
+                        {billingSettings.bill_number_prefix || "BILL"}
+                        <small>Next {billingSettings.bill_number_next || 1}</small>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>Receipt numbering</td>
+                      <td>
+                        {billingSettings.receipt_number_prefix || "RCPT"}
+                        <small>Next {billingSettings.receipt_number_next || 1}</small>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+
           <form className="panel form-grid" onSubmit={save}>
             <div className="panel-heading">
               <h3>Payment Details</h3>

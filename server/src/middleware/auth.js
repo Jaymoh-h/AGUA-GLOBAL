@@ -14,7 +14,10 @@ const authenticate = async (req, _res, next) => {
 
     const payload = jwt.verify(token, jwtSecret);
     const { rows } = await pool.query(
-      "SELECT id, customer_id, name, email, phone, role, is_active, must_change_password FROM users WHERE id = $1",
+      `SELECT id, customer_id, name, email, phone, role, is_active,
+        must_change_password, password_changed_at, last_login_at
+       FROM users
+       WHERE id = $1`,
       [payload.id]
     );
 
@@ -23,6 +26,12 @@ const authenticate = async (req, _res, next) => {
     }
 
     req.user = rows[0];
+    if (
+      req.user.must_change_password &&
+      !["/api/auth/me", "/api/auth/change-password"].includes(req.originalUrl)
+    ) {
+      throw new ApiError(403, "Password change required before continuing.");
+    }
     next();
   } catch (error) {
     next(error.statusCode ? error : new ApiError(401, "Invalid token."));

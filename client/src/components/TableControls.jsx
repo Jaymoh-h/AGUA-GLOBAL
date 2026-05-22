@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 const pageSizeOptions = [10, 25, 50, 1000000];
@@ -71,6 +71,11 @@ function TableControls({ table, label = "rows", placeholder = "Search table" }) 
           placeholder={placeholder}
           type="search"
         />
+        {table.query ? (
+          <button type="button" onClick={() => table.setQuery("")} title="Clear search">
+            <X size={14} />
+          </button>
+        ) : null}
       </label>
       <div className="table-pager">
         <span>

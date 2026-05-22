@@ -50,12 +50,12 @@ SET rate_id = CASE
       ELSE zone_id
     END;
 
-INSERT INTO users (name, email, phone, role, customer_id, password_hash)
+INSERT INTO users (name, email, phone, role, customer_id, password_hash, must_change_password)
 VALUES
-  ('System Admin', 'admin@agua.local', '+254700000001', 'admin', NULL, crypt('Admin@123', gen_salt('bf'))),
-  ('Mary Meter Reader', 'reader@agua.local', '+254700000002', 'meter_reader', NULL, crypt('Reader@123', gen_salt('bf'))),
-  ('Alex Accountant', 'accountant@agua.local', '+254700000003', 'accountant', NULL, crypt('Accountant@123', gen_salt('bf'))),
-  ('Jane Wanjiku', 'jane@agua.local', '+254711111111', 'customer', (SELECT id FROM customers WHERE acc_number = 'AG-0001'), crypt('Customer@123', gen_salt('bf')))
+  ('System Admin', 'admin@agua.local', '+254700000001', 'admin', NULL, crypt('Admin@123', gen_salt('bf')), TRUE),
+  ('Mary Meter Reader', 'reader@agua.local', '+254700000002', 'meter_reader', NULL, crypt('Reader@123', gen_salt('bf')), TRUE),
+  ('Alex Accountant', 'accountant@agua.local', '+254700000003', 'accountant', NULL, crypt('Accountant@123', gen_salt('bf')), TRUE),
+  ('Jane Wanjiku', 'jane@agua.local', '+254711111111', 'customer', (SELECT id FROM customers WHERE acc_number = 'AG-0001'), crypt('Customer@123', gen_salt('bf')), TRUE)
 ON CONFLICT (email) DO NOTHING;
 
 INSERT INTO billing_settings (

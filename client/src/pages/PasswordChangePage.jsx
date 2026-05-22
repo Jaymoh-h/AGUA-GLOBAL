@@ -17,8 +17,15 @@ function PasswordChangePage({ user, onChanged, onLogout }) {
     event.preventDefault();
     setMessage("");
 
-    if (form.new_password.length < 8) {
-      setMessage("New password must be at least 8 characters.");
+    const categories = [
+      /[a-z]/.test(form.new_password),
+      /[A-Z]/.test(form.new_password),
+      /\d/.test(form.new_password),
+      /[^A-Za-z0-9]/.test(form.new_password)
+    ].filter(Boolean).length;
+
+    if (form.new_password.length < 8 || categories < 3) {
+      setMessage("New password must be at least 8 characters and include three of uppercase, lowercase, numbers, and symbols.");
       return;
     }
     if (form.new_password !== form.confirm_password) {
@@ -65,9 +72,11 @@ function PasswordChangePage({ user, onChanged, onLogout }) {
             value={form.new_password}
             onChange={(event) => setField("new_password", event.target.value)}
             type="password"
+            autoComplete="new-password"
             minLength="8"
             required
           />
+          <small>Use at least 8 characters with three of uppercase, lowercase, numbers, and symbols.</small>
         </label>
         <label>
           Confirm new password

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import Layout from "./components/Layout";
+import Layout, { pageAccess as access } from "./components/Layout";
 import AuditTrailPage from "./pages/AuditTrailPage";
 import BillsPage from "./pages/BillsPage";
 import BillingSetupPage from "./pages/BillingSetupPage";
@@ -18,24 +18,6 @@ import ReportsPage from "./pages/ReportsPage";
 import UsersPage from "./pages/UsersPage";
 import ZonesPage from "./pages/ZonesPage";
 import { api } from "./services/api";
-
-const access = {
-  portal: ["customer"],
-  dashboard: ["admin", "meter_reader", "accountant"],
-  customers: ["admin", "meter_reader", "accountant"],
-  readings: ["admin", "meter_reader", "accountant"],
-  bills: ["admin", "accountant", "customer"],
-  billing: ["admin", "accountant"],
-  business: ["admin", "accountant"],
-  audit: ["admin", "accountant"],
-  payments: ["admin", "accountant"],
-  expenses: ["admin", "accountant"],
-  maintenance: ["admin", "accountant", "meter_reader"],
-  reports: ["admin", "accountant"],
-  rates: ["admin", "accountant"],
-  zones: ["admin", "accountant"],
-  users: ["admin"]
-};
 
 const getSavedUser = () => {
   const saved = localStorage.getItem("agua_user");

@@ -13,6 +13,11 @@ const blank = {
   is_active: true
 };
 
+const formatDateTime = (value) => {
+  if (!value) return "Never";
+  return new Date(value).toLocaleString();
+};
+
 function UsersPage({ user: currentUser }) {
   const [users, setUsers] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -101,7 +106,18 @@ function UsersPage({ user: currentUser }) {
     }
   };
   const userTable = useTableControls(users, {
-    searchFields: ["name", "email", "phone", "role", "customer_acc_number", "customer_name", "is_active"]
+    searchFields: [
+      "name",
+      "email",
+      "phone",
+      "role",
+      "customer_acc_number",
+      "customer_name",
+      "is_active",
+      "must_change_password",
+      "last_login_at",
+      "password_changed_at"
+    ]
   });
 
   return (
@@ -163,8 +179,10 @@ function UsersPage({ user: currentUser }) {
               value={form.password}
               onChange={(event) => setField("password", event.target.value)}
               type="password"
+              autoComplete="new-password"
               required={!editingId}
             />
+            <small>Use at least 8 characters with three of uppercase, lowercase, numbers, and symbols.</small>
           </label>
           <label className="checkbox-row">
             <input
@@ -196,6 +214,7 @@ function UsersPage({ user: currentUser }) {
                   <th>Role</th>
                   <th>Customer</th>
                   <th>Password</th>
+                  <th>Last Login</th>
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
@@ -217,7 +236,9 @@ function UsersPage({ user: currentUser }) {
                       <span className={`status ${account.must_change_password ? "status-high" : "status-valid"}`}>
                         {account.must_change_password ? "Temporary" : "Set"}
                       </span>
+                      <small>Changed: {formatDateTime(account.password_changed_at)}</small>
                     </td>
+                    <td>{formatDateTime(account.last_login_at)}</td>
                     <td>
                       <span className={`status ${account.is_active ? "status-valid" : "status-locked"}`}>
                         {account.is_active ? "Active" : "Locked"}

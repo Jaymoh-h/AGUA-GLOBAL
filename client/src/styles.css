@@ -759,7 +759,7 @@ button:disabled {
   max-width: 360px;
 }
 
-.table-search svg {
+.table-search > svg {
   position: absolute;
   left: 10px;
   top: 50%;
@@ -770,6 +770,20 @@ button:disabled {
 
 .table-search input {
   padding-left: 32px;
+  padding-right: 34px;
+}
+
+.table-search button {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  width: 26px;
+  min-height: 26px;
+  padding: 0;
+  transform: translateY(-50%);
+  border-radius: 6px;
+  background: transparent;
+  color: #637083;
 }
 
 .table-pager {

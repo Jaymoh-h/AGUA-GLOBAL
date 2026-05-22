@@ -3,6 +3,7 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
+const { validatePassword } = require("../utils/passwordPolicy");
 
 const roles = ["admin", "meter_reader", "accountant", "customer"];
 
@@ -16,6 +17,14 @@ const publicColumns = `
 const normalizeCustomerId = (role, customerId) => {
   if (role !== "customer") return null;
   return customerId ? Number(customerId) : null;
+};
+
+const countActiveAdminsExcluding = async (client, userId) => {
+  const { rows } = await client.query(
+    "SELECT COUNT(*)::integer AS count FROM users WHERE role = 'admin' AND is_active = TRUE AND id <> $1",
+    [userId]
+  );
+  return rows[0]?.count || 0;
 };
 
 const listUsers = asyncHandler(async (_req, res) => {
@@ -37,6 +46,10 @@ const createUser = asyncHandler(async (req, res) => {
 
   if (!roles.includes(role)) {
     throw new ApiError(400, "Invalid role.");
+  }
+  const passwordError = validatePassword(password, "Temporary password");
+  if (passwordError) {
+    throw new ApiError(400, passwordError);
   }
 
   const nextCustomerId = normalizeCustomerId(role, customer_id);
@@ -100,6 +113,15 @@ const updateUser = asyncHandler(async (req, res) => {
     if (Number(req.params.id) === Number(req.user.id) && !nextIsActive) {
       throw new ApiError(400, "You cannot deactivate your own account.");
     }
+    if (Number(req.params.id) === Number(req.user.id) && nextRole !== "admin") {
+      throw new ApiError(400, "You cannot remove your own admin role.");
+    }
+    if (before.role === "admin" && (!nextIsActive || nextRole !== "admin")) {
+      const otherActiveAdmins = await countActiveAdminsExcluding(client, req.params.id);
+      if (otherActiveAdmins === 0) {
+        throw new ApiError(400, "At least one active admin account is required.");
+      }
+    }
 
     const nextCustomerId =
       customer_id === undefined ? normalizeCustomerId(nextRole, before.customer_id) : normalizeCustomerId(nextRole, customer_id);
@@ -108,6 +130,12 @@ const updateUser = asyncHandler(async (req, res) => {
     }
 
     const nextPhone = phone === undefined ? before.phone : phone || null;
+    if (password) {
+      const passwordError = validatePassword(password, "Temporary password");
+      if (passwordError) {
+        throw new ApiError(400, passwordError);
+      }
+    }
     const passwordHash = password ? await bcrypt.hash(password, 10) : null;
     const { rows } = await client.query(
       `WITH updated AS (

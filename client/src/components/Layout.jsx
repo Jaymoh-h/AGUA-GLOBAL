@@ -18,7 +18,7 @@ import {
   Wrench
 } from "lucide-react";
 
-const navItems = [
+export const navItems = [
   { key: "portal", label: "Portal", icon: MonitorSmartphone, roles: ["customer"] },
   { key: "dashboard", label: "Dashboard", icon: BarChart3, roles: ["admin", "meter_reader", "accountant"] },
   { key: "customers", label: "Customers", icon: Users, roles: ["admin", "meter_reader", "accountant"] },
@@ -35,6 +35,8 @@ const navItems = [
   { key: "zones", label: "Zones", icon: MapPinned, roles: ["admin", "accountant"] },
   { key: "users", label: "Users", icon: Receipt, roles: ["admin"] }
 ];
+
+export const pageAccess = Object.fromEntries(navItems.map((item) => [item.key, item.roles]));
 
 function Layout({ appName, user, currentPage, onNavigate, onLogout, children }) {
   const visibleItems = navItems.filter((item) => item.roles.includes(user.role));

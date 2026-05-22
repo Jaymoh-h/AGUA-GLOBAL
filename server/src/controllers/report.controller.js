@@ -491,7 +491,84 @@ const getAccountantReports = asyncHandler(async (req, res) => {
   });
 });
 
+const getDataQualityChecks = asyncHandler(async (_req, res) => {
+  const checks = await pool.query(
+    `SELECT *
+     FROM (
+       SELECT
+         'customers_without_active_meter' AS key,
+         'Customers without active meter' AS label,
+         COUNT(*)::integer AS count,
+         'Active customers should have one active meter before readings are imported.' AS detail,
+         'high' AS severity
+       FROM customers c
+       WHERE c.status = 'active'
+         AND NOT EXISTS (
+           SELECT 1 FROM meters m WHERE m.customer_id = c.id AND m.status = 'active'
+         )
+       UNION ALL
+       SELECT
+         'duplicate_active_meter_numbers',
+         'Duplicate active meter numbers',
+         COUNT(*)::integer,
+         'Meter numbers should be unique among active meters.',
+         'high'
+       FROM (
+         SELECT meter_number
+         FROM meters
+         WHERE status = 'active' AND meter_number IS NOT NULL
+         GROUP BY meter_number
+         HAVING COUNT(*) > 1
+       ) duplicates
+       UNION ALL
+       SELECT
+         'bills_without_current_reading',
+         'Bills without current reading link',
+         COUNT(*)::integer,
+         'Every generated bill should point back to the reading that created it.',
+         'medium'
+       FROM bills
+       WHERE current_reading_id IS NULL
+       UNION ALL
+       SELECT
+         'payments_with_unallocated_credit',
+         'Payments with unallocated credit',
+         COUNT(*)::integer,
+         'Unallocated amounts are valid credits, but should be reviewed regularly.',
+         'low'
+       FROM payments
+       WHERE status = 'posted' AND unallocated_amount > 0
+       UNION ALL
+       SELECT
+         'inactive_accounts_with_debt',
+         'Inactive accounts with debt',
+         COUNT(DISTINCT c.id)::integer,
+         'Closed accounts with debt can still accept payment, but should be tracked.',
+         'medium'
+       FROM customers c
+       JOIN bills b ON b.customer_id = c.id
+       WHERE c.status = 'inactive'
+         AND b.status <> 'paid'
+         AND COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount) > 0
+       UNION ALL
+       SELECT
+         'readings_without_bill',
+         'Readings that expected a bill but have none',
+         COUNT(*)::integer,
+         'A reading with a previous reading normally creates a bill.',
+         'medium'
+       FROM meter_readings mr
+       LEFT JOIN bills b ON b.current_reading_id = mr.id
+       WHERE mr.previous_reading_id IS NOT NULL AND b.id IS NULL
+     ) checks
+     ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, count DESC, label ASC`
+  );
+
+  res.json(checks.rows);
+});
+
 module.exports = {
   getReportsSummary,
-  getAccountantReports
+  getAccountantReports,
+  getDataQualityChecks
 };
