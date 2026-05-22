@@ -1,6 +1,7 @@
 import { Download, Edit3, Eye, FileUp, Gauge, Replace, Save, Send } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
+import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
@@ -671,25 +672,29 @@ function ReadingsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {readingTable.visibleRows.map((reading) => (
-                    <tr key={reading.id}>
-                      <td>{reading.customer_name}</td>
-                      <td>{reading.acc_number}</td>
-                      <td>{reading.meter_number || "-"}</td>
-                      <td>
-                        {reading.previous_reading_value === null || reading.previous_reading_value === undefined
-                          ? "-"
-                          : Number(reading.previous_reading_value).toLocaleString()}
-                        <small>{reading.previous_reading_date?.slice(0, 10) || ""}</small>
-                      </td>
-                      <td>{Number(reading.reading_value).toLocaleString()}</td>
-                      <td>{reading.reading_date?.slice(0, 10)}</td>
-                      <td>{reading.created_by_name || "-"}</td>
-                      <td>
-                        <button type="button" onClick={() => edit(reading)}>Edit</button>
-                      </td>
-                    </tr>
-                  ))}
+                  {readingTable.visibleRows.length ? (
+                    readingTable.visibleRows.map((reading) => (
+                      <tr key={reading.id}>
+                        <td>{reading.customer_name}</td>
+                        <td>{reading.acc_number}</td>
+                        <td>{reading.meter_number || "-"}</td>
+                        <td>
+                          {reading.previous_reading_value === null || reading.previous_reading_value === undefined
+                            ? "-"
+                            : Number(reading.previous_reading_value).toLocaleString()}
+                          <small>{reading.previous_reading_date?.slice(0, 10) || ""}</small>
+                        </td>
+                        <td>{Number(reading.reading_value).toLocaleString()}</td>
+                        <td>{reading.reading_date?.slice(0, 10)}</td>
+                        <td>{reading.created_by_name || "-"}</td>
+                        <td>
+                          <button type="button" onClick={() => edit(reading)}>Edit</button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <EmptyTableRow colSpan={8} title="No readings found" detail="Record readings or adjust the filters." />
+                  )}
                 </tbody>
               </table>
             </div>
@@ -749,26 +754,30 @@ function ReadingsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {meterEventTable.visibleRows.map((event) => (
-                    <tr key={event.id}>
-                      <td>
-                        <strong>{event.customer_name}</strong>
-                        <small>{event.acc_number}</small>
-                      </td>
-                      <td>{event.event_date?.slice(0, 10)}</td>
-                      <td>{event.old_meter_number || "-"}</td>
-                      <td>{Number(event.old_final_reading || 0).toLocaleString()}</td>
-                      <td>{event.new_meter_number || "-"}</td>
-                      <td>{Number(event.new_initial_reading || 0).toLocaleString()}</td>
-                      <td>{event.reason || "-"}</td>
-                      <td>
-                        <button type="button" onClick={() => editMeterEvent(event)}>
-                          <Edit3 size={15} />
-                          Edit
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {meterEventTable.visibleRows.length ? (
+                    meterEventTable.visibleRows.map((event) => (
+                      <tr key={event.id}>
+                        <td>
+                          <strong>{event.customer_name}</strong>
+                          <small>{event.acc_number}</small>
+                        </td>
+                        <td>{event.event_date?.slice(0, 10)}</td>
+                        <td>{event.old_meter_number || "-"}</td>
+                        <td>{Number(event.old_final_reading || 0).toLocaleString()}</td>
+                        <td>{event.new_meter_number || "-"}</td>
+                        <td>{Number(event.new_initial_reading || 0).toLocaleString()}</td>
+                        <td>{event.reason || "-"}</td>
+                        <td>
+                          <button type="button" onClick={() => editMeterEvent(event)}>
+                            <Edit3 size={15} />
+                            Edit
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <EmptyTableRow colSpan={8} title="No meter events found" detail="Meter replacements will appear here." />
+                  )}
                 </tbody>
               </table>
             </div>

@@ -1,6 +1,7 @@
 import { CheckCircle2, Printer, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
+import { EmptyTableRow } from "../components/EmptyState";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
@@ -130,42 +131,46 @@ function BillsPage({ user }) {
               </tr>
             </thead>
             <tbody>
-              {billTable.visibleRows.map((bill) => (
-                <tr key={bill.id}>
-                  <td>
-                    <strong>{bill.customer_name}</strong>
-                    <small>{bill.acc_number}</small>
-                  </td>
-                  <td>
-                    <strong>{bill.billing_period_name || bill.billing_month?.slice(0, 10)}</strong>
-                    <small>
-                      {bill.bill_number || "-"}
-                      {bill.billing_period_status ? ` | ${bill.billing_period_status}` : ""}
-                    </small>
-                  </td>
-                  <td>{bill.due_date?.slice(0, 10) || "-"}</td>
-                  <td>{Number(bill.units_used).toLocaleString()}</td>
-                  <td>{Number(bill.rate).toLocaleString()}</td>
-                  <td>{money(bill.total_amount || bill.amount)}</td>
-                  <td>{money(bill.paid_amount)}</td>
-                  <td>{money(billBalance(bill))}</td>
-                  <td>
-                    <StatusBadge status={bill.status} />
-                  </td>
-                  <td className="row-actions">
-                    <button type="button" onClick={() => openBillPrint(bill.id)}>
-                      <Printer size={15} />
-                      Print
-                    </button>
-                    {canManage && bill.status !== "paid" ? (
-                      <button type="button" onClick={() => markPaid(bill.id)}>
-                        <CheckCircle2 size={15} />
-                        Mark paid
+              {billTable.visibleRows.length ? (
+                billTable.visibleRows.map((bill) => (
+                  <tr key={bill.id}>
+                    <td>
+                      <strong>{bill.customer_name}</strong>
+                      <small>{bill.acc_number}</small>
+                    </td>
+                    <td>
+                      <strong>{bill.billing_period_name || bill.billing_month?.slice(0, 10)}</strong>
+                      <small>
+                        {bill.bill_number || "-"}
+                        {bill.billing_period_status ? ` | ${bill.billing_period_status}` : ""}
+                      </small>
+                    </td>
+                    <td>{bill.due_date?.slice(0, 10) || "-"}</td>
+                    <td>{Number(bill.units_used).toLocaleString()}</td>
+                    <td>{Number(bill.rate).toLocaleString()}</td>
+                    <td>{money(bill.total_amount || bill.amount)}</td>
+                    <td>{money(bill.paid_amount)}</td>
+                    <td>{money(billBalance(bill))}</td>
+                    <td>
+                      <StatusBadge status={bill.status} />
+                    </td>
+                    <td className="row-actions">
+                      <button type="button" onClick={() => openBillPrint(bill.id)}>
+                        <Printer size={15} />
+                        Print
                       </button>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
+                      {canManage && bill.status !== "paid" ? (
+                        <button type="button" onClick={() => markPaid(bill.id)}>
+                          <CheckCircle2 size={15} />
+                          Mark paid
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <EmptyTableRow colSpan={10} title="No bills found" detail="Bills will appear here after readings are billed." />
+              )}
             </tbody>
           </table>
         </div>

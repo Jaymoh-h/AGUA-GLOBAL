@@ -1,5 +1,6 @@
 import { Edit3, RotateCcw, Save, UserPlus } from "lucide-react";
 import { useEffect, useState } from "react";
+import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 
@@ -220,45 +221,49 @@ function UsersPage({ user: currentUser }) {
                 </tr>
               </thead>
               <tbody>
-                {userTable.visibleRows.map((account) => (
-                  <tr key={account.id}>
-                    <td>
-                      <strong>{account.name}</strong>
-                      <small>{account.phone || "-"}</small>
-                    </td>
-                    <td>{account.email}</td>
-                    <td>{account.role.replace("_", " ")}</td>
-                    <td>
-                      <strong>{account.customer_acc_number || "-"}</strong>
-                      <small>{account.customer_name || ""}</small>
-                    </td>
-                    <td>
-                      <span className={`status ${account.must_change_password ? "status-high" : "status-valid"}`}>
-                        {account.must_change_password ? "Temporary" : "Set"}
-                      </span>
-                      <small>Changed: {formatDateTime(account.password_changed_at)}</small>
-                    </td>
-                    <td>{formatDateTime(account.last_login_at)}</td>
-                    <td>
-                      <span className={`status ${account.is_active ? "status-valid" : "status-locked"}`}>
-                        {account.is_active ? "Active" : "Locked"}
-                      </span>
-                    </td>
-                    <td className="row-actions">
-                      <button type="button" onClick={() => edit(account)}>
-                        <Edit3 size={15} />
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => toggleStatus(account)}
-                        disabled={Number(account.id) === Number(currentUser.id)}
-                      >
-                        {account.is_active ? "Lock" : "Unlock"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {userTable.visibleRows.length ? (
+                  userTable.visibleRows.map((account) => (
+                    <tr key={account.id}>
+                      <td>
+                        <strong>{account.name}</strong>
+                        <small>{account.phone || "-"}</small>
+                      </td>
+                      <td>{account.email}</td>
+                      <td>{account.role.replace("_", " ")}</td>
+                      <td>
+                        <strong>{account.customer_acc_number || "-"}</strong>
+                        <small>{account.customer_name || ""}</small>
+                      </td>
+                      <td>
+                        <span className={`status ${account.must_change_password ? "status-high" : "status-valid"}`}>
+                          {account.must_change_password ? "Temporary" : "Set"}
+                        </span>
+                        <small>Changed: {formatDateTime(account.password_changed_at)}</small>
+                      </td>
+                      <td>{formatDateTime(account.last_login_at)}</td>
+                      <td>
+                        <span className={`status ${account.is_active ? "status-valid" : "status-locked"}`}>
+                          {account.is_active ? "Active" : "Locked"}
+                        </span>
+                      </td>
+                      <td className="row-actions">
+                        <button type="button" onClick={() => edit(account)}>
+                          <Edit3 size={15} />
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleStatus(account)}
+                          disabled={Number(account.id) === Number(currentUser.id)}
+                        >
+                          {account.is_active ? "Lock" : "Unlock"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <EmptyTableRow colSpan={8} title="No users found" detail="Create a user or adjust the search." />
+                )}
               </tbody>
             </table>
           </div>

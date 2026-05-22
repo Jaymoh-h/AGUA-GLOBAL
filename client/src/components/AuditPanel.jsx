@@ -1,5 +1,6 @@
 import { History } from "lucide-react";
 import { useEffect, useState } from "react";
+import EmptyState from "./EmptyState";
 import { api } from "../services/api";
 
 const formatDate = (value) => (value ? new Date(value).toLocaleString() : "-");
@@ -61,7 +62,7 @@ function AuditPanel({ entityType, entityId, title = "Audit History" }) {
             </div>
           ))
         ) : (
-          <p className="muted">No audit events found.</p>
+          <EmptyState title="No audit events found" detail="Changes for this record will appear here." />
         )}
       </div>
     </div>

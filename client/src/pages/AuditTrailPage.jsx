@@ -1,5 +1,6 @@
 import { Download, History } from "lucide-react";
 import { useEffect, useState } from "react";
+import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 import { downloadCsvRows } from "../utils/csvTemplate";
@@ -121,11 +122,7 @@ function AuditTrailPage() {
                 </tr>
               ))}
               {!importTable.visibleRows.length ? (
-                <tr>
-                  <td colSpan="5" className="muted">
-                    No import activity found.
-                  </td>
-                </tr>
+                <EmptyTableRow colSpan={5} title="No import activity found" detail="Committed imports will appear here." />
               ) : null}
             </tbody>
           </table>
@@ -172,6 +169,9 @@ function AuditTrailPage() {
                   <td>{event.reason || "-"}</td>
                 </tr>
               ))}
+              {!eventTable.visibleRows.length ? (
+                <EmptyTableRow colSpan={6} title="No audit events found" detail="System activity will appear here as changes are made." />
+              ) : null}
             </tbody>
           </table>
         </div>

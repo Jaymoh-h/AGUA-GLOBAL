@@ -1,5 +1,6 @@
 import { CalendarPlus, Eye, ReceiptText, Save } from "lucide-react";
 import { useEffect, useState } from "react";
+import { EmptyTableRow } from "../components/EmptyState";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
@@ -359,30 +360,34 @@ function BillingSetupPage() {
                 </tr>
               </thead>
               <tbody>
-                {periodTable.visibleRows.map((period) => (
-                  <tr key={period.id}>
-                    <td>
-                      <strong>{period.name}</strong>
-                      <small>{period.period_start?.slice(0, 10)}</small>
-                    </td>
-                    <td>{period.closing_date?.slice(0, 10)}</td>
-                    <td>{period.due_date?.slice(0, 10)}</td>
-                    <td>{Number(period.bill_count || 0).toLocaleString()}</td>
-                    <td>{money(period.billed_total)}</td>
-                    <td>{money(period.balance_total)}</td>
-                    <td>
-                      <StatusBadge status={period.status} />
-                    </td>
-                    <td>
-                      <select value={period.status} onChange={(event) => updateStatus(period, event.target.value)}>
-                        <option value="draft">Draft</option>
-                        <option value="open">Open</option>
-                        <option value="closed">Closed</option>
-                        <option value="locked">Locked</option>
-                      </select>
-                    </td>
-                  </tr>
-                ))}
+                {periodTable.visibleRows.length ? (
+                  periodTable.visibleRows.map((period) => (
+                    <tr key={period.id}>
+                      <td>
+                        <strong>{period.name}</strong>
+                        <small>{period.period_start?.slice(0, 10)}</small>
+                      </td>
+                      <td>{period.closing_date?.slice(0, 10)}</td>
+                      <td>{period.due_date?.slice(0, 10)}</td>
+                      <td>{Number(period.bill_count || 0).toLocaleString()}</td>
+                      <td>{money(period.billed_total)}</td>
+                      <td>{money(period.balance_total)}</td>
+                      <td>
+                        <StatusBadge status={period.status} />
+                      </td>
+                      <td>
+                        <select value={period.status} onChange={(event) => updateStatus(period, event.target.value)}>
+                          <option value="draft">Draft</option>
+                          <option value="open">Open</option>
+                          <option value="closed">Closed</option>
+                          <option value="locked">Locked</option>
+                        </select>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <EmptyTableRow colSpan={8} title="No billing periods found" detail="Create a billing period to begin monthly billing." />
+                )}
               </tbody>
             </table>
           </div>
@@ -492,10 +497,8 @@ function BillingSetupPage() {
                   </td>
                 </tr>
               ))}
-              {!penaltyApplicationTable.total ? (
-                <tr>
-                  <td colSpan="9">No penalties applied yet.</td>
-                </tr>
+              {!penaltyApplicationTable.visibleRows.length ? (
+                <EmptyTableRow colSpan={9} title="No penalties applied yet" detail="Applied or waived penalties will appear here." />
               ) : null}
             </tbody>
           </table>

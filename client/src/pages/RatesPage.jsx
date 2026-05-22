@@ -1,5 +1,6 @@
 import { Layers3, Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 
@@ -364,28 +365,32 @@ function RatesPage() {
                 </tr>
               </thead>
               <tbody>
-                {rateTable.visibleRows.map((rate) => (
-                  <tr key={rate.id}>
-                    <td>
-                      {rate.name}
-                      <small>{rate.description || "-"}</small>
-                    </td>
-                    <td>{rate.tariff_type || "flat"}</td>
-                    <td>{money(rate.amount)}</td>
-                    <td>{dateOnly(rate.effective_from) || "-"}</td>
-                    <td>{money(rate.fixed_charge_amount)}</td>
-                    <td>{rate.vat_enabled && !rate.vat_exempt ? `${Number(rate.vat_rate || 0)}%` : "Off"}</td>
-                    <td>{money(rate.reconnection_fee_amount)}</td>
-                    <td>{rate.is_active ? "Active" : "Inactive"}</td>
-                    <td>{rate.blocks?.length || 0}</td>
-                    <td>{rate.versions?.length || 0}</td>
-                    <td>
-                      <button type="button" onClick={() => edit(rate)}>
-                        Edit
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {rateTable.visibleRows.length ? (
+                  rateTable.visibleRows.map((rate) => (
+                    <tr key={rate.id}>
+                      <td>
+                        {rate.name}
+                        <small>{rate.description || "-"}</small>
+                      </td>
+                      <td>{rate.tariff_type || "flat"}</td>
+                      <td>{money(rate.amount)}</td>
+                      <td>{dateOnly(rate.effective_from) || "-"}</td>
+                      <td>{money(rate.fixed_charge_amount)}</td>
+                      <td>{rate.vat_enabled && !rate.vat_exempt ? `${Number(rate.vat_rate || 0)}%` : "Off"}</td>
+                      <td>{money(rate.reconnection_fee_amount)}</td>
+                      <td>{rate.is_active ? "Active" : "Inactive"}</td>
+                      <td>{rate.blocks?.length || 0}</td>
+                      <td>{rate.versions?.length || 0}</td>
+                      <td>
+                        <button type="button" onClick={() => edit(rate)}>
+                          Edit
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <EmptyTableRow colSpan={11} title="No tariffs found" detail="Create a tariff or adjust the search." />
+                )}
               </tbody>
             </table>
           </div>

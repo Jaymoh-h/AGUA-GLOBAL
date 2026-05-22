@@ -1,5 +1,6 @@
 import { MapPin, Plus, Save } from "lucide-react";
 import { useEffect, useState } from "react";
+import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 
@@ -103,16 +104,20 @@ function ZonesPage() {
                 </tr>
               </thead>
               <tbody>
-                {zoneTable.visibleRows.map((zone) => (
-                  <tr key={zone.id}>
-                    <td>{zone.name}</td>
-                    <td>{zone.is_active ? "Active" : "Inactive"}</td>
-                    <td>{zone.description || "-"}</td>
-                    <td>
-                      <button type="button" onClick={() => edit(zone)}>Edit</button>
-                    </td>
-                  </tr>
-                ))}
+                {zoneTable.visibleRows.length ? (
+                  zoneTable.visibleRows.map((zone) => (
+                    <tr key={zone.id}>
+                      <td>{zone.name}</td>
+                      <td>{zone.is_active ? "Active" : "Inactive"}</td>
+                      <td>{zone.description || "-"}</td>
+                      <td>
+                        <button type="button" onClick={() => edit(zone)}>Edit</button>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <EmptyTableRow colSpan={4} title="No zones found" detail="Add a zone or adjust the search." />
+                )}
               </tbody>
             </table>
           </div>

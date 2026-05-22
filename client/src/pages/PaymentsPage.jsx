@@ -1,9 +1,10 @@
 import { CircleDollarSign, Download, Eye, FileUp, Printer, Save, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
+import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
-import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
+import { downloadCsvRows, downloadCsvTemplate, rowsToCsv } from "../utils/csvTemplate";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const date = (value) => value?.slice(0, 10) || "-";
@@ -21,6 +22,518 @@ const paymentImportHeaders = [
   "bill_number",
   "notes"
 ];
+const bankTemplateStorageKey = "agua-bank-statement-template-v1";
+const bankProfilesStorageKey = "agua-bank-statement-profiles-v1";
+const bankHistoryStorageKey = "agua-bank-statement-history-v1";
+const bankFieldOptions = [
+  { key: "", label: "Select field" },
+  { key: "payment_date", label: "Payment date" },
+  { key: "amount", label: "Amount paid" },
+  { key: "external_reference", label: "Reference / transaction ID" },
+  { key: "received_from", label: "Payer name" },
+  { key: "narration", label: "Narration / description" },
+  { key: "receipt_number", label: "Receipt number" },
+  { key: "notes", label: "Notes" }
+];
+
+let pdfJsLoader;
+
+const loadPdfJs = async () => {
+  if (!pdfJsLoader) {
+    pdfJsLoader = Promise.all([import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.mjs?url")]).then(
+      ([pdfjsLib, worker]) => {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = worker.default;
+        return pdfjsLib;
+      }
+    );
+  }
+  return pdfJsLoader;
+};
+
+const loadStoredBankMapping = () => {
+  try {
+    return JSON.parse(window.localStorage.getItem(bankTemplateStorageKey) || "{}");
+  } catch {
+    return {};
+  }
+};
+
+const loadStoredBankProfiles = () => {
+  try {
+    return JSON.parse(window.localStorage.getItem(bankProfilesStorageKey) || "{}");
+  } catch {
+    return {};
+  }
+};
+
+const loadStoredBankHistory = () => {
+  try {
+    return JSON.parse(window.localStorage.getItem(bankHistoryStorageKey) || "[]");
+  } catch {
+    return [];
+  }
+};
+
+const normalizeText = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+const digitsOnly = (value) => String(value || "").replace(/\D/g, "");
+const bankDatePattern = /(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4})/;
+const bankAmountPattern = /(?:kes|ksh|cr)?\s*[\d,]+\.\d{2}\b|(?:kes|ksh|cr)?\s*[\d,]{4,}\b/i;
+
+const parseCsvRows = (csv) => {
+  const parsed = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < csv.length; index += 1) {
+    const char = csv[index];
+    if (quoted) {
+      if (char === '"' && csv[index + 1] === '"') {
+        cell += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+    } else if (char === '"') {
+      quoted = true;
+    } else if (char === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (char === "\n") {
+      row.push(cell);
+      parsed.push(row);
+      row = [];
+      cell = "";
+    } else if (char !== "\r") {
+      cell += char;
+    }
+  }
+
+  row.push(cell);
+  parsed.push(row);
+
+  const nonEmptyRows = parsed.filter((cells) => cells.some((value) => String(value || "").trim()));
+  if (!nonEmptyRows.length) return { headers: [], rows: [] };
+
+  const seenHeaders = new Map();
+  const headers = nonEmptyRows[0].map((header, index) => {
+    const baseHeader = String(header || `Column ${index + 1}`).trim() || `Column ${index + 1}`;
+    const count = seenHeaders.get(baseHeader) || 0;
+    seenHeaders.set(baseHeader, count + 1);
+    return count ? `${baseHeader} ${count + 1}` : baseHeader;
+  });
+
+  const rows = nonEmptyRows.slice(1).map((cells, rowIndex) => {
+    const record = { _rowNumber: rowIndex + 2 };
+    headers.forEach((header, index) => {
+      record[header] = cells[index] || "";
+    });
+    return record;
+  });
+
+  return { headers, rows };
+};
+
+const pdfReadErrorMessage = (err, hasPassword) => {
+  if (err?.name === "PasswordException" || /password/i.test(err?.message || "")) {
+    return hasPassword
+      ? "The PDF password was rejected. Check the password and try again."
+      : "This PDF is password-protected. Enter the statement password and retry.";
+  }
+  if (/permission|encrypted|protected|copy/i.test(err?.message || "")) {
+    return "The PDF opened with restrictions that blocked text extraction. Use a bank CSV export, an unlocked copy, or paste the statement text into the box.";
+  }
+  return `Could not read the PDF statement: ${err.message}`;
+};
+
+const splitPdfLineIntoCells = (items) => {
+  const cells = [];
+
+  items
+    .sort((left, right) => left.x - right.x)
+    .forEach((item) => {
+      const text = String(item.text || "").trim();
+      if (!text) return;
+      const width = Number(item.width || text.length * 5);
+      const end = item.x + width;
+      const current = cells[cells.length - 1];
+      const gap = current ? item.x - current.end : 0;
+
+      if (!current || gap > 18) {
+        cells.push({ x: item.x, end, text });
+      } else {
+        current.text = `${current.text}${gap > 2 ? " " : ""}${text}`.replace(/\s+/g, " ").trim();
+        current.end = Math.max(current.end, end);
+      }
+    });
+
+  return cells;
+};
+
+const makeUniqueHeaders = (headers) => {
+  const seen = new Map();
+  return headers.map((header, index) => {
+    const base = String(header || `Column ${index + 1}`).trim() || `Column ${index + 1}`;
+    const count = seen.get(base) || 0;
+    seen.set(base, count + 1);
+    return count ? `${base} ${count + 1}` : base;
+  });
+};
+
+const pdfHeaderScore = (line) => {
+  const text = normalizeText(line.text);
+  return [
+    /date/.test(text),
+    /description|narration|particular|detail|remarks/.test(text),
+    /reference|ref|transaction/.test(text),
+    /credit|deposit|paid|amount/.test(text),
+    /balance/.test(text)
+  ].filter(Boolean).length;
+};
+
+const lineLooksLikePayment = (line) => bankDatePattern.test(line.text) && bankAmountPattern.test(line.text);
+
+const ignoredPdfContinuationLine = (line) => {
+  const text = normalizeText(line.text);
+  if (!text) return true;
+  return /^(opening|closing|available|ledger|brought forward|carried forward|total|balance)/.test(text);
+};
+
+const preferredContinuationIndex = (headers) => {
+  const scored = headers.map((header, index) => {
+    const text = normalizeText(header);
+    let score = index === 0 ? 1 : 0;
+    if (/description|narration|particular|detail|remarks|payer|name/.test(text)) score += 5;
+    if (/reference|ref|transaction/.test(text)) score += 2;
+    if (/date|amount|credit|debit|balance/.test(text)) score -= 3;
+    return { index, score };
+  });
+  return scored.sort((left, right) => right.score - left.score)[0]?.index || 0;
+};
+
+const nearestPdfColumnIndex = (cell, anchors) =>
+  anchors.reduce((bestIndex, anchor, anchorIndex) => {
+    const bestDistance = Math.abs(cell.x - anchors[bestIndex]);
+    const currentDistance = Math.abs(cell.x - anchor);
+    return currentDistance < bestDistance ? anchorIndex : bestIndex;
+  }, 0);
+
+const appendPdfCellToRow = (row, header, value) => {
+  row[header] = [row[header], value].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+};
+
+const typicalPdfLineGap = (lines) => {
+  const gaps = [];
+  for (let index = 1; index < lines.length; index += 1) {
+    const previous = lines[index - 1];
+    const current = lines[index];
+    if (previous.pageNumber !== current.pageNumber) continue;
+    const gap = Math.abs(previous.y - current.y);
+    if (gap >= 4 && gap <= 40) gaps.push(gap);
+  }
+  if (!gaps.length) return 12;
+  return gaps.sort((left, right) => left - right)[Math.floor(gaps.length / 2)];
+};
+
+const appendPdfContinuationLine = (row, line, headers, anchors, continuationIndex) => {
+  line.cells.forEach((cell) => {
+    const nearestIndex = nearestPdfColumnIndex(cell, anchors);
+    const targetIndex = nearestIndex <= continuationIndex + 1 ? continuationIndex : nearestIndex;
+    appendPdfCellToRow(row, headers[targetIndex], cell.text);
+  });
+};
+
+const buildPdfTableCsv = (lines) => {
+  const headerIndex = lines.findIndex((line) => line.cells.length >= 3 && pdfHeaderScore(line) >= 2);
+  if (headerIndex === -1) return null;
+
+  const headerLine = lines[headerIndex];
+  const headers = makeUniqueHeaders(headerLine.cells.map((cell) => cell.text));
+  const anchors = headerLine.cells.map((cell) => cell.x);
+  const continuationIndex = preferredContinuationIndex(headers);
+  const bodyLines = lines.slice(headerIndex + 1).filter((line) => line.cells.length && !ignoredPdfContinuationLine(line));
+  const lineGap = typicalPdfLineGap(bodyLines);
+  const continuationDistance = Math.max(lineGap * 1.8, 18);
+  const paymentIndexes = bodyLines
+    .map((line, index) => (lineLooksLikePayment(line) ? index : -1))
+    .filter((index) => index >= 0);
+  const continuationByPaymentIndex = new Map(paymentIndexes.map((index) => [index, []]));
+  const rows = [];
+
+  bodyLines.forEach((line, index) => {
+    if (lineLooksLikePayment(line)) return;
+    const nearestPaymentIndex = paymentIndexes
+      .filter((paymentIndex) => bodyLines[paymentIndex].pageNumber === line.pageNumber)
+      .map((paymentIndex) => ({
+        paymentIndex,
+        distance: Math.abs(bodyLines[paymentIndex].y - line.y)
+      }))
+      .filter((candidate) => candidate.distance <= continuationDistance)
+      .sort((left, right) => left.distance - right.distance)[0]?.paymentIndex;
+
+    if (nearestPaymentIndex !== undefined) {
+      continuationByPaymentIndex.get(nearestPaymentIndex)?.push({ index, line });
+    }
+  });
+
+  paymentIndexes.forEach((paymentIndex) => {
+    const line = bodyLines[paymentIndex];
+    const row = { _rowNumber: paymentIndex + headerIndex + 2 };
+    headers.forEach((header) => {
+      row[header] = "";
+    });
+
+    continuationByPaymentIndex
+      .get(paymentIndex)
+      ?.filter((item) => item.index < paymentIndex)
+      .sort((left, right) => left.index - right.index)
+      .forEach((item) => appendPdfContinuationLine(row, item.line, headers, anchors, continuationIndex));
+
+    line.cells.forEach((cell) => {
+      const nearestIndex = nearestPdfColumnIndex(cell, anchors);
+      const header = headers[nearestIndex];
+      appendPdfCellToRow(row, header, cell.text);
+    });
+
+    continuationByPaymentIndex
+      .get(paymentIndex)
+      ?.filter((item) => item.index > paymentIndex)
+      .sort((left, right) => left.index - right.index)
+      .forEach((item) => appendPdfContinuationLine(row, item.line, headers, anchors, continuationIndex));
+
+    rows.push(row);
+  });
+
+  if (!rows.length) return null;
+
+  return {
+    headers,
+    rows,
+    csv: rowsToCsv(
+      headers.map((header) => ({ header, value: (row) => row[header] || "" })),
+      rows
+    )
+  };
+};
+
+const buildPdfFallbackCsv = (rawText) => {
+  const parsed = parsePdfPaymentLines(rawText);
+  if (!parsed.rows.length) return null;
+  return {
+    ...parsed,
+    csv: rowsToCsv(
+      parsed.headers.map((header) => ({ header, value: (row) => row[header] || "" })),
+      parsed.rows
+    )
+  };
+};
+
+const extractPdfStatementTable = async (file, password = "") => {
+  const pdfjsLib = await loadPdfJs();
+  const data = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data, password: password || undefined }).promise;
+  const lines = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const pageLines = new Map();
+
+    content.items.forEach((item) => {
+      const text = String(item.str || "").trim();
+      if (!text) return;
+      const y = Math.round(item.transform[5]);
+      const x = Math.round(item.transform[4]);
+      const line = pageLines.get(y) || [];
+      line.push({ x, text, width: item.width || 0 });
+      pageLines.set(y, line);
+    });
+
+    lines.push(
+      ...[...pageLines.entries()]
+        .sort((left, right) => right[0] - left[0])
+        .map(([y, items]) => {
+          const cells = splitPdfLineIntoCells(items);
+          return {
+            pageNumber,
+            y,
+            cells,
+            text: cells.map((cell) => cell.text).join(" ")
+          };
+        })
+    );
+  }
+
+  const rawText = lines.map((line) => line.text).join("\n");
+  const table = buildPdfTableCsv(lines) || buildPdfFallbackCsv(rawText);
+  return { rawText, table };
+};
+
+const parsePdfPaymentLines = (text) => {
+  const rows = [];
+  const headers = ["payment_date", "narration", "external_reference", "amount"];
+
+  text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .forEach((line, index) => {
+      const dateMatch = line.match(bankDatePattern);
+      if (!dateMatch) return;
+
+      const afterDate = line.slice(dateMatch.index + dateMatch[0].length).trim();
+      const amountMatches = [...afterDate.matchAll(new RegExp(bankAmountPattern, "gi"))];
+      if (!amountMatches.length) return;
+
+      const amountMatch = amountMatches[amountMatches.length - 1];
+      const beforeAmount = afterDate.slice(0, amountMatch.index).trim();
+      const referenceMatch = beforeAmount.match(/\b[A-Z0-9]{6,}\b/g);
+      const reference = referenceMatch?.[referenceMatch.length - 1] || "";
+      const narration = reference ? beforeAmount.replace(reference, "").replace(/\s+/g, " ").trim() : beforeAmount;
+
+      rows.push({
+        _rowNumber: index + 1,
+        payment_date: dateMatch[0],
+        narration: narration || beforeAmount || line,
+        external_reference: reference,
+        amount: amountMatch[0]
+      });
+    });
+
+  return { headers, rows };
+};
+
+const detectBankMapping = (headers) =>
+  headers.reduce((mapping, header) => {
+    const compact = normalizeText(header).replaceAll(" ", "");
+    if (/(transaction|posting|posted|value)?date/.test(compact)) {
+      return { ...mapping, [header]: "payment_date" };
+    }
+    if (/(credit|paidin|deposit|amountpaid|paymentamount|amount)/.test(compact)) {
+      return { ...mapping, [header]: "amount" };
+    }
+    if (/(transactionid|transactionref|reference|refno|chequeno|receiptno)/.test(compact)) {
+      return { ...mapping, [header]: "external_reference" };
+    }
+    if (/(payer|paidby|customer|accountname|sender|name)/.test(compact)) {
+      return { ...mapping, [header]: "received_from" };
+    }
+    if (/(narration|description|details|particulars|memo)/.test(compact)) {
+      return { ...mapping, [header]: "narration" };
+    }
+    if (/note/.test(compact)) {
+      return { ...mapping, [header]: "notes" };
+    }
+    return { ...mapping, [header]: "" };
+  }, {});
+
+const readMappedBankValue = (row, mapping, field) => {
+  const header = Object.keys(mapping).find((key) => mapping[key] === field);
+  return header ? String(row[header] || "").trim() : "";
+};
+
+const normalizeBankAmount = (value) => {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const negative = /^\(.*\)$/.test(text) || /\bdr\b/i.test(text);
+  const number = Number(text.replace(/,/g, "").replace(/[^\d.-]/g, ""));
+  if (!Number.isFinite(number) || number <= 0) return "";
+  return negative ? "" : number.toFixed(2).replace(/\.00$/, "");
+};
+
+const normalizeBankDate = (value) => {
+  const text = String(value || "").trim();
+  if (!text) return "";
+
+  const isoMatch = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+
+  const dateMatch = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+  if (dateMatch) {
+    let [, day, month, year] = dateMatch;
+    if (Number(month) > 12 && Number(day) <= 12) {
+      [day, month] = [month, day];
+    }
+    const fullYear = year.length === 2 ? `20${year}` : year;
+    return `${fullYear}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString().slice(0, 10);
+};
+
+const findCustomerCandidates = (paymentRow, customers) => {
+  const text = [
+    paymentRow.external_reference,
+    paymentRow.received_from,
+    paymentRow.narration,
+    paymentRow.notes,
+    paymentRow.receipt_number
+  ].join(" ");
+  const normalized = normalizeText(text);
+  const digitText = digitsOnly(text);
+
+  return customers
+    .map((customer) => {
+      const reasons = [];
+      let score = 0;
+      const account = normalizeText(customer.acc_number);
+      const phone = digitsOnly(customer.phone);
+      const nameTokens = normalizeText(customer.name)
+        .split(" ")
+        .filter((token) => token.length > 2);
+
+      if (account && normalized.includes(account)) {
+        score = Math.max(score, 100);
+        reasons.push("account");
+      }
+      if (phone.length >= 7 && digitText.includes(phone.slice(-9))) {
+        score = Math.max(score, 85);
+        reasons.push("phone");
+      }
+      if (nameTokens.length) {
+        const hits = nameTokens.filter((token) => normalized.includes(token)).length;
+        if (hits === nameTokens.length && hits >= 2) {
+          score = Math.max(score, 75);
+          reasons.push("name");
+        } else if (hits >= 2) {
+          score = Math.max(score, 55 + hits * 5);
+          reasons.push("partial name");
+        }
+      }
+
+      return { customer, score, reason: reasons.join(", ") };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 3);
+};
+
+const bankRowStatus = (row) => {
+  if (row.ignored) return "ignored";
+  if (!row.payment_date || !row.amount) return "invalid";
+  if (!row.acc_number) return "needs_match";
+  return "ready";
+};
+
+const bankConfidenceLabel = (score) => {
+  if (score >= 85) return "High";
+  if (score >= 60) return "Medium";
+  if (score > 0) return "Low";
+  return "Manual";
+};
 
 function PaymentsPage({ user }) {
   const [payments, setPayments] = useState([]);
@@ -32,6 +545,17 @@ function PaymentsPage({ user }) {
   const [csvText, setCsvText] = useState("acc_number,payment_date,amount,payment_channel,receipt_number,external_reference,received_from,notes\n");
   const [importPreview, setImportPreview] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [bankCsvText, setBankCsvText] = useState("");
+  const [bankHeaders, setBankHeaders] = useState([]);
+  const [bankRows, setBankRows] = useState([]);
+  const [bankMapping, setBankMapping] = useState(loadStoredBankMapping);
+  const [bankReviewRows, setBankReviewRows] = useState([]);
+  const [bankProfiles, setBankProfiles] = useState(loadStoredBankProfiles);
+  const [bankProfileName, setBankProfileName] = useState("Default");
+  const [bankImportHistory, setBankImportHistory] = useState(loadStoredBankHistory);
+  const [bankPdfFile, setBankPdfFile] = useState(null);
+  const [bankPdfPassword, setBankPdfPassword] = useState("");
+  const [bankPdfNeedsPassword, setBankPdfNeedsPassword] = useState(false);
   const [form, setForm] = useState({
     customer_id: "",
     amount: "",
@@ -96,6 +620,238 @@ function PaymentsPage({ user }) {
     if (!file) return;
     setCsvText(await file.text());
     setImportPreview(null);
+  };
+
+  const loadBankStatement = (text) => {
+    setMessage("");
+    const parsed = parseCsvRows(text);
+    if (!parsed.headers.length) {
+      setBankHeaders([]);
+      setBankRows([]);
+      setBankReviewRows([]);
+      setMessage("No bank statement rows were found in the CSV.");
+      return;
+    }
+
+    const detectedMapping = detectBankMapping(parsed.headers);
+    setBankHeaders(parsed.headers);
+    setBankRows(parsed.rows);
+    setBankReviewRows([]);
+    setBankMapping((current) =>
+      parsed.headers.reduce(
+        (next, header) => ({
+          ...next,
+          [header]: current[header] ?? detectedMapping[header] ?? ""
+        }),
+        {}
+      )
+    );
+    setMessage(`Loaded ${parsed.rows.length} bank statement row(s). Map the columns, then generate payment rows.`);
+  };
+
+  const loadBankPdfStatement = async (file) => {
+    setMessage("");
+    setBankHeaders([]);
+    setBankRows([]);
+    setBankReviewRows([]);
+    setBankPdfNeedsPassword(false);
+    try {
+      const extracted = await extractPdfStatementTable(file, bankPdfPassword);
+
+      if (!extracted.rawText.trim()) {
+        setMessage("The PDF opened, but no extractable text was found. It may be copy-restricted or scanned. Use a bank CSV export, an unlocked copy, or paste statement text into the box.");
+        return;
+      }
+
+      if (!extracted.table?.rows.length) {
+        setBankCsvText(extracted.rawText);
+        setMessage("PDF text was extracted, but no table-like payment rows were detected. The content box now shows the raw text so you can inspect it, use a bank CSV export, or share a sample layout so we can tune the parser.");
+        return;
+      }
+
+      setBankCsvText(extracted.table.csv);
+      setBankHeaders(extracted.table.headers);
+      setBankRows(extracted.table.rows);
+      setBankMapping(bankProfiles[bankProfileName] || detectBankMapping(extracted.table.headers));
+      setMessage(`Extracted ${extracted.table.rows.length} table row(s) from the PDF. The content box is now CSV-like; map the columns, then generate payment rows.`);
+    } catch (err) {
+      const needsPassword = err?.name === "PasswordException" || /password/i.test(err?.message || "");
+      setBankPdfNeedsPassword(needsPassword);
+      setMessage(pdfReadErrorMessage(err, Boolean(bankPdfPassword)));
+    }
+  };
+
+  const handleBankCsvFile = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+      setBankPdfFile(file);
+      await loadBankPdfStatement(file);
+      return;
+    }
+    setBankPdfFile(null);
+    setBankPdfNeedsPassword(false);
+    const text = await file.text();
+    setBankCsvText(text);
+    loadBankStatement(text);
+  };
+
+  const updateBankMapping = (header, field) => {
+    setBankMapping((current) => ({ ...current, [header]: field }));
+    setBankReviewRows([]);
+  };
+
+  const applyBankProfile = (name) => {
+    setBankProfileName(name);
+    if (bankProfiles[name]) {
+      setBankMapping(bankProfiles[name]);
+      setBankReviewRows([]);
+      setMessage(`Loaded ${name} bank mapping profile.`);
+    }
+  };
+
+  const saveBankTemplate = () => {
+    const name = bankProfileName.trim() || "Default";
+    const nextProfiles = { ...bankProfiles, [name]: bankMapping };
+    setBankProfiles(nextProfiles);
+    setBankProfileName(name);
+    window.localStorage.setItem(bankProfilesStorageKey, JSON.stringify(nextProfiles));
+    window.localStorage.setItem(bankTemplateStorageKey, JSON.stringify(bankMapping));
+    setMessage(`${name} bank statement mapping saved on this browser.`);
+  };
+
+  const makeBankReviewRow = (paymentRow, id, sourceRowNumber) => {
+    const normalizedPaymentRow = {
+      ...paymentRow,
+      payment_date: normalizeBankDate(paymentRow.payment_date),
+      amount: normalizeBankAmount(paymentRow.amount),
+      payment_channel: "bank",
+      bill_number: ""
+    };
+    const candidates = findCustomerCandidates(normalizedPaymentRow, customers);
+    const directCustomer = paymentRow.acc_number
+      ? customers.find((customer) => customer.acc_number === paymentRow.acc_number)
+      : null;
+    const selectedCandidate = candidates[0]?.score >= 70 ? candidates[0] : null;
+    const selectedCustomer = directCustomer || selectedCandidate?.customer;
+
+    return {
+      ...normalizedPaymentRow,
+      id,
+      source_row_number: sourceRowNumber,
+      acc_number: selectedCustomer?.acc_number || "",
+      customer_name: selectedCustomer?.name || "",
+      candidate_score: directCustomer ? 100 : candidates[0]?.score || 0,
+      candidate_reason: directCustomer ? "manual account" : candidates[0]?.reason || "",
+      ignored: false,
+      candidates: candidates.map((candidate) => ({
+        id: candidate.customer.id,
+        acc_number: candidate.customer.acc_number,
+        name: candidate.customer.name,
+        score: candidate.score,
+        reason: candidate.reason
+      }))
+    };
+  };
+
+  const generateBankPaymentRows = () => {
+    setMessage("");
+    if (!bankRows.length) {
+      setMessage("Load a bank statement PDF or CSV first.");
+      return;
+    }
+    if (!Object.values(bankMapping).includes("amount") || !Object.values(bankMapping).includes("payment_date")) {
+      setMessage("Map at least the payment date and amount columns before generating rows.");
+      return;
+    }
+
+    const reviewRows = bankRows.map((row, index) => {
+      return makeBankReviewRow({
+        payment_date: readMappedBankValue(row, bankMapping, "payment_date"),
+        amount: readMappedBankValue(row, bankMapping, "amount"),
+        receipt_number: readMappedBankValue(row, bankMapping, "receipt_number"),
+        external_reference: readMappedBankValue(row, bankMapping, "external_reference"),
+        received_from: readMappedBankValue(row, bankMapping, "received_from"),
+        narration: readMappedBankValue(row, bankMapping, "narration"),
+        notes: readMappedBankValue(row, bankMapping, "notes")
+      }, `${row._rowNumber}-${index}`, row._rowNumber);
+    });
+
+    setBankReviewRows(reviewRows);
+    const readyRows = reviewRows.filter((row) => row.acc_number && row.payment_date && row.amount);
+    setMessage(
+      `${readyRows.length} of ${reviewRows.length} bank row(s) matched and look ready. Review unmatched rows before importing.`
+    );
+  };
+
+  const updateBankReviewAccount = (index, accNumber) => {
+    const customer = customers.find((item) => item.acc_number === accNumber);
+    setBankReviewRows((current) =>
+      current.map((row, rowIndex) =>
+        rowIndex === index
+          ? {
+              ...row,
+              acc_number: accNumber,
+              customer_name: customer?.name || ""
+            }
+          : row
+      )
+    );
+  };
+
+  const updateBankReviewField = (index, field, value) => {
+    setBankReviewRows((current) =>
+      current.map((row, rowIndex) => {
+        if (rowIndex !== index) return row;
+        const nextRow = { ...row, [field]: value };
+        if (["external_reference", "received_from", "narration", "notes"].includes(field)) {
+          const candidates = findCustomerCandidates(nextRow, customers);
+          return {
+            ...nextRow,
+            candidate_score: candidates[0]?.score || 0,
+            candidate_reason: candidates[0]?.reason || "",
+            candidates: candidates.map((candidate) => ({
+              id: candidate.customer.id,
+              acc_number: candidate.customer.acc_number,
+              name: candidate.customer.name,
+              score: candidate.score,
+              reason: candidate.reason
+            }))
+          };
+        }
+        return nextRow;
+      })
+    );
+  };
+
+  const useBankPaymentRows = () => {
+    const readyRows = bankReviewRows.filter((row) => !row.ignored && row.acc_number && row.payment_date && row.amount);
+    if (!readyRows.length) {
+      setMessage("No ready bank payment rows were found. Match accounts and check date/amount values first.");
+      return;
+    }
+    const generatedCsv = rowsToCsv(
+      paymentImportHeaders.map((header) => ({ header, value: (row) => row[header] || "" })),
+      readyRows.map((row) => ({
+        ...row,
+        notes: [row.notes, row.narration].filter(Boolean).join(" | ")
+      }))
+    );
+    setCsvText(generatedCsv);
+    setImportPreview(null);
+    const historyItem = {
+      id: Date.now(),
+      created_at: new Date().toISOString(),
+      source: bankPdfFile?.name || "Pasted statement / CSV",
+      profile: bankProfileName.trim() || "Default",
+      rows: readyRows.length,
+      ignored: bankReviewRows.filter((row) => row.ignored).length,
+      total: readyRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)
+    };
+    const nextHistory = [historyItem, ...bankImportHistory].slice(0, 10);
+    setBankImportHistory(nextHistory);
+    window.localStorage.setItem(bankHistoryStorageKey, JSON.stringify(nextHistory));
+    setMessage(`${readyRows.length} generated bank payment row(s) moved into the normal CSV importer. Preview before importing.`);
   };
 
   const previewImport = async () => {
@@ -318,8 +1074,8 @@ function PaymentsPage({ user }) {
         </div>
       </header>
 
-      <section className="workspace-grid">
-        <div className="page-stack">
+      <section className="workspace-grid payments-workspace-grid">
+        <div className="page-stack payments-entry-grid">
           <form className="panel form-grid" onSubmit={submit}>
             <div className="panel-heading">
               <h3>{editingId ? "Edit Payment" : "Record Payment"}</h3>
@@ -457,7 +1213,253 @@ function PaymentsPage({ user }) {
             </button>
           </form>
 
-          <div className="panel form-grid">
+          <div className="panel form-grid bank-trainer-panel">
+            <div className="panel-heading">
+              <div>
+                <h3>Bank Statement Trainer</h3>
+                <p className="muted">Upload a PDF or CSV statement, match statement rows to customers, then send them to the normal payment importer.</p>
+              </div>
+              <button type="button" onClick={saveBankTemplate} disabled={!bankHeaders.length}>
+                <Save size={16} />
+                Save mapping
+              </button>
+            </div>
+            <label>
+              Bank statement file
+              <input type="file" accept=".pdf,application/pdf,.csv,text/csv" onChange={handleBankCsvFile} />
+            </label>
+            <div className="filter-bar">
+              <label>
+                Bank profile
+                <select value={bankProfileName} onChange={(event) => applyBankProfile(event.target.value)}>
+                  <option value="Default">Default</option>
+                  {Object.keys(bankProfiles).filter((name) => name !== "Default").map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Profile name
+                <input
+                  value={bankProfileName}
+                  onChange={(event) => setBankProfileName(event.target.value)}
+                  placeholder="e.g. Equity, KCB, Cooperative"
+                />
+              </label>
+            </div>
+            <label>
+              PDF password
+              <input
+                value={bankPdfPassword}
+                onChange={(event) => setBankPdfPassword(event.target.value)}
+                type="password"
+                placeholder="Only needed for protected PDF statements"
+              />
+            </label>
+            {bankPdfFile ? (
+              <button type="button" onClick={() => loadBankPdfStatement(bankPdfFile)}>
+                {bankPdfNeedsPassword ? "Retry with password" : "Re-read PDF"}
+              </button>
+            ) : null}
+            <label>
+              Extracted statement table or CSV content
+              <textarea
+                value={bankCsvText}
+                onChange={(event) => {
+                  setBankCsvText(event.target.value);
+                  setBankHeaders([]);
+                  setBankRows([]);
+                  setBankReviewRows([]);
+                }}
+                rows="5"
+                placeholder="Upload a PDF statement to extract a CSV-like table, or paste CSV content here and detect columns."
+              />
+            </label>
+            <button type="button" onClick={() => loadBankStatement(bankCsvText)} disabled={!bankCsvText.trim()}>
+              Detect columns from content
+            </button>
+
+            {bankHeaders.length ? (
+              <>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Bank column</th>
+                        <th>Payment field</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bankHeaders.map((header) => (
+                        <tr key={header}>
+                          <td>{header}</td>
+                          <td>
+                            <select value={bankMapping[header] || ""} onChange={(event) => updateBankMapping(header, event.target.value)}>
+                              {bankFieldOptions.map((option) => (
+                                <option key={option.key || "select"} value={option.key}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <button className="primary-button" type="button" onClick={generateBankPaymentRows}>
+                  <Eye size={17} />
+                  Generate payment rows
+                </button>
+              </>
+            ) : null}
+
+            {bankReviewRows.length ? (
+              <>
+                <div className="reading-context">
+                  <div>
+                    <span>Total rows</span>
+                    <strong>{bankReviewRows.length}</strong>
+                  </div>
+                  <div>
+                    <span>Ready</span>
+                    <strong>{bankReviewRows.filter((row) => bankRowStatus(row) === "ready").length}</strong>
+                  </div>
+                  <div>
+                    <span>Need match</span>
+                    <strong>{bankReviewRows.filter((row) => bankRowStatus(row) === "needs_match").length}</strong>
+                  </div>
+                  <div>
+                    <span>Ignored</span>
+                    <strong>{bankReviewRows.filter((row) => row.ignored).length}</strong>
+                  </div>
+                </div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Ignore</th>
+                        <th>Row</th>
+                        <th>Date</th>
+                        <th>Amount</th>
+                        <th>Reference</th>
+                        <th>Narration</th>
+                        <th>Account match</th>
+                        <th>Confidence</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bankReviewRows.map((row, index) => (
+                        <tr key={row.id}>
+                          <td>
+                            <input
+                              checked={Boolean(row.ignored)}
+                              onChange={(event) => updateBankReviewField(index, "ignored", event.target.checked)}
+                              type="checkbox"
+                              title="Ignore this statement row"
+                            />
+                          </td>
+                          <td>{row.source_row_number}</td>
+                          <td>
+                            <input
+                              value={row.payment_date || ""}
+                              onChange={(event) => updateBankReviewField(index, "payment_date", event.target.value)}
+                              type="date"
+                            />
+                          </td>
+                          <td>
+                            <input
+                              value={row.amount || ""}
+                              onChange={(event) => updateBankReviewField(index, "amount", event.target.value)}
+                              type="number"
+                              min="1"
+                            />
+                          </td>
+                          <td>
+                            <input
+                              value={row.external_reference || ""}
+                              onChange={(event) => updateBankReviewField(index, "external_reference", event.target.value)}
+                            />
+                            {row.received_from ? <small>{row.received_from}</small> : null}
+                          </td>
+                          <td>
+                            <input
+                              value={row.narration || ""}
+                              onChange={(event) => updateBankReviewField(index, "narration", event.target.value)}
+                            />
+                          </td>
+                          <td>
+                            <select value={row.acc_number} onChange={(event) => updateBankReviewAccount(index, event.target.value)}>
+                              <option value="">Select account</option>
+                              {row.candidates.map((candidate) => (
+                                <option key={`${row.id}-${candidate.id}`} value={candidate.acc_number}>
+                                  {candidate.acc_number} - {candidate.name} ({candidate.score}%)
+                                </option>
+                              ))}
+                              <option value="" disabled>
+                                All customers
+                              </option>
+                              {customers.map((customer) => (
+                                <option key={`${row.id}-customer-${customer.id}`} value={customer.acc_number}>
+                                  {customer.acc_number} - {customer.name}
+                                </option>
+                              ))}
+                            </select>
+                            {row.candidate_reason ? <small>Matched by {row.candidate_reason}</small> : null}
+                          </td>
+                          <td>
+                            <strong>{bankConfidenceLabel(row.candidate_score)}</strong>
+                            {row.candidate_score ? <small>{row.candidate_score}%</small> : null}
+                          </td>
+                          <td>
+                            <span className={`status status-${bankRowStatus(row)}`}>{bankRowStatus(row).replace("_", " ")}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <button type="button" onClick={useBankPaymentRows}>
+                  <FileUp size={17} />
+                  Use generated payment CSV
+                </button>
+              </>
+            ) : null}
+            {bankImportHistory.length ? (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Prepared</th>
+                      <th>Source</th>
+                      <th>Profile</th>
+                      <th>Rows</th>
+                      <th>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bankImportHistory.map((item) => (
+                      <tr key={item.id}>
+                        <td>{date(item.created_at)}</td>
+                        <td>{item.source}</td>
+                        <td>{item.profile}</td>
+                        <td>
+                          {item.rows}
+                          {item.ignored ? <small>{item.ignored} ignored</small> : null}
+                        </td>
+                        <td>{money(item.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="panel form-grid payment-import-panel">
             <div className="panel-heading">
               <h3>Import Payments CSV</h3>
               <button
@@ -723,32 +1725,36 @@ function PaymentsPage({ user }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {paymentTable.visibleRows.map((payment) => (
-                    <tr key={payment.id}>
-                      <td>
-                        <strong>{payment.customer_name}</strong>
-                        <small>{payment.acc_number}</small>
-                      </td>
-                      <td>{payment.receipt_number || "-"}</td>
-                      <td>{money(payment.amount)}</td>
-                      <td>{payment.payment_date?.slice(0, 10)}</td>
-                      <td>{payment.payment_channel || payment.method}</td>
-                      <td>{payment.external_reference || payment.reference || "-"}</td>
-                      <td>
-                        {Number(payment.allocation_count || 0).toLocaleString()}
-                        <small>{payment.bill_numbers || ""}</small>
-                      </td>
-                      <td>{money(payment.unallocated_amount)}</td>
-                      <td>
-                        <div className="row-actions">
-                          <button type="button" onClick={() => openReceipt(payment)} disabled={loadingReceipt}>
-                            Print
-                          </button>
-                          <button type="button" onClick={() => edit(payment)}>Edit</button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {paymentTable.visibleRows.length ? (
+                    paymentTable.visibleRows.map((payment) => (
+                      <tr key={payment.id}>
+                        <td>
+                          <strong>{payment.customer_name}</strong>
+                          <small>{payment.acc_number}</small>
+                        </td>
+                        <td>{payment.receipt_number || "-"}</td>
+                        <td>{money(payment.amount)}</td>
+                        <td>{payment.payment_date?.slice(0, 10)}</td>
+                        <td>{payment.payment_channel || payment.method}</td>
+                        <td>{payment.external_reference || payment.reference || "-"}</td>
+                        <td>
+                          {Number(payment.allocation_count || 0).toLocaleString()}
+                          <small>{payment.bill_numbers || ""}</small>
+                        </td>
+                        <td>{money(payment.unallocated_amount)}</td>
+                        <td>
+                          <div className="row-actions">
+                            <button type="button" onClick={() => openReceipt(payment)} disabled={loadingReceipt}>
+                              Print
+                            </button>
+                            <button type="button" onClick={() => edit(payment)}>Edit</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <EmptyTableRow colSpan={9} title="No payments found" detail="Record payments or adjust the filters." />
+                  )}
                 </tbody>
               </table>
             </div>
@@ -807,10 +1813,12 @@ function PaymentsPage({ user }) {
                       ) : null}
                     </tr>
                   ))}
-                  {!adjustmentTable.total ? (
-                    <tr>
-                      <td colSpan={user.role === "admin" ? "8" : "7"}>No adjustment requests found.</td>
-                    </tr>
+                  {!adjustmentTable.visibleRows.length ? (
+                    <EmptyTableRow
+                      colSpan={user.role === "admin" ? 8 : 7}
+                      title="No adjustment requests found"
+                      detail="Manual credits and debits awaiting review will appear here."
+                    />
                   ) : null}
                 </tbody>
               </table>

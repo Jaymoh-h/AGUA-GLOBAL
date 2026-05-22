@@ -1,6 +1,7 @@
 import { Download, FileSpreadsheet, Printer, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
+import { EmptyTableRow } from "../components/EmptyState";
 import StatCard from "../components/StatCard";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
@@ -27,11 +28,7 @@ const defaultFilters = () => {
 };
 
 const EmptyRow = ({ colSpan }) => (
-  <tr>
-    <td colSpan={colSpan} className="muted">
-      No records found.
-    </td>
-  </tr>
+  <EmptyTableRow colSpan={colSpan} title="No records found" detail="This report has no rows for the current filters." />
 );
 
 const managementReportTitles = {

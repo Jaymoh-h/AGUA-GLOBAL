@@ -1,5 +1,6 @@
 import { Banknote, Download, Eye, FileUp, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
@@ -374,18 +375,22 @@ function ExpensesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {expenseTable.visibleRows.map((expense) => (
-                    <tr key={expense.id}>
-                      <td>{expense.expense_date?.slice(0, 10)}</td>
-                      <td>{expense.category}</td>
-                      <td>{expense.vendor || "-"}</td>
-                      <td>{expense.description}</td>
-                      <td>{money(expense.amount)}</td>
-                      <td>{expense.payment_channel}</td>
-                      <td>{expense.reference || expense.receipt_number || "-"}</td>
-                      <td>{expense.recorded_by_name || "-"}</td>
-                    </tr>
-                  ))}
+                  {expenseTable.visibleRows.length ? (
+                    expenseTable.visibleRows.map((expense) => (
+                      <tr key={expense.id}>
+                        <td>{expense.expense_date?.slice(0, 10)}</td>
+                        <td>{expense.category}</td>
+                        <td>{expense.vendor || "-"}</td>
+                        <td>{expense.description}</td>
+                        <td>{money(expense.amount)}</td>
+                        <td>{expense.payment_channel}</td>
+                        <td>{expense.reference || expense.receipt_number || "-"}</td>
+                        <td>{expense.recorded_by_name || "-"}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <EmptyTableRow colSpan={8} title="No expenses found" detail="Record an expense or adjust the filters." />
+                  )}
                 </tbody>
               </table>
             </div>

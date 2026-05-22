@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import EmptyState, { EmptyTableRow } from "../components/EmptyState";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
 import { api } from "../services/api";
@@ -17,6 +18,10 @@ function DashboardPage() {
 
   if (error) return <p className="form-error">{error}</p>;
   if (!data) return <p className="muted">Loading dashboard...</p>;
+
+  const monthlyRows = data.monthly || [];
+  const latestBills = data.latestBills || [];
+  const highConsumption = data.highConsumption || [];
 
   return (
     <section className="page-stack">
@@ -38,22 +43,26 @@ function DashboardPage() {
         <StatCard label="Open maintenance" value={data.operations?.open_maintenance || 0} detail="Open or in progress" />
       </div>
 
-      <section className="workspace-grid">
+      <section className="workspace-grid dashboard-grid">
         <div className="panel chart-panel">
           <div className="panel-heading">
             <h3>Monthly Summary</h3>
           </div>
-          <ResponsiveContainer width="100%" height={256}>
-            <BarChart data={data.monthly}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="month" />
-              <YAxis />
-              <Tooltip />
-              <Bar dataKey="water_units" fill="#0f766e" name="Water units" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="collected" fill="#2563eb" name="Collected" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="arrears" fill="#c2410c" name="Arrears" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          {monthlyRows.length ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={monthlyRows}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="month" />
+                <YAxis />
+                <Tooltip />
+                <Bar dataKey="water_units" fill="#0f766e" name="Water units" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="collected" fill="#2563eb" name="Collected" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="arrears" fill="#c2410c" name="Arrears" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <EmptyState title="No monthly summary" detail="Billing and payment activity will appear here once available." />
+          )}
         </div>
 
         <div className="panel">
@@ -70,18 +79,22 @@ function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {data.latestBills.map((bill) => (
-                  <tr key={bill.id}>
-                    <td>
-                      <strong>{bill.customer_name}</strong>
-                      <small>{bill.acc_number}</small>
-                    </td>
-                    <td>{money(bill.amount)}</td>
-                    <td>
-                      <StatusBadge status={bill.status} />
-                    </td>
-                  </tr>
-                ))}
+                {latestBills.length ? (
+                  latestBills.map((bill) => (
+                    <tr key={bill.id}>
+                      <td>
+                        <strong>{bill.customer_name}</strong>
+                        <small>{bill.acc_number}</small>
+                      </td>
+                      <td>{money(bill.amount)}</td>
+                      <td>
+                        <StatusBadge status={bill.status} />
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <EmptyTableRow colSpan={3} title="No latest bills" detail="Recent bills will appear here after billing runs." />
+                )}
               </tbody>
             </table>
           </div>
@@ -101,16 +114,20 @@ function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {(data.highConsumption || []).map((bill) => (
-                  <tr key={bill.id}>
-                    <td>
-                      <strong>{bill.customer_name}</strong>
-                      <small>{bill.acc_number}</small>
-                    </td>
-                    <td>{bill.bill_number || bill.billing_month?.slice(0, 10)}</td>
-                    <td>{units(bill.units_used)}</td>
-                  </tr>
-                ))}
+                {highConsumption.length ? (
+                  highConsumption.map((bill) => (
+                    <tr key={bill.id}>
+                      <td>
+                        <strong>{bill.customer_name}</strong>
+                        <small>{bill.acc_number}</small>
+                      </td>
+                      <td>{bill.bill_number || bill.billing_month?.slice(0, 10)}</td>
+                      <td>{units(bill.units_used)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <EmptyTableRow colSpan={3} title="No high consumption" detail="Accounts with unusually high usage will appear here." />
+                )}
               </tbody>
             </table>
           </div>

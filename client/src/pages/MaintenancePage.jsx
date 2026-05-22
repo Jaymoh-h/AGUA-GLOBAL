@@ -1,5 +1,6 @@
 import { Ban, CheckCircle2, Play, RefreshCw, Save, Wrench } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { EmptyTableRow } from "../components/EmptyState";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
@@ -371,11 +372,7 @@ function MaintenancePage() {
                     </tr>
                   ))
                 ) : (
-                  <tr>
-                    <td colSpan={8} className="muted">
-                      No maintenance requests found.
-                    </td>
-                  </tr>
+                  <EmptyTableRow colSpan={8} title="No maintenance requests found" detail="Create a request or adjust the search." />
                 )}
               </tbody>
             </table>

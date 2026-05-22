@@ -1,5 +1,6 @@
 import { Download, FileText, LifeBuoy, Printer, ReceiptText, Send, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { EmptyTableRow } from "../components/EmptyState";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
@@ -27,17 +28,6 @@ const blankRequest = {
   priority: "normal",
   description: ""
 };
-
-const EmptyState = ({ title, detail, colSpan }) => (
-  <tr>
-    <td colSpan={colSpan}>
-      <div className="empty-state">
-        <strong>{title}</strong>
-        <span>{detail}</span>
-      </div>
-    </td>
-  </tr>
-);
 
 const pdfEscape = (value) => String(value ?? "").replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
 
@@ -290,7 +280,7 @@ function PortalPage({ view = "overview" }) {
       ) : null}
 
       {view === "bills" ? (
-        <section className="workspace-grid">
+        <section className="workspace-grid portal-workspace-grid">
           <div className="page-stack">
           <div className="panel">
             <div className="panel-heading">
@@ -312,7 +302,7 @@ function PortalPage({ view = "overview" }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {billTable.total ? (
+                  {billTable.visibleRows.length ? (
                     billTable.visibleRows.map((bill) => (
                       <tr key={bill.id}>
                         <td>
@@ -334,7 +324,7 @@ function PortalPage({ view = "overview" }) {
                       </tr>
                     ))
                   ) : (
-                    <EmptyState
+                    <EmptyTableRow
                       colSpan={7}
                       title="No bills yet"
                       detail="Your bills will appear here after meter readings are processed."
@@ -349,7 +339,7 @@ function PortalPage({ view = "overview" }) {
       ) : null}
 
       {view === "receipts" ? (
-        <section className="workspace-grid">
+        <section className="workspace-grid portal-workspace-grid">
           <div className="page-stack">
             <div className="panel">
             <div className="panel-heading">
@@ -370,7 +360,7 @@ function PortalPage({ view = "overview" }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {receiptTable.total ? (
+                  {receiptTable.visibleRows.length ? (
                     receiptTable.visibleRows.map((payment) => (
                       <tr key={payment.id}>
                         <td>
@@ -389,7 +379,7 @@ function PortalPage({ view = "overview" }) {
                       </tr>
                     ))
                   ) : (
-                    <EmptyState
+                    <EmptyTableRow
                       colSpan={6}
                       title="No receipts yet"
                       detail="Posted payments and downloadable receipts will appear here."
@@ -404,7 +394,7 @@ function PortalPage({ view = "overview" }) {
       ) : null}
 
       {view === "requests" ? (
-        <section className="workspace-grid">
+        <section className="workspace-grid portal-workspace-grid">
           <div className="page-stack">
           <form className="panel form-grid" onSubmit={submitRequest}>
             <div className="panel-heading">
@@ -477,7 +467,7 @@ function PortalPage({ view = "overview" }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {requestTable.total ? (
+                  {requestTable.visibleRows.length ? (
                     requestTable.visibleRows.map((request) => (
                       <tr key={request.id}>
                         <td>
@@ -492,7 +482,7 @@ function PortalPage({ view = "overview" }) {
                       </tr>
                     ))
                   ) : (
-                    <EmptyState
+                    <EmptyTableRow
                       colSpan={4}
                       title="No service requests yet"
                       detail="Use the request form above to report leaks, meter faults, or supply concerns."

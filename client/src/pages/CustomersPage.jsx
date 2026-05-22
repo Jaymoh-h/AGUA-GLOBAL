@@ -1,6 +1,7 @@
 import { Download, FileText, Plus, Printer, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
+import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
@@ -443,8 +444,9 @@ function CustomersPage({ user }) {
                 </tr>
               </thead>
               <tbody>
-                {customerTable.visibleRows.map((customer) => (
-                  <tr key={customer.id}>
+                {customerTable.visibleRows.length ? (
+                  customerTable.visibleRows.map((customer) => (
+                    <tr key={customer.id}>
                     <td>
                       <strong>{customer.name}</strong>
                       <small>{customer.phone}</small>
@@ -486,8 +488,11 @@ function CustomersPage({ user }) {
                         ) : null}
                       </td>
                     ) : null}
-                  </tr>
-                ))}
+                    </tr>
+                  ))
+                ) : (
+                  <EmptyTableRow colSpan={canWrite ? 8 : 7} title="No customers found" detail="Add customers or adjust the filters." />
+                )}
               </tbody>
             </table>
           </div>
@@ -819,9 +824,7 @@ function CustomersPage({ user }) {
                         </tr>
                       ))
                     ) : (
-                      <tr>
-                        <td colSpan="6">No bill or payment activity in this period.</td>
-                      </tr>
+                      <EmptyTableRow colSpan={6} title="No statement activity" detail="No bill or payment activity in this period." />
                     )}
                   </tbody>
                 </table>
