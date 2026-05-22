@@ -11,6 +11,15 @@ const date = (value) => (value ? new Date(value).toLocaleDateString() : "-");
 const label = (value) => String(value || "").replace(/_/g, " ");
 const billBalance = (bill) =>
   Number(bill?.balance_amount ?? Number(bill?.total_amount || bill?.amount || 0) - Number(bill?.paid_amount || 0));
+const nonZeroChargeRows = (bill) =>
+  [
+    ["Usage subtotal", bill?.subtotal_amount || bill?.amount],
+    ["Fixed charge", bill?.fixed_charge_amount],
+    ["Penalty", bill?.penalty_amount],
+    ["VAT", bill?.vat_amount],
+    ["Reconnection fee", bill?.reconnection_fee_amount],
+    ["Adjustment", bill?.adjustment_amount]
+  ].filter(([label, amount]) => label === "Usage subtotal" || Number(amount || 0) !== 0);
 
 function BillsPage({ user }) {
   const [bills, setBills] = useState([]);
@@ -251,30 +260,12 @@ function BillsPage({ user }) {
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td>Usage subtotal</td>
-                  <td>{money(selectedBill.subtotal_amount || selectedBill.amount)}</td>
-                </tr>
-                <tr>
-                  <td>Fixed charge</td>
-                  <td>{money(selectedBill.fixed_charge_amount)}</td>
-                </tr>
-                <tr>
-                  <td>Penalty</td>
-                  <td>{money(selectedBill.penalty_amount)}</td>
-                </tr>
-                <tr>
-                  <td>VAT</td>
-                  <td>{money(selectedBill.vat_amount)}</td>
-                </tr>
-                <tr>
-                  <td>Reconnection fee</td>
-                  <td>{money(selectedBill.reconnection_fee_amount)}</td>
-                </tr>
-                <tr>
-                  <td>Adjustment</td>
-                  <td>{money(selectedBill.adjustment_amount)}</td>
-                </tr>
+                {nonZeroChargeRows(selectedBill).map(([label, amount]) => (
+                  <tr key={label}>
+                    <td>{label}</td>
+                    <td>{money(amount)}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -387,7 +378,9 @@ function BillsPage({ user }) {
             {businessSettings?.receipt_footer_note ? <p>{businessSettings.receipt_footer_note}</p> : null}
             <small>{businessSettings?.business_name || "Water Billing"} customer bill</small>
           </div>
-          <AuditPanel entityType="bill" entityId={selectedBill.id} title="Bill Audit" />
+          <div className="screen-only">
+            <AuditPanel entityType="bill" entityId={selectedBill.id} title="Bill Audit" />
+          </div>
         </div>
       ) : null}
     </section>

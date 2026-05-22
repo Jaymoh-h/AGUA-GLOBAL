@@ -121,7 +121,8 @@ export const api = {
       preview: (applicationDate = "") =>
         request(`/billing/penalties/preview${applicationDate ? `?application_date=${applicationDate}` : ""}`),
       apply: (payload) => request("/billing/penalties/apply", { method: "POST", body: payload }),
-      waive: (id, payload) => request(`/billing/penalties/${id}/waive`, { method: "PATCH", body: payload })
+      waive: (id, payload) => request(`/billing/penalties/${id}/waive`, { method: "PATCH", body: payload }),
+      reapply: (id, payload) => request(`/billing/penalties/${id}/reapply`, { method: "PATCH", body: payload })
     }
   },
   businessSettings: {
@@ -133,7 +134,8 @@ export const api = {
   meters: {
     list: (customerId) => request(`/meters?customer_id=${customerId}`),
     events: (customerId = "") => request(`/meters/events${customerId ? `?customer_id=${customerId}` : ""}`),
-    replace: (payload) => request("/meters/replace", { method: "POST", body: payload })
+    replace: (payload) => request("/meters/replace", { method: "POST", body: payload }),
+    updateEvent: (id, payload) => request(`/meters/events/${id}`, { method: "PUT", body: payload })
   },
   auditEvents: {
     list: (params = {}) => {

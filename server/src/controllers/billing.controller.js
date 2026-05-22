@@ -610,6 +610,89 @@ const waivePenaltyApplication = asyncHandler(async (req, res) => {
   }
 });
 
+const reapplyPenaltyApplication = asyncHandler(async (req, res) => {
+  const reason = normalizeCorrectionReason(req.body);
+  if (!reason) {
+    throw new ApiError(400, "Re-application reason is required.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const applicationResult = await client.query(
+      "SELECT * FROM bill_penalty_applications WHERE id = $1 FOR UPDATE",
+      [req.params.id]
+    );
+    const application = applicationResult.rows[0];
+    if (!application) throw new ApiError(404, "Penalty application not found.");
+    if (!application.waived_at) throw new ApiError(400, "Penalty is already applied.");
+
+    const beforeResult = await client.query("SELECT * FROM bills WHERE id = $1 FOR UPDATE", [
+      application.bill_id
+    ]);
+    const before = beforeResult.rows[0];
+    if (!before) throw new ApiError(404, "Bill not found.");
+    await assertBillEditable(client, before.id, req, reason, "re-apply a waived penalty");
+
+    const penaltyAmount = Number(application.amount || 0);
+    const nextTotal = Number(before.total_amount || before.amount || 0) + penaltyAmount;
+    const nextPenalty = Number(before.penalty_amount || 0) + penaltyAmount;
+    const nextPaidAmount = Number(before.paid_amount || 0);
+    const nextBalance = Math.max(nextTotal - nextPaidAmount, 0);
+    const nextStatus = nextBalance <= 0 ? "paid" : nextPaidAmount > 0 ? "partial" : "unpaid";
+
+    const updatedBill = await client.query(
+      `UPDATE bills
+       SET amount = amount + $1,
+           penalty_amount = $2,
+           total_amount = $3,
+           balance_amount = $4,
+           status = $5::varchar,
+           paid_at = CASE WHEN $5::text = 'paid' THEN COALESCE(paid_at, NOW()) ELSE NULL END
+       WHERE id = $6
+       RETURNING *`,
+      [penaltyAmount, nextPenalty, nextTotal, nextBalance, nextStatus, before.id]
+    );
+
+    const updatedApplication = await client.query(
+      `UPDATE bill_penalty_applications
+       SET waived_by = NULL,
+           waived_at = NULL,
+           waiver_reason = NULL,
+           reason = $1,
+           applied_by = $2,
+           applied_on = CURRENT_DATE
+       WHERE id = $3
+       RETURNING *`,
+      [reason, req.user.id, application.id]
+    );
+
+    await recordAuditEvent(client, {
+      req,
+      action: "bill.penalty_reapplied",
+      entityType: "bill",
+      entityId: before.id,
+      beforeData: {
+        bill: before,
+        penalty_application: application
+      },
+      afterData: {
+        bill: updatedBill.rows[0],
+        penalty_application: updatedApplication.rows[0]
+      },
+      reason
+    });
+
+    await client.query("COMMIT");
+    res.json({ bill: updatedBill.rows[0], penalty_application: updatedApplication.rows[0] });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = {
   applyPenaltyApplications,
   createBillingPeriod,
@@ -617,6 +700,7 @@ module.exports = {
   listPenaltyApplications,
   listBillingPeriods,
   previewPenaltyApplications,
+  reapplyPenaltyApplication,
   waivePenaltyApplication,
   updateBillingPeriodStatus,
   updateBillingSettings

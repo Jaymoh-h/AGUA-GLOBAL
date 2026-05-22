@@ -472,6 +472,9 @@ const getCustomerStatement = asyncHandler(async (req, res) => {
   if (!customer) {
     throw new ApiError(404, "Customer not found.");
   }
+  if (req.user.role === "customer" && Number(customer.id) !== Number(req.user.customer_id || 0)) {
+    throw new ApiError(403, "You do not have permission to view this statement.");
+  }
 
   const openingResult = hasStart
     ? await pool.query(

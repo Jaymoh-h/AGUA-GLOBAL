@@ -301,8 +301,125 @@ const replaceMeter = asyncHandler(async (req, res) => {
   }
 });
 
+const updateMeterEvent = asyncHandler(async (req, res) => {
+  const correctionReason = normalizeCorrectionReason(req.body);
+  if (!correctionReason) {
+    throw new ApiError(400, "Correction reason is required.");
+  }
+
+  const eventDate = req.body.event_date;
+  const oldFinalReading = Number(req.body.old_final_reading);
+  const newInitialReading = Number(req.body.new_initial_reading || 0);
+
+  if (!eventDate || !/^\d{4}-\d{2}-\d{2}$/.test(String(eventDate))) {
+    throw new ApiError(400, "Event date must use YYYY-MM-DD.");
+  }
+  if (!Number.isFinite(oldFinalReading) || oldFinalReading < 0) {
+    throw new ApiError(400, "Old final reading must be zero or greater.");
+  }
+  if (!Number.isFinite(newInitialReading) || newInitialReading < 0) {
+    throw new ApiError(400, "New initial reading must be zero or greater.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const eventResult = await client.query("SELECT * FROM meter_events WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const before = eventResult.rows[0];
+    if (!before) throw new ApiError(404, "Meter event not found.");
+
+    const billingPeriod = await getOrCreateBillingPeriod(client, eventDate, req.user.id);
+    await assertBillingPeriodEditableById(client, billingPeriod.id, req, correctionReason, "edit a meter event");
+
+    const updatedEvent = await client.query(
+      `UPDATE meter_events
+       SET event_date = $1,
+           old_final_reading = $2,
+           new_initial_reading = $3,
+           reason = $4
+       WHERE id = $5
+       RETURNING *`,
+      [eventDate, oldFinalReading, newInitialReading, req.body.reason || null, before.id]
+    );
+
+    if (before.old_meter_id) {
+      await client.query("UPDATE meters SET removed_at = $1, updated_at = NOW() WHERE id = $2", [
+        eventDate,
+        before.old_meter_id
+      ]);
+      const finalReadingResult = await client.query(
+        `UPDATE meter_readings
+         SET reading_value = $1,
+             reading_date = $2,
+             billing_period_id = $3,
+             updated_by = $4,
+             updated_at = NOW()
+         WHERE id = (
+           SELECT id FROM meter_readings
+           WHERE meter_id = $5
+             AND notes = 'Final reading recorded during meter replacement'
+           ORDER BY created_at DESC, id DESC
+           LIMIT 1
+         )
+         RETURNING *`,
+        [oldFinalReading, eventDate, billingPeriod.id, req.user.id, before.old_meter_id]
+      );
+      if (finalReadingResult.rows[0]) {
+        await recalculateBillForReading(client, finalReadingResult.rows[0].id, {
+          req,
+          correctionReason,
+          action: "recalculate the corrected meter event final bill"
+        });
+      }
+    }
+
+    if (before.new_meter_id) {
+      await client.query(
+        "UPDATE meters SET installed_at = $1, initial_reading = $2, notes = $3, updated_at = NOW() WHERE id = $4",
+        [eventDate, newInitialReading, req.body.reason || "Meter replacement", before.new_meter_id]
+      );
+      await client.query(
+        `UPDATE meter_readings
+         SET reading_value = $1,
+             reading_date = $2,
+             billing_period_id = $3,
+             updated_by = $4,
+             updated_at = NOW()
+         WHERE id = (
+           SELECT id FROM meter_readings
+           WHERE meter_id = $5
+             AND previous_reading_id IS NULL
+             AND notes = 'Initial reading recorded during meter replacement'
+           ORDER BY created_at DESC, id DESC
+           LIMIT 1
+         )`,
+        [newInitialReading, eventDate, billingPeriod.id, req.user.id, before.new_meter_id]
+      );
+    }
+
+    await recordAuditEvent(client, {
+      req,
+      action: "meter_event.updated",
+      entityType: "meter_event",
+      entityId: before.id,
+      beforeData: before,
+      afterData: updatedEvent.rows[0],
+      reason: correctionReason
+    });
+
+    await client.query("COMMIT");
+    res.json(updatedEvent.rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = {
   listMeterEvents,
   listMeters,
-  replaceMeter
+  replaceMeter,
+  updateMeterEvent
 };

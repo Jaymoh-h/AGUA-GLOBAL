@@ -672,7 +672,9 @@ function PaymentsPage({ user }) {
                 {businessSettings?.receipt_footer_note ? <p>{businessSettings.receipt_footer_note}</p> : null}
                 <small>Recorded by {receiptDetail.payment.recorded_by_name || "-"}</small>
               </div>
-              <AuditPanel entityType="payment" entityId={receiptDetail.payment.id} title="Payment Audit" />
+              <div className="screen-only">
+                <AuditPanel entityType="payment" entityId={receiptDetail.payment.id} title="Payment Audit" />
+              </div>
             </div>
           ) : null}
 

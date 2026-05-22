@@ -6,6 +6,7 @@ const {
   listPenaltyApplications,
   listBillingPeriods,
   previewPenaltyApplications,
+  reapplyPenaltyApplication,
   waivePenaltyApplication,
   updateBillingPeriodStatus,
   updateBillingSettings
@@ -24,5 +25,6 @@ router.get("/penalties", authorize("admin", "accountant"), listPenaltyApplicatio
 router.get("/penalties/preview", authorize("admin", "accountant"), previewPenaltyApplications);
 router.post("/penalties/apply", authorize("admin", "accountant"), applyPenaltyApplications);
 router.patch("/penalties/:id/waive", authorize("admin", "accountant"), waivePenaltyApplication);
+router.patch("/penalties/:id/reapply", authorize("admin", "accountant"), reapplyPenaltyApplication);
 
 module.exports = router;

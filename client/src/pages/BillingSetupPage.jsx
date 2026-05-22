@@ -151,6 +151,19 @@ function BillingSetupPage() {
     }
   };
 
+  const reapplyPenalty = async (application) => {
+    const reason = window.prompt("Reason for re-applying this waived penalty:");
+    if (!reason) return;
+    setMessage("");
+    try {
+      await api.billing.penalties.reapply(application.id, { reason });
+      await load();
+      setMessage("Penalty re-applied.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
   return (
     <section className="page-stack">
       <header className="page-header">
@@ -472,7 +485,9 @@ function BillingSetupPage() {
                         Waive
                       </button>
                     ) : (
-                      "-"
+                      <button type="button" onClick={() => reapplyPenalty(application)}>
+                        Re-apply
+                      </button>
                     )}
                   </td>
                 </tr>

@@ -98,11 +98,13 @@ function App() {
   }
 
   const pages = {
-    portal: <PortalPage user={user} />,
+    portal: <PortalPage user={user} view="overview" />,
     dashboard: <DashboardPage user={user} />,
     customers: <CustomersPage user={user} />,
     readings: <ReadingsPage user={user} />,
-    bills: <BillsPage user={user} />,
+    bills: user.role === "customer" ? <PortalPage user={user} view="bills" /> : <BillsPage user={user} />,
+    receipts: <PortalPage user={user} view="receipts" />,
+    requests: <PortalPage user={user} view="requests" />,
     billing: <BillingSetupPage user={user} />,
     business: <BusinessSettingsPage user={user} />,
     audit: <AuditTrailPage user={user} />,

@@ -1,4 +1,4 @@
-import { Download, Eye, FileUp, Gauge, Replace, Save, Send } from "lucide-react";
+import { Download, Edit3, Eye, FileUp, Gauge, Replace, Save, Send } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
 import TableControls, { useTableControls } from "../components/TableControls";
@@ -14,6 +14,7 @@ function ReadingsPage() {
   const [form, setForm] = useState({
     customer_id: "",
     reading_value: "",
+    previous_reading_value: "",
     reading_date: new Date().toISOString().slice(0, 10),
     correction_reason: ""
   });
@@ -32,6 +33,14 @@ function ReadingsPage() {
   const [importPreview, setImportPreview] = useState(null);
   const [importing, setImporting] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [editingEventId, setEditingEventId] = useState(null);
+  const [eventForm, setEventForm] = useState({
+    event_date: "",
+    old_final_reading: "",
+    new_initial_reading: "",
+    reason: "",
+    correction_reason: ""
+  });
   const [customerFilter, setCustomerFilter] = useState("");
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
@@ -55,6 +64,7 @@ function ReadingsPage() {
   const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
   const setReplacementField = (field, value) =>
     setReplacementForm((current) => ({ ...current, [field]: value }));
+  const setEventField = (field, value) => setEventForm((current) => ({ ...current, [field]: value }));
   const restrictedReadingPeriod = ["closed", "locked"].includes(readingContext?.billingPeriod?.status);
   const restrictedReplacementPeriod = ["closed", "locked"].includes(replacementContext?.billingPeriod?.status);
 
@@ -130,13 +140,14 @@ function ReadingsPage() {
         customer_id: Number(form.customer_id),
         meter_id: readingContext?.activeMeter?.id,
         reading_value: Number(form.reading_value),
+        previous_reading_value: form.previous_reading_value === "" ? null : Number(form.previous_reading_value),
         reading_date: form.reading_date,
         correction_reason: form.correction_reason
       };
       const result = editingId
         ? await api.readings.update(editingId, payload)
         : await api.readings.create(payload);
-      setForm({ customer_id: "", reading_value: "", reading_date: new Date().toISOString().slice(0, 10), correction_reason: "" });
+      setForm({ customer_id: "", reading_value: "", previous_reading_value: "", reading_date: new Date().toISOString().slice(0, 10), correction_reason: "" });
       setReadingContext(null);
       setEditingId(null);
       await load();
@@ -151,6 +162,7 @@ function ReadingsPage() {
     setForm({
       customer_id: reading.customer_id || "",
       reading_value: reading.reading_value || "",
+      previous_reading_value: reading.previous_reading_id ? "" : reading.previous_reading_value ?? "",
       reading_date: reading.reading_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
       correction_reason: ""
     });
@@ -159,7 +171,7 @@ function ReadingsPage() {
   const cancelEdit = () => {
     setEditingId(null);
     setReadingContext(null);
-    setForm({ customer_id: "", reading_value: "", reading_date: new Date().toISOString().slice(0, 10), correction_reason: "" });
+    setForm({ customer_id: "", reading_value: "", previous_reading_value: "", reading_date: new Date().toISOString().slice(0, 10), correction_reason: "" });
   };
 
   const submitReplacement = async (event) => {
@@ -186,6 +198,47 @@ function ReadingsPage() {
       setReplacementContext(null);
       await load();
       setMessage("Meter replacement recorded.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const editMeterEvent = (event) => {
+    setEditingEventId(event.id);
+    setEventForm({
+      event_date: event.event_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
+      old_final_reading: event.old_final_reading ?? "",
+      new_initial_reading: event.new_initial_reading ?? "",
+      reason: event.reason || "",
+      correction_reason: ""
+    });
+  };
+
+  const cancelMeterEventEdit = () => {
+    setEditingEventId(null);
+    setEventForm({
+      event_date: "",
+      old_final_reading: "",
+      new_initial_reading: "",
+      reason: "",
+      correction_reason: ""
+    });
+  };
+
+  const submitMeterEventEdit = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    try {
+      await api.meters.updateEvent(editingEventId, {
+        event_date: eventForm.event_date,
+        old_final_reading: Number(eventForm.old_final_reading),
+        new_initial_reading: Number(eventForm.new_initial_reading || 0),
+        reason: eventForm.reason,
+        correction_reason: eventForm.correction_reason
+      });
+      cancelMeterEventEdit();
+      await load();
+      setMessage("Meter event updated.");
     } catch (err) {
       setMessage(err.message);
     }
@@ -315,10 +368,22 @@ function ReadingsPage() {
                 value={form.reading_value}
                 onChange={(event) => setField("reading_value", event.target.value)}
                 type="number"
-                min={readingContext?.previousReading?.reading_value || 0}
+                min={readingContext?.previousReading?.reading_value || form.previous_reading_value || 0}
                 required
               />
             </label>
+            {editingId && !readingContext?.previousReading ? (
+              <label>
+                Base reading for this bill
+                <input
+                  value={form.previous_reading_value}
+                  onChange={(event) => setField("previous_reading_value", event.target.value)}
+                  type="number"
+                  min="0"
+                  placeholder="Optional previous/base reading"
+                />
+              </label>
+            ) : null}
             <label>
               Reading date
               <input value={form.reading_date} onChange={(event) => setField("reading_date", event.target.value)} type="date" required />
@@ -635,6 +700,39 @@ function ReadingsPage() {
               <h3>Meter Events</h3>
               <Replace size={18} />
             </div>
+            {editingEventId ? (
+              <form className="form-grid" onSubmit={submitMeterEventEdit}>
+                <label>
+                  Event date
+                  <input value={eventForm.event_date} onChange={(event) => setEventField("event_date", event.target.value)} type="date" required />
+                </label>
+                <label>
+                  Old final reading
+                  <input value={eventForm.old_final_reading} onChange={(event) => setEventField("old_final_reading", event.target.value)} type="number" min="0" required />
+                </label>
+                <label>
+                  New initial reading
+                  <input value={eventForm.new_initial_reading} onChange={(event) => setEventField("new_initial_reading", event.target.value)} type="number" min="0" required />
+                </label>
+                <label>
+                  Reason
+                  <textarea value={eventForm.reason} onChange={(event) => setEventField("reason", event.target.value)} rows="2" />
+                </label>
+                <label>
+                  Correction reason
+                  <textarea value={eventForm.correction_reason} onChange={(event) => setEventField("correction_reason", event.target.value)} rows="2" required />
+                </label>
+                <div className="row-actions">
+                  <button className="primary-button" type="submit">
+                    <Save size={17} />
+                    Save event
+                  </button>
+                  <button type="button" onClick={cancelMeterEventEdit}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : null}
             <TableControls table={meterEventTable} label="events" placeholder="Search meter events" />
             <div className="table-wrap">
               <table>
@@ -647,6 +745,7 @@ function ReadingsPage() {
                     <th>New Meter</th>
                     <th>New Initial</th>
                     <th>Reason</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -662,6 +761,12 @@ function ReadingsPage() {
                       <td>{event.new_meter_number || "-"}</td>
                       <td>{Number(event.new_initial_reading || 0).toLocaleString()}</td>
                       <td>{event.reason || "-"}</td>
+                      <td>
+                        <button type="button" onClick={() => editMeterEvent(event)}>
+                          <Edit3 size={15} />
+                          Edit
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

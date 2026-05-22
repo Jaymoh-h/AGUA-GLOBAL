@@ -1,4 +1,4 @@
-import { FileText, LifeBuoy, Printer, ReceiptText, Send, X } from "lucide-react";
+import { Download, FileText, LifeBuoy, Printer, ReceiptText, Send, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
@@ -11,6 +11,15 @@ const number = (value) => Number(value || 0).toLocaleString();
 const date = (value) => value?.slice(0, 10) || "-";
 const label = (value) => String(value || "-").replaceAll("_", " ");
 const accountPositionLabel = (value) => (Number(value || 0) < 0 ? "Customer credit" : "Amount due");
+const nonZeroChargeRows = (bill) =>
+  [
+    ["Usage subtotal", bill?.subtotal_amount || bill?.total_amount],
+    ["Fixed charge", bill?.fixed_charge_amount],
+    ["Penalty", bill?.penalty_amount],
+    ["VAT", bill?.vat_amount],
+    ["Reconnection fee", bill?.reconnection_fee_amount],
+    ["Adjustment", bill?.adjustment_amount]
+  ].filter(([title, amount]) => title === "Usage subtotal" || Number(amount || 0) !== 0);
 
 const blankRequest = {
   title: "",
@@ -30,7 +39,84 @@ const EmptyState = ({ title, detail, colSpan }) => (
   </tr>
 );
 
-function PortalPage() {
+const pdfEscape = (value) => String(value ?? "").replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+
+const downloadTextPdf = (filename, pages) => {
+  const objects = [];
+  const addObject = (body) => {
+    objects.push(body);
+    return objects.length;
+  };
+  const fontId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  const pageIds = [];
+
+  pages.forEach((lines) => {
+    const content = [
+      "BT",
+      "/F1 10 Tf",
+      "14 TL",
+      ...lines.map((line, index) => `1 0 0 1 50 ${790 - index * 14} Tm (${pdfEscape(line).slice(0, 110)}) Tj`),
+      "ET"
+    ].join("\n");
+    const contentId = addObject(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+    const pageId = addObject(`<< /Type /Page /Parent 0 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentId} 0 R >>`);
+    pageIds.push(pageId);
+  });
+
+  const pagesId = addObject(`<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`);
+  pageIds.forEach((pageId) => {
+    objects[pageId - 1] = objects[pageId - 1].replace("/Parent 0 0 R", `/Parent ${pagesId} 0 R`);
+  });
+  const catalogId = addObject(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
+  const chunks = ["%PDF-1.4\n"];
+  const offsets = [0];
+  objects.forEach((body, index) => {
+    offsets.push(chunks.join("").length);
+    chunks.push(`${index + 1} 0 obj\n${body}\nendobj\n`);
+  });
+  const xrefOffset = chunks.join("").length;
+  chunks.push(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`);
+  offsets.slice(1).forEach((offset) => chunks.push(`${String(offset).padStart(10, "0")} 00000 n \n`));
+  chunks.push(`trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
+
+  const blob = new Blob([chunks.join("")], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+};
+
+const buildStatementPdfPages = (statement) => {
+  const header = [
+    `${statement.customer.name} Statement`,
+    `Account: ${statement.customer.acc_number} | Zone: ${statement.customer.zone_name}`,
+    statement.period.lifetime ? "Period: Lifetime" : `Period: ${statement.period.start_date || "Start"} to ${statement.period.end_date || "End"}`,
+    `Opening Balance: ${money(statement.opening_balance)}`,
+    ""
+  ];
+  const rows = statement.transactions.map(
+    (row) =>
+      `${date(row.transaction_date)} | ${row.reference} | Dr ${money(row.debit)} | Cr ${money(row.credit)} | Bal ${money(row.running_balance)}`
+  );
+  const footer = [
+    "",
+    `Total Debits: ${money(statement.totals.debit)}`,
+    `Total Credits: ${money(statement.totals.credit)}`,
+    `${accountPositionLabel(statement.totals.closing_balance)}: ${moneyAbs(statement.totals.closing_balance)}`
+  ];
+  const allLines = [...header, ...rows, ...footer];
+  const pages = [];
+  for (let index = 0; index < allLines.length; index += 52) {
+    pages.push(allLines.slice(index, index + 52));
+  }
+  return pages.length ? pages : [header];
+};
+
+function PortalPage({ view = "overview" }) {
   const [data, setData] = useState(null);
   const [requestForm, setRequestForm] = useState(blankRequest);
   const [selectedBill, setSelectedBill] = useState(null);
@@ -49,6 +135,12 @@ function PortalPage() {
   const requestTable = useTableControls(data?.serviceRequests || [], {
     searchFields: ["request_number", "title", "category", "status", "reported_at"]
   });
+  const viewTitles = {
+    overview: data?.customer?.name || "Portal",
+    bills: "Bills",
+    receipts: "Receipts",
+    requests: "Requests"
+  };
 
   const load = async () => {
     setData(await api.portal.dashboard());
@@ -101,6 +193,17 @@ function PortalPage() {
     setTimeout(() => window.print(), 50);
   };
 
+  const downloadStatement = async () => {
+    setMessage("");
+    try {
+      const statement = await api.customers.statement(data.customer.id);
+      downloadTextPdf(`${data.customer.acc_number}-statement.pdf`, buildStatementPdfPages(statement));
+      setMessage("Statement PDF downloaded.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
   if (!data) {
     return <p className="muted">Loading portal...</p>;
   }
@@ -110,7 +213,7 @@ function PortalPage() {
       <header className="page-header">
         <div>
           <p className="eyebrow">Customer Portal</p>
-          <h2>{data.customer.name}</h2>
+          <h2>{viewTitles[view] || data.customer.name}</h2>
           <p className="muted">
             {data.customer.acc_number} | {data.customer.zone_name}
           </p>
@@ -119,65 +222,79 @@ function PortalPage() {
 
       {message ? <p className="form-note">{message}</p> : null}
 
-      <div className="stat-grid">
-        <StatCard label={accountPositionLabel(openBalance)} value={moneyAbs(openBalance)} detail="Net account position" />
-        <StatCard label="Open bills" value={number(data.summary.open_bills)} detail="Unpaid or partial bills" />
-        <StatCard label="Available credit" value={money(data.summary.credit_balance)} detail="Auto-applies to new bills" />
-        <StatCard label="Open requests" value={number(activeRequests)} detail="Service requests in progress" />
-      </div>
-
-      <div className="panel portal-profile-panel">
-        <div className="panel-heading">
-          <h3>Account Summary</h3>
+      {view === "overview" ? (
+        <div className="row-actions screen-only">
+          <button type="button" onClick={downloadStatement}>
+            <Download size={16} />
+            Statement PDF
+          </button>
         </div>
-        <div className="portal-profile-grid">
-          <div>
-            <span>Account</span>
-            <strong>{data.customer.acc_number}</strong>
-          </div>
-          <div>
-            <span>Phone</span>
-            <strong>{data.customer.phone || "-"}</strong>
-          </div>
-          <div>
-            <span>Zone</span>
-            <strong>{data.customer.zone_name}</strong>
-          </div>
-          <div>
-            <span>Tariff</span>
-            <strong>{data.customer.rate_name}</strong>
-            <small>{money(data.customer.rate_amount)}</small>
-          </div>
-          <div>
-            <span>Deposit</span>
-            <strong>{data.customer.deposit_paid ? "Paid" : "Not paid"}</strong>
-            <small>{money(data.customer.deposit_amount)}</small>
-          </div>
-          <div>
-            <span>Latest Reading</span>
-            <strong>{data.latestReading ? number(data.latestReading.reading_value) : "-"}</strong>
-            <small>{data.latestReading ? `${data.latestReading.meter_number || "Meter"} | ${date(data.latestReading.reading_date)}` : "No reading yet"}</small>
-          </div>
-          <div>
-            <span>Account Status</span>
-            <strong>{label(data.customer.status)}</strong>
-          </div>
-          <div>
-            <span>Total Paid</span>
-            <strong>{money(data.summary.lifetime_paid)}</strong>
-          </div>
-          <div>
-            <span>Customer Credit</span>
-            <strong>{money(data.summary.credit_balance)}</strong>
-          </div>
-        </div>
-      </div>
+      ) : null}
 
-      <section className="workspace-grid">
-        <div className="page-stack">
+      {view === "overview" ? (
+        <>
+          <div className="stat-grid">
+            <StatCard label={accountPositionLabel(openBalance)} value={moneyAbs(openBalance)} detail="Net account position" />
+            <StatCard label="Open bills" value={number(data.summary.open_bills)} detail="Unpaid or partial bills" />
+            <StatCard label="Available credit" value={money(data.summary.credit_balance)} detail="Auto-applies to new bills" />
+            <StatCard label="Open requests" value={number(activeRequests)} detail="Service requests in progress" />
+          </div>
+
+          <div className="panel portal-profile-panel">
+            <div className="panel-heading">
+              <h3>Account Summary</h3>
+            </div>
+            <div className="portal-profile-grid">
+              <div>
+                <span>Account</span>
+                <strong>{data.customer.acc_number}</strong>
+              </div>
+              <div>
+                <span>Phone</span>
+                <strong>{data.customer.phone || "-"}</strong>
+              </div>
+              <div>
+                <span>Zone</span>
+                <strong>{data.customer.zone_name}</strong>
+              </div>
+              <div>
+                <span>Tariff</span>
+                <strong>{data.customer.rate_name}</strong>
+                <small>{money(data.customer.rate_amount)}</small>
+              </div>
+              <div>
+                <span>Deposit</span>
+                <strong>{data.customer.deposit_paid ? "Paid" : "Not paid"}</strong>
+                <small>{money(data.customer.deposit_amount)}</small>
+              </div>
+              <div>
+                <span>Latest Reading</span>
+                <strong>{data.latestReading ? number(data.latestReading.reading_value) : "-"}</strong>
+                <small>{data.latestReading ? `${data.latestReading.meter_number || "Meter"} | ${date(data.latestReading.reading_date)}` : "No reading yet"}</small>
+              </div>
+              <div>
+                <span>Account Status</span>
+                <strong>{label(data.customer.status)}</strong>
+              </div>
+              <div>
+                <span>Total Paid</span>
+                <strong>{money(data.summary.lifetime_paid)}</strong>
+              </div>
+              <div>
+                <span>Customer Credit</span>
+                <strong>{money(data.summary.credit_balance)}</strong>
+              </div>
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      {view === "bills" ? (
+        <section className="workspace-grid">
+          <div className="page-stack">
           <div className="panel">
             <div className="panel-heading">
-              <h3>Recent Bills</h3>
+              <h3>Bills</h3>
               <FileText size={18} />
             </div>
             <TableControls table={billTable} label="bills" placeholder="Search bills" />
@@ -227,8 +344,14 @@ function PortalPage() {
               </table>
             </div>
           </div>
+          </div>
+        </section>
+      ) : null}
 
-          <div className="panel">
+      {view === "receipts" ? (
+        <section className="workspace-grid">
+          <div className="page-stack">
+            <div className="panel">
             <div className="panel-heading">
               <h3>Receipts</h3>
               <ReceiptText size={18} />
@@ -276,9 +399,13 @@ function PortalPage() {
               </table>
             </div>
           </div>
-        </div>
+          </div>
+        </section>
+      ) : null}
 
-        <div className="page-stack">
+      {view === "requests" ? (
+        <section className="workspace-grid">
+          <div className="page-stack">
           <form className="panel form-grid" onSubmit={submitRequest}>
             <div className="panel-heading">
               <h3>Submit Request</h3>
@@ -376,7 +503,8 @@ function PortalPage() {
             </div>
           </div>
         </div>
-      </section>
+        </section>
+      ) : null}
 
       {selectedBill ? (
         <div className="panel print-surface receipt-print">
@@ -467,30 +595,12 @@ function PortalPage() {
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td>Usage subtotal</td>
-                  <td>{money(selectedBill.subtotal_amount || selectedBill.total_amount)}</td>
-                </tr>
-                <tr>
-                  <td>Fixed charge</td>
-                  <td>{money(selectedBill.fixed_charge_amount)}</td>
-                </tr>
-                <tr>
-                  <td>Penalty</td>
-                  <td>{money(selectedBill.penalty_amount)}</td>
-                </tr>
-                <tr>
-                  <td>VAT</td>
-                  <td>{money(selectedBill.vat_amount)}</td>
-                </tr>
-                <tr>
-                  <td>Reconnection fee</td>
-                  <td>{money(selectedBill.reconnection_fee_amount)}</td>
-                </tr>
-                <tr>
-                  <td>Adjustment</td>
-                  <td>{money(selectedBill.adjustment_amount)}</td>
-                </tr>
+                {nonZeroChargeRows(selectedBill).map(([title, amount]) => (
+                  <tr key={title}>
+                    <td>{title}</td>
+                    <td>{money(amount)}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

@@ -76,6 +76,15 @@ const readImportValue = (row, keys) => keys.map((key) => row[key]).find((value) 
 
 const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
 
+const normalizeOptionalReadingValue = (value, label) => {
+  if (value === undefined || value === null || value === "") return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) {
+    throw new ApiError(400, `${label} must be zero or greater.`);
+  }
+  return number;
+};
+
 const resolveReadingImportRows = async (client, csvText, { commitMode = false } = {}) => {
   const parsedRows = parseCsv(csvText);
   const importKeys = new Set();
@@ -549,7 +558,11 @@ const commitReadingImport = asyncHandler(async (req, res) => {
   }
 });
 
-const recalculateBillForReading = async (client, readingId, { req = null, correctionReason = null, action = "recalculate a bill" } = {}) => {
+const recalculateBillForReading = async (
+  client,
+  readingId,
+  { req = null, correctionReason = null, action = "recalculate a bill", baseReadingValue = null } = {}
+) => {
   const readingResult = await client.query(
     `SELECT mr.*, c.rate, c.rate_id, c.acc_number, c.name AS customer_name
      FROM meter_readings mr
@@ -571,7 +584,14 @@ const recalculateBillForReading = async (client, readingId, { req = null, correc
   if (req) {
     await assertBillingPeriodEditableById(client, billingPeriod.id, req, correctionReason, action);
   }
-  const previous = await getPreviousReadingForMeter(client, activeMeter.id, reading.reading_date, reading.id);
+  const previous =
+    (await getPreviousReadingForMeter(client, activeMeter.id, reading.reading_date, reading.id)) ||
+    (baseReadingValue !== null || reading.previous_reading_value !== null
+      ? {
+          id: null,
+          reading_value: baseReadingValue !== null ? baseReadingValue : reading.previous_reading_value
+        }
+      : null);
 
   await client.query(
     `UPDATE meter_readings
@@ -581,7 +601,7 @@ const recalculateBillForReading = async (client, readingId, { req = null, correc
          previous_reading_value = $4,
          updated_at = NOW()
      WHERE id = $5`,
-    [activeMeter.id, billingPeriod.id, previous?.id || null, previous?.reading_value || null, reading.id]
+    [activeMeter.id, billingPeriod.id, previous?.id || null, previous?.reading_value ?? null, reading.id]
   );
 
   const existingBillResult = await client.query(
@@ -714,6 +734,7 @@ const recalculateBillForReading = async (client, readingId, { req = null, correc
 const updateReading = asyncHandler(async (req, res) => {
   const { customer_id, reading_value, reading_date } = req.body;
   const correctionReason = normalizeCorrectionReason(req.body);
+  const baseReadingValue = normalizeOptionalReadingValue(req.body.previous_reading_value, "Base reading");
 
   if (!customer_id || reading_value === undefined || !reading_date) {
     throw new ApiError(400, "Customer, reading value, and reading date are required.");
@@ -771,7 +792,8 @@ const updateReading = asyncHandler(async (req, res) => {
       correctionReason,
       "move a reading into this period"
     );
-    const previous = await getPreviousReadingForMeter(client, activeMeter.id, reading_date, req.params.id);
+    const actualPrevious = await getPreviousReadingForMeter(client, activeMeter.id, reading_date, req.params.id);
+    const previous = actualPrevious || (baseReadingValue !== null ? { id: null, reading_value: baseReadingValue } : null);
 
     if (previous && Number(reading_value) < Number(previous.reading_value)) {
       throw new ApiError(400, "Reading cannot be lower than the previous reading.");
@@ -795,7 +817,7 @@ const updateReading = asyncHandler(async (req, res) => {
         activeMeter.id,
         billingPeriod.id,
         previous?.id || null,
-        previous?.reading_value || null,
+        previous?.reading_value ?? null,
         reading_value,
         reading_date,
         req.user.id,
@@ -815,6 +837,7 @@ const updateReading = asyncHandler(async (req, res) => {
     const bill = await recalculateBillForReading(client, updatedResult.rows[0].id, {
       req,
       correctionReason,
+      baseReadingValue: actualPrevious ? null : baseReadingValue,
       action: "recalculate a bill after editing a reading"
     });
     if (bill) {

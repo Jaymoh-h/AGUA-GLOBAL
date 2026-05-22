@@ -65,7 +65,7 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
      LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
      WHERE b.customer_id = $1
      ORDER BY b.billing_month DESC, b.created_at DESC
-     LIMIT 8`,
+     LIMIT 300`,
     [customerId]
   );
 
@@ -79,7 +79,7 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
      WHERE p.customer_id = $1
      GROUP BY p.id
      ORDER BY p.payment_date DESC, p.created_at DESC
-     LIMIT 8`,
+     LIMIT 300`,
     [customerId]
   );
 
@@ -91,7 +91,7 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
      LEFT JOIN users u ON u.id = mr.assigned_to
      WHERE mr.customer_id = $1
      ORDER BY mr.reported_at DESC
-     LIMIT 8`,
+     LIMIT 300`,
     [customerId]
   );
 
