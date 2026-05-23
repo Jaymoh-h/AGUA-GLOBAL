@@ -7,17 +7,34 @@ import { api } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
 
 const readingImportHeaders = ["acc_number", "reading_date", "reading_value", "meter_number", "notes"];
+const meterRoleLabels = {
+  client_billing: "Client billing",
+  source_backup: "Source backup",
+  shared_source_monitoring: "Shared source monitoring"
+};
+const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 
-function ReadingsPage() {
+function ReadingsPage({ user }) {
   const [customers, setCustomers] = useState([]);
   const [readings, setReadings] = useState([]);
   const [meterEvents, setMeterEvents] = useState([]);
+  const [sourceRequests, setSourceRequests] = useState([]);
   const [form, setForm] = useState({
     customer_id: "",
+    meter_id: "",
     reading_value: "",
     previous_reading_value: "",
     reading_date: new Date().toISOString().slice(0, 10),
+    fallback_reason: "",
     correction_reason: ""
+  });
+  const [meterForm, setMeterForm] = useState({
+    customer_id: "",
+    meter_number: "",
+    meter_role: "source_backup",
+    installed_at: new Date().toISOString().slice(0, 10),
+    initial_reading: "0",
+    notes: ""
   });
   const [replacementForm, setReplacementForm] = useState({
     customer_id: "",
@@ -48,14 +65,16 @@ function ReadingsPage() {
   const [message, setMessage] = useState("");
 
   const load = async () => {
-    const [customerRows, readingRows, eventRows] = await Promise.all([
+    const [customerRows, readingRows, eventRows, sourceRows] = await Promise.all([
       api.customers.list(),
       api.readings.list(),
-      api.meters.events()
+      api.meters.events(),
+      ["admin", "accountant"].includes(user?.role) ? api.billing.sourceBillingRequests.list() : Promise.resolve([])
     ]);
     setCustomers(customerRows);
     setReadings(readingRows);
     setMeterEvents(eventRows);
+    setSourceRequests(sourceRows);
   };
 
   useEffect(() => {
@@ -63,6 +82,7 @@ function ReadingsPage() {
   }, []);
 
   const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  const setMeterField = (field, value) => setMeterForm((current) => ({ ...current, [field]: value }));
   const setReplacementField = (field, value) =>
     setReplacementForm((current) => ({ ...current, [field]: value }));
   const setEventField = (field, value) => setEventForm((current) => ({ ...current, [field]: value }));
@@ -83,9 +103,14 @@ function ReadingsPage() {
     }
 
     api.readings
-      .context(form.customer_id, form.reading_date)
+      .context(form.customer_id, form.reading_date, form.meter_id)
       .then((context) => {
-        if (!ignore) setReadingContext(context);
+        if (!ignore) {
+          setReadingContext(context);
+          if (!form.meter_id && context.activeMeter?.id) {
+            setForm((current) => (current.meter_id ? current : { ...current, meter_id: String(context.activeMeter.id) }));
+          }
+        }
       })
       .catch((err) => {
         if (!ignore) {
@@ -97,7 +122,7 @@ function ReadingsPage() {
     return () => {
       ignore = true;
     };
-  }, [form.customer_id, form.reading_date]);
+  }, [form.customer_id, form.reading_date, form.meter_id]);
 
   useEffect(() => {
     let ignore = false;
@@ -139,20 +164,37 @@ function ReadingsPage() {
     try {
       const payload = {
         customer_id: Number(form.customer_id),
-        meter_id: readingContext?.activeMeter?.id,
+        meter_id: Number(form.meter_id || readingContext?.activeMeter?.id),
         reading_value: Number(form.reading_value),
         previous_reading_value: form.previous_reading_value === "" ? null : Number(form.previous_reading_value),
         reading_date: form.reading_date,
+        fallback_reason: form.fallback_reason,
         correction_reason: form.correction_reason
       };
       const result = editingId
         ? await api.readings.update(editingId, payload)
         : await api.readings.create(payload);
-      setForm({ customer_id: "", reading_value: "", previous_reading_value: "", reading_date: new Date().toISOString().slice(0, 10), correction_reason: "" });
+      setForm({
+        customer_id: "",
+        meter_id: "",
+        reading_value: "",
+        previous_reading_value: "",
+        reading_date: new Date().toISOString().slice(0, 10),
+        fallback_reason: "",
+        correction_reason: ""
+      });
       setReadingContext(null);
       setEditingId(null);
       await load();
-      setMessage(editingId ? "Reading updated and bills recalculated." : result.bill ? "Reading submitted and bill generated." : "Baseline reading submitted.");
+      setMessage(
+        editingId
+          ? "Reading updated and bills recalculated."
+          : result.sourceBillingRequest
+            ? "Source-side reading submitted for admin billing approval."
+            : result.bill
+              ? "Reading submitted and bill generated."
+              : "Baseline reading submitted."
+      );
     } catch (err) {
       setMessage(err.message);
     }
@@ -162,9 +204,11 @@ function ReadingsPage() {
     setEditingId(reading.id);
     setForm({
       customer_id: reading.customer_id || "",
+      meter_id: reading.meter_id || "",
       reading_value: reading.reading_value || "",
       previous_reading_value: reading.previous_reading_id ? "" : reading.previous_reading_value ?? "",
       reading_date: reading.reading_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
+      fallback_reason: "",
       correction_reason: ""
     });
   };
@@ -172,7 +216,96 @@ function ReadingsPage() {
   const cancelEdit = () => {
     setEditingId(null);
     setReadingContext(null);
-    setForm({ customer_id: "", reading_value: "", previous_reading_value: "", reading_date: new Date().toISOString().slice(0, 10), correction_reason: "" });
+    setForm({
+      customer_id: "",
+      meter_id: "",
+      reading_value: "",
+      previous_reading_value: "",
+      reading_date: new Date().toISOString().slice(0, 10),
+      fallback_reason: "",
+      correction_reason: ""
+    });
+  };
+
+  const submitMeter = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    try {
+      await api.meters.create({
+        customer_id: Number(meterForm.customer_id),
+        meter_number: meterForm.meter_number.trim(),
+        meter_role: meterForm.meter_role,
+        installed_at: meterForm.installed_at,
+        initial_reading: Number(meterForm.initial_reading || 0),
+        notes: meterForm.notes
+      });
+      setMeterForm({
+        customer_id: "",
+        meter_number: "",
+        meter_role: "source_backup",
+        installed_at: new Date().toISOString().slice(0, 10),
+        initial_reading: "0",
+        notes: ""
+      });
+      await load();
+      setMessage("Meter registered.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const reviewSourceRequest = async (request, action) => {
+    const reviewNotes = window.prompt(
+      action === "approve" ? "Approval notes for this source-side bill:" : "Reason for rejecting this source-side bill:",
+      action === "approve" ? request.reason || "" : ""
+    );
+    if (reviewNotes === null) return;
+    setMessage("");
+    try {
+      await api.billing.sourceBillingRequests.review(request.id, {
+        action,
+        review_notes: reviewNotes.trim()
+      });
+      await load();
+      setMessage(action === "approve" ? "Source-side bill approved and generated." : "Source-side billing request rejected.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const promoteBill = async (billId, label) => {
+    const reason = window.prompt(`Reason for promoting ${label} for payment:`);
+    if (!reason?.trim()) return;
+    setMessage("");
+    try {
+      await api.bills.promote(billId, { correction_reason: reason.trim() });
+      await load();
+      setMessage(`${label} promoted for payment.`);
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const promoteCompetingBill = (request) => {
+    const competingBills = request.competing_bills || [];
+    const candidates = competingBills.filter((bill) => bill.bill_pay_status !== "payable");
+    if (!candidates.length) {
+      setMessage("No held or superseded client bill is available to promote.");
+      return;
+    }
+    const selected = window.prompt(
+      `Bill to promote:\n${candidates
+        .map((bill) => `${bill.id}: ${bill.bill_number} (${money(bill.total_amount)})`)
+        .join("\n")}\n\nEnter bill ID:`,
+      String(candidates[0].id)
+    );
+    if (selected === null) return;
+    const bill = candidates.find((candidate) => Number(candidate.id) === Number(selected));
+    if (!bill) {
+      setMessage("Selected bill was not found in the comparison list.");
+      return;
+    }
+    promoteBill(bill.id, bill.bill_number || `Bill ${bill.id}`);
   };
 
   const submitReplacement = async (event) => {
@@ -292,10 +425,22 @@ function ReadingsPage() {
     return customerMatch && fromMatch && toMatch;
   });
   const readingTable = useTableControls(filteredReadings, {
-    searchFields: ["customer_name", "acc_number", "meter_number", "reading_value", "reading_date", "created_by_name"]
+    searchFields: [
+      "customer_name",
+      "acc_number",
+      "meter_number",
+      "meter_role",
+      "source_billing_request_status",
+      "reading_value",
+      "reading_date",
+      "created_by_name"
+    ]
   });
   const meterEventTable = useTableControls(meterEvents, {
     searchFields: ["customer_name", "acc_number", "event_date", "old_meter_number", "new_meter_number", "reason"]
+  });
+  const sourceRequestTable = useTableControls(sourceRequests, {
+    searchFields: ["customer_name", "acc_number", "meter_number", "status", "reason", "bill_number", "requested_by_name"]
   });
   const exportReadings = () => {
     downloadCsvRows(
@@ -330,7 +475,18 @@ function ReadingsPage() {
             </div>
             <label>
               Customer
-              <select value={form.customer_id} onChange={(event) => setField("customer_id", event.target.value)} required>
+              <select
+                value={form.customer_id}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    customer_id: event.target.value,
+                    meter_id: "",
+                    fallback_reason: ""
+                  }))
+                }
+                required
+              >
                 <option value="">Select customer</option>
                 {customers.map((customer) => (
                   <option key={customer.id} value={customer.id}>
@@ -342,8 +498,9 @@ function ReadingsPage() {
             {readingContext ? (
               <div className="reading-context">
                 <div>
-                  <span>Active meter</span>
+                  <span>Selected meter</span>
                   <strong>{readingContext.activeMeter?.meter_number || "-"}</strong>
+                  <small>{meterRoleLabels[readingContext.activeMeter?.meter_role] || "Client billing"}</small>
                 </div>
                 <div>
                   <span>Previous reading</span>
@@ -362,6 +519,18 @@ function ReadingsPage() {
                   </small>
                 </div>
               </div>
+            ) : null}
+            {readingContext?.availableMeters?.length ? (
+              <label>
+                Meter
+                <select value={form.meter_id} onChange={(event) => setField("meter_id", event.target.value)} required>
+                  {readingContext.availableMeters.map((meter) => (
+                    <option key={meter.id} value={meter.id}>
+                      {meter.meter_number} - {meterRoleLabels[meter.meter_role] || meter.meter_role}
+                    </option>
+                  ))}
+                </select>
+              </label>
             ) : null}
             <label>
               Reading value
@@ -389,6 +558,18 @@ function ReadingsPage() {
               Reading date
               <input value={form.reading_date} onChange={(event) => setField("reading_date", event.target.value)} type="date" required />
             </label>
+            {readingContext?.activeMeter?.meter_role === "source_backup" ? (
+              <label>
+                Source fallback reason
+                <textarea
+                  value={form.fallback_reason}
+                  onChange={(event) => setField("fallback_reason", event.target.value)}
+                  rows="2"
+                  required
+                  placeholder="Why the client-side meter cannot be used for this bill"
+                />
+              </label>
+            ) : null}
             {editingId || restrictedReadingPeriod ? (
               <label>
                 Correction reason
@@ -413,6 +594,59 @@ function ReadingsPage() {
             ) : null}
             {editingId ? <AuditPanel entityType="meter_reading" entityId={editingId} title="Reading Audit" /> : null}
           </form>
+
+          {["admin", "accountant"].includes(user?.role) ? (
+          <form className="panel form-grid" onSubmit={submitMeter}>
+            <div className="panel-heading">
+              <h3>Register Meter</h3>
+              <Gauge size={18} />
+            </div>
+            <label>
+              Customer
+              <select value={meterForm.customer_id} onChange={(event) => setMeterField("customer_id", event.target.value)} required>
+                <option value="">Select customer</option>
+                {customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.acc_number} - {customer.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Meter role
+              <select value={meterForm.meter_role} onChange={(event) => setMeterField("meter_role", event.target.value)}>
+                <option value="source_backup">Source backup</option>
+                <option value="client_billing">Client billing</option>
+              </select>
+            </label>
+            <label>
+              Meter number
+              <input value={meterForm.meter_number} onChange={(event) => setMeterField("meter_number", event.target.value)} required />
+            </label>
+            <label>
+              Installed date
+              <input value={meterForm.installed_at} onChange={(event) => setMeterField("installed_at", event.target.value)} type="date" required />
+            </label>
+            <label>
+              Initial reading
+              <input
+                value={meterForm.initial_reading}
+                onChange={(event) => setMeterField("initial_reading", event.target.value)}
+                type="number"
+                min="0"
+                required
+              />
+            </label>
+            <label>
+              Notes
+              <textarea value={meterForm.notes} onChange={(event) => setMeterField("notes", event.target.value)} rows="2" />
+            </label>
+            <button className="primary-button" type="submit">
+              <Save size={17} />
+              Register meter
+            </button>
+          </form>
+          ) : null}
 
           <form className="panel form-grid" onSubmit={submitReplacement}>
             <div className="panel-heading">
@@ -624,6 +858,104 @@ function ReadingsPage() {
             </div>
           ) : null}
 
+          {["admin", "accountant"].includes(user?.role) ? (
+          <div className="panel">
+            <div className="panel-heading">
+              <h3>Source Billing Review</h3>
+              <Gauge size={18} />
+            </div>
+            <TableControls table={sourceRequestTable} label="source billing records" placeholder="Search source billing" />
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Customer</th>
+                    <th>Meter</th>
+                    <th>Period</th>
+                    <th>Units</th>
+                    <th>Amount</th>
+                    <th>Reason</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sourceRequestTable.visibleRows.length ? (
+                    sourceRequestTable.visibleRows.map((request) => (
+                      <tr key={request.id}>
+                        <td>
+                          <strong>{request.customer_name}</strong>
+                          <small>{request.acc_number}</small>
+                        </td>
+                        <td>
+                          {request.meter_number}
+                          <small>{meterRoleLabels[request.meter_role] || request.meter_role}</small>
+                        </td>
+                        <td>{request.billing_period_name || "-"}</td>
+                        <td>
+                          {Number(request.units_used || 0).toLocaleString()}
+                          <small>
+                            {Number(request.previous_reading || 0).toLocaleString()} to{" "}
+                            {Number(request.current_reading || 0).toLocaleString()}
+                          </small>
+                        </td>
+                        <td>{money(request.amount)}</td>
+                        <td>{request.reason}</td>
+                        <td>
+                          <span className={`status status-${request.status}`}>{request.status}</span>
+                          <small>
+                            {request.bill_number
+                              ? `${request.bill_number} | ${request.bill_pay_status || "payable"}`
+                              : request.review_notes || request.requested_by_name || ""}
+                          </small>
+                          {(request.competing_bills || []).map((bill) => (
+                            <small key={bill.id}>
+                              {bill.bill_number}: {bill.bill_pay_status} | {money(bill.total_amount)}
+                            </small>
+                          ))}
+                        </td>
+                        <td>
+                          {request.status === "pending" && user?.role === "admin" ? (
+                            <div className="row-actions">
+                              <button type="button" onClick={() => reviewSourceRequest(request, "approve")}>
+                                Approve
+                              </button>
+                              <button type="button" onClick={() => reviewSourceRequest(request, "reject")}>
+                                Reject
+                              </button>
+                            </div>
+                          ) : request.status === "approved" && user?.role === "admin" ? (
+                            <div className="row-actions">
+                              {request.bill_id && request.bill_pay_status !== "payable" ? (
+                                <button type="button" onClick={() => promoteBill(request.bill_id, request.bill_number || "Source bill")}>
+                                  Promote source
+                                </button>
+                              ) : null}
+                              {(request.competing_bills || []).some((bill) => bill.bill_pay_status !== "payable") ? (
+                                <button type="button" onClick={() => promoteCompetingBill(request)}>
+                                  Promote client
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <EmptyTableRow
+                      colSpan={8}
+                      title="No source billing records"
+                      detail="Source-side fallback bills and promotion choices will appear here."
+                    />
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          ) : null}
+
           <div className="panel">
             <div className="panel-heading">
               <h3>Recent Readings</h3>
@@ -664,6 +996,7 @@ function ReadingsPage() {
                     <th>Customer</th>
                     <th>Account</th>
                     <th>Meter</th>
+                    <th>Role</th>
                     <th>Previous</th>
                     <th>Reading</th>
                     <th>Date</th>
@@ -679,6 +1012,12 @@ function ReadingsPage() {
                         <td>{reading.acc_number}</td>
                         <td>{reading.meter_number || "-"}</td>
                         <td>
+                          {meterRoleLabels[reading.meter_role] || "Client billing"}
+                          {reading.source_billing_request_status ? (
+                            <small>{reading.source_billing_request_status}</small>
+                          ) : null}
+                        </td>
+                        <td>
                           {reading.previous_reading_value === null || reading.previous_reading_value === undefined
                             ? "-"
                             : Number(reading.previous_reading_value).toLocaleString()}
@@ -693,7 +1032,7 @@ function ReadingsPage() {
                       </tr>
                     ))
                   ) : (
-                    <EmptyTableRow colSpan={8} title="No readings found" detail="Record readings or adjust the filters." />
+                    <EmptyTableRow colSpan={9} title="No readings found" detail="Record readings or adjust the filters." />
                   )}
                 </tbody>
               </table>

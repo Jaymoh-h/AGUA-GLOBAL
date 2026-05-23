@@ -6,7 +6,7 @@ const getBillStatus = (paidAmount, billTotal) => {
 };
 
 const applyCustomerCreditToBill = async (client, { customerId, billId }) => {
-  const billResult = await client.query("SELECT * FROM bills WHERE id = $1 AND customer_id = $2 FOR UPDATE", [
+  const billResult = await client.query("SELECT * FROM bills WHERE id = $1 AND customer_id = $2 AND bill_pay_status = 'payable' FOR UPDATE", [
     billId,
     customerId
   ]);

@@ -17,6 +17,7 @@ const listBills = asyncHandler(async (req, res) => {
   if (req.user.role === "customer") {
     params.push(req.user.customer_id || 0);
     clauses.push(`b.customer_id = $${params.length}`);
+    clauses.push("b.bill_pay_status = 'payable'");
   }
 
   const { rows } = await pool.query(
@@ -43,7 +44,7 @@ const getBill = asyncHandler(async (req, res) => {
      LEFT JOIN zones z ON z.id = c.zone_id
      LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
      WHERE b.id = $1
-       AND ($2::text <> 'customer' OR b.customer_id = $3)`,
+       AND ($2::text <> 'customer' OR (b.customer_id = $3 AND b.bill_pay_status = 'payable'))`,
     [req.params.id, req.user.role, req.user.customer_id || 0]
   );
 
@@ -111,8 +112,109 @@ const markBillStatus = asyncHandler(async (req, res) => {
   }
 });
 
+const promoteBillForPayment = asyncHandler(async (req, res) => {
+  const reason = normalizeCorrectionReason(req.body);
+  if (!reason) {
+    throw new ApiError(400, "Promotion reason is required.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const targetResult = await client.query("SELECT * FROM bills WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const target = targetResult.rows[0];
+    if (!target) throw new ApiError(404, "Bill not found.");
+
+    const competingResult = await client.query(
+      `SELECT b.*,
+              COALESCE((
+                SELECT SUM(pa.amount)
+                FROM payment_allocations pa
+                WHERE pa.bill_id = b.id
+              ), 0) AS allocated_amount
+       FROM bills b
+       WHERE b.customer_id = $1
+         AND b.billing_period_id = $2
+         AND b.id <> $3
+         AND b.bill_pay_status = 'payable'
+         AND (b.source_billing_request_id IS NOT NULL OR $4::integer IS NOT NULL OR b.billing_source <> $5)
+       FOR UPDATE`,
+      [
+        target.customer_id,
+        target.billing_period_id,
+        target.id,
+        target.source_billing_request_id || null,
+        target.billing_source
+      ]
+    );
+
+    const paidCompetitor = competingResult.rows.find(
+      (bill) => Number(bill.paid_amount || 0) > 0 || Number(bill.allocated_amount || 0) > 0
+    );
+    if (paidCompetitor) {
+      throw new ApiError(
+        400,
+        `Bill ${paidCompetitor.bill_number || paidCompetitor.id} has payments allocated. Void those payments first, then reapply after promotion.`
+      );
+    }
+
+    const beforeData = {
+      target,
+      competing: competingResult.rows
+    };
+
+    const demoted = [];
+    for (const bill of competingResult.rows) {
+      const result = await client.query(
+        `UPDATE bills
+         SET bill_pay_status = 'superseded',
+             payability_reason = $1,
+             promoted_by = $2,
+             promoted_at = NOW()
+         WHERE id = $3
+         RETURNING *`,
+        [`Superseded by bill ${target.bill_number || target.id}: ${reason}`, req.user.id, bill.id]
+      );
+      demoted.push(result.rows[0]);
+    }
+
+    const promotedResult = await client.query(
+      `UPDATE bills
+       SET bill_pay_status = 'payable',
+           payability_reason = $1,
+           promoted_by = $2,
+           promoted_at = NOW()
+       WHERE id = $3
+       RETURNING *`,
+      [reason, req.user.id, target.id]
+    );
+
+    await recordAuditEvent(client, {
+      req,
+      action: "bill.promoted_for_payment",
+      entityType: "bill",
+      entityId: target.id,
+      beforeData,
+      afterData: {
+        promoted: promotedResult.rows[0],
+        superseded: demoted
+      },
+      reason
+    });
+
+    await client.query("COMMIT");
+    res.json({ promoted: promotedResult.rows[0], superseded: demoted });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = {
   listBills,
   getBill,
-  markBillStatus
+  markBillStatus,
+  promoteBillForPayment
 };

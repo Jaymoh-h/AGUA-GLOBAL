@@ -12,8 +12,8 @@ const run = async () => {
        c.id AS customer_id,
        c.acc_number,
        c.name,
-       COALESCE(SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount)) FILTER (WHERE b.status <> 'paid'), 0) AS balance_due,
-       COUNT(b.id) FILTER (WHERE b.status <> 'paid') AS unpaid_bills
+       COALESCE(SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount)) FILTER (WHERE b.status <> 'paid' AND b.bill_pay_status = 'payable'), 0) AS balance_due,
+       COUNT(b.id) FILTER (WHERE b.status <> 'paid' AND b.bill_pay_status = 'payable') AS unpaid_bills
      FROM customers c
      LEFT JOIN bills b ON b.customer_id = c.id
      GROUP BY c.id
@@ -43,7 +43,7 @@ const run = async () => {
       `SELECT id, COALESCE(NULLIF(total_amount, 0), amount) AS amount, paid_amount, status,
               COALESCE(NULLIF(balance_amount, 0), amount - paid_amount) AS balance
        FROM bills
-       WHERE customer_id = $1 AND status <> 'paid'
+       WHERE customer_id = $1 AND status <> 'paid' AND bill_pay_status = 'payable'
        ORDER BY billing_month ASC, id ASC
        FOR UPDATE`,
       [selectedCustomerId]

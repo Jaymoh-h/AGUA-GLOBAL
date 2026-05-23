@@ -11,6 +11,7 @@ const { applyCustomerCreditToBill } = require("../services/credit.service");
 const { calculateTariffCharge, getTariffWithBlocks } = require("../services/tariff.service");
 const {
   assertMeterBelongsToCustomer,
+  assertMeterRole,
   ensureActiveMeter,
   getActiveMeter,
   getPreviousReadingForMeter
@@ -83,6 +84,14 @@ const normalizeOptionalReadingValue = (value, label) => {
     throw new ApiError(400, `${label} must be zero or greater.`);
   }
   return number;
+};
+
+const billingSourceForMeter = (meter) => (meter?.meter_role === "source_backup" ? "source_backup" : "client_meter");
+
+const requireSourceFallbackReason = (meter, reason) => {
+  if (meter?.meter_role === "source_backup" && !String(reason || "").trim()) {
+    throw new ApiError(400, "A fallback reason is required when billing from a source-side meter.");
+  }
 };
 
 const resolveReadingImportRows = async (client, csvText, { commitMode = false } = {}) => {
@@ -225,7 +234,7 @@ const createReadingWithBill = async (
   payload,
   { source = "field", auditReason = null, correctionReason = null } = {}
 ) => {
-  const { customer_id, meter_id, reading_value, reading_date, notes } = payload;
+  const { customer_id, meter_id, reading_value, reading_date, notes, fallback_reason } = payload;
 
   const customerResult = await client.query(
     `SELECT c.*, r.amount AS rate
@@ -245,6 +254,8 @@ const createReadingWithBill = async (
     activeMeter = meterResult.rows[0];
     assertMeterBelongsToCustomer(activeMeter, customer_id);
   }
+  assertMeterRole(activeMeter, ["client_billing", "source_backup"]);
+  requireSourceFallbackReason(activeMeter, fallback_reason || notes);
 
   const duplicateResult = await client.query(
     "SELECT id FROM meter_readings WHERE meter_id = $1 AND reading_date = $2",
@@ -299,21 +310,105 @@ const createReadingWithBill = async (
   });
 
   let bill = null;
+  let sourceBillingRequest = null;
   if (previous) {
     const unitsUsed = Number(reading_value) - Number(previous.reading_value);
     const tariff = await getTariffWithBlocks(client, customer.rate_id, reading_date);
     const charge = calculateTariffCharge(tariff || customer, unitsUsed);
+    const fallbackReason = String(fallback_reason || notes || "").trim();
+    if (activeMeter.meter_role === "source_backup" && req.user.role !== "admin") {
+      const requestResult = await client.query(
+        `INSERT INTO source_billing_requests (
+          customer_id, meter_id, billing_period_id, previous_reading_id, current_reading_id,
+          previous_reading, current_reading, units_used, rate, amount, subtotal_amount,
+          fixed_charge_amount, vat_amount, reconnection_fee_amount, tariff_snapshot, due_date,
+          reason, requested_by
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+          $12, $13, $14, $15::jsonb, $16, $17, $18
+        )
+        ON CONFLICT (current_reading_id) DO UPDATE
+        SET billing_period_id = EXCLUDED.billing_period_id,
+            previous_reading_id = EXCLUDED.previous_reading_id,
+            previous_reading = EXCLUDED.previous_reading,
+            current_reading = EXCLUDED.current_reading,
+            units_used = EXCLUDED.units_used,
+            rate = EXCLUDED.rate,
+            amount = EXCLUDED.amount,
+            subtotal_amount = EXCLUDED.subtotal_amount,
+            fixed_charge_amount = EXCLUDED.fixed_charge_amount,
+            vat_amount = EXCLUDED.vat_amount,
+            reconnection_fee_amount = EXCLUDED.reconnection_fee_amount,
+            tariff_snapshot = EXCLUDED.tariff_snapshot,
+            due_date = EXCLUDED.due_date,
+            reason = EXCLUDED.reason,
+            status = 'pending',
+            updated_at = NOW()
+        WHERE source_billing_requests.status = 'pending'
+        RETURNING *`,
+        [
+          customer_id,
+          activeMeter.id,
+          billingPeriod.id,
+          previous.id,
+          reading.id,
+          previous.reading_value,
+          reading_value,
+          unitsUsed,
+          charge.rateAmount,
+          charge.totalAmount,
+          charge.subtotalAmount,
+          charge.fixedChargeAmount,
+          charge.vatAmount,
+          charge.reconnectionFeeAmount,
+          JSON.stringify(charge.tariffSnapshot),
+          billingPeriod.due_date,
+          fallbackReason,
+          req.user.id
+        ]
+      );
+      if (!requestResult.rows[0]) {
+        throw new ApiError(400, "This source reading has already been reviewed and cannot be submitted again.");
+      }
+      await recordAuditEvent(client, {
+        req,
+        action: "source_billing_request.created",
+        entityType: "source_billing_request",
+        entityId: requestResult.rows[0].id,
+        afterData: requestResult.rows[0],
+        reason: fallbackReason
+      });
+      return { reading, bill: null, sourceBillingRequest: requestResult.rows[0] };
+    }
+
+    const competingPayableResult = activeMeter.meter_role === "source_backup"
+      ? await client.query(
+          `SELECT id
+           FROM bills
+           WHERE customer_id = $1
+             AND billing_period_id = $2
+             AND bill_pay_status = 'payable'
+             AND billing_source <> 'source_backup'
+           FOR UPDATE`,
+          [customer_id, billingPeriod.id]
+        )
+      : { rows: [] };
+    const hasClientBillConflict = competingPayableResult.rows.length > 0;
     const billNumber = await createBillNumber(client);
     const billResult = await client.query(
       `INSERT INTO bills (
         customer_id, billing_period_id, bill_number, previous_reading_id, current_reading_id,
         billing_month, previous_reading, current_reading, units_used, rate, amount,
         subtotal_amount, fixed_charge_amount, penalty_amount, vat_amount, reconnection_fee_amount,
-        deposit_applied_amount, adjustment_amount, total_amount, balance_amount, tariff_snapshot, due_date, issued_at
+        deposit_applied_amount, adjustment_amount, total_amount, balance_amount, tariff_snapshot, due_date,
+        issued_at, billing_meter_id, billing_meter_role, billing_source, source_fallback_reason,
+        bill_pay_status, payability_reason, promoted_by, promoted_at
       )
       VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-        $12, $13, 0, $14, $15, 0, 0, $11, $11, $16::jsonb, $17, NOW()
+        $12, $13, 0, $14, $15, 0, 0, $11, $11, $16::jsonb, $17,
+        NOW(), $18, $19::varchar, $20::varchar, $21, $22::varchar, $23, $24, CASE WHEN $22::varchar = 'payable' THEN NOW() ELSE NULL END
       )
       RETURNING *`,
       [
@@ -333,28 +428,117 @@ const createReadingWithBill = async (
         charge.vatAmount,
         charge.reconnectionFeeAmount,
         JSON.stringify(charge.tariffSnapshot),
-        billingPeriod.due_date
+        billingPeriod.due_date,
+        activeMeter.id,
+        activeMeter.meter_role,
+        billingSourceForMeter(activeMeter),
+        activeMeter.meter_role === "source_backup" ? fallbackReason : null,
+        hasClientBillConflict ? "held" : "payable",
+        hasClientBillConflict ? "Held pending source/client bill promotion choice" : null,
+        hasClientBillConflict ? null : req.user.id
       ]
     );
     bill = billResult.rows[0];
-    const creditApplication = await applyCustomerCreditToBill(client, {
-      customerId: bill.customer_id,
-      billId: bill.id
-    });
-    if (creditApplication.appliedAmount > 0) {
-      bill = creditApplication.bill;
+    if (activeMeter.meter_role === "source_backup") {
+      const requestResult = await client.query(
+        `INSERT INTO source_billing_requests (
+          customer_id, meter_id, billing_period_id, previous_reading_id, current_reading_id,
+          previous_reading, current_reading, units_used, rate, amount, subtotal_amount,
+          fixed_charge_amount, vat_amount, reconnection_fee_amount, tariff_snapshot, due_date,
+          reason, status, bill_id, requested_by, reviewed_by, reviewed_at, review_notes
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+          $12, $13, $14, $15::jsonb, $16, $17, 'approved', $18, $19, $19, NOW(), $20
+        )
+        ON CONFLICT (current_reading_id) DO UPDATE
+        SET billing_period_id = EXCLUDED.billing_period_id,
+            previous_reading_id = EXCLUDED.previous_reading_id,
+            previous_reading = EXCLUDED.previous_reading,
+            current_reading = EXCLUDED.current_reading,
+            units_used = EXCLUDED.units_used,
+            rate = EXCLUDED.rate,
+            amount = EXCLUDED.amount,
+            subtotal_amount = EXCLUDED.subtotal_amount,
+            fixed_charge_amount = EXCLUDED.fixed_charge_amount,
+            vat_amount = EXCLUDED.vat_amount,
+            reconnection_fee_amount = EXCLUDED.reconnection_fee_amount,
+            tariff_snapshot = EXCLUDED.tariff_snapshot,
+            due_date = EXCLUDED.due_date,
+            reason = EXCLUDED.reason,
+            status = 'approved',
+            bill_id = EXCLUDED.bill_id,
+            reviewed_by = EXCLUDED.reviewed_by,
+            reviewed_at = NOW(),
+            review_notes = EXCLUDED.review_notes,
+            updated_at = NOW()
+        RETURNING *`,
+        [
+          customer_id,
+          activeMeter.id,
+          billingPeriod.id,
+          previous.id,
+          reading.id,
+          previous.reading_value,
+          reading_value,
+          unitsUsed,
+          charge.rateAmount,
+          charge.totalAmount,
+          charge.subtotalAmount,
+          charge.fixedChargeAmount,
+          charge.vatAmount,
+          charge.reconnectionFeeAmount,
+          JSON.stringify(charge.tariffSnapshot),
+          billingPeriod.due_date,
+          fallbackReason,
+          bill.id,
+          req.user.id,
+          hasClientBillConflict ? "Approved by admin; held pending source/client bill promotion choice" : "Approved by admin"
+        ]
+      );
+      sourceBillingRequest = requestResult.rows[0];
+      if (!bill.source_billing_request_id) {
+        const linkedBill = await client.query(
+          `UPDATE bills
+           SET source_billing_request_id = $1
+           WHERE id = $2
+           RETURNING *`,
+          [sourceBillingRequest.id, bill.id]
+        );
+        bill = linkedBill.rows[0];
+      }
       await recordAuditEvent(client, {
         req,
-        action: "bill.credit_applied",
-        entityType: "bill",
-        entityId: bill.id,
+        action: "source_billing_request.approved",
+        entityType: "source_billing_request",
+        entityId: sourceBillingRequest.id,
         afterData: {
-          bill,
-          allocations: creditApplication.allocations,
-          appliedAmount: creditApplication.appliedAmount
+          request: sourceBillingRequest,
+          bill
         },
-        reason: periodReason || auditReason || "Customer credit auto-applied to new bill"
+        reason: fallbackReason
       });
+    }
+    if (bill.bill_pay_status === "payable") {
+      const creditApplication = await applyCustomerCreditToBill(client, {
+        customerId: bill.customer_id,
+        billId: bill.id
+      });
+      if (creditApplication.appliedAmount > 0) {
+        bill = creditApplication.bill;
+        await recordAuditEvent(client, {
+          req,
+          action: "bill.credit_applied",
+          entityType: "bill",
+          entityId: bill.id,
+          afterData: {
+            bill,
+            allocations: creditApplication.allocations,
+            appliedAmount: creditApplication.appliedAmount
+          },
+          reason: periodReason || auditReason || "Customer credit auto-applied to new bill"
+        });
+      }
     }
     await recordAuditEvent(client, {
       req,
@@ -362,11 +546,11 @@ const createReadingWithBill = async (
       entityType: "bill",
       entityId: bill.id,
       afterData: bill,
-      reason: periodReason || auditReason
+      reason: periodReason || auditReason || (activeMeter.meter_role === "source_backup" ? fallbackReason : null)
     });
   }
 
-  return { reading, bill };
+  return { reading, bill, sourceBillingRequest };
 };
 
 const listReadings = asyncHandler(async (req, res) => {
@@ -378,6 +562,9 @@ const listReadings = asyncHandler(async (req, res) => {
             c.name AS customer_name,
             c.acc_number,
             m.meter_number,
+            m.meter_role,
+            sbr.id AS source_billing_request_id,
+            sbr.status AS source_billing_request_status,
             prev.reading_date AS previous_reading_date,
             bp.name AS billing_period_name,
             bp.status AS billing_period_status,
@@ -385,6 +572,7 @@ const listReadings = asyncHandler(async (req, res) => {
      FROM meter_readings mr
      JOIN customers c ON c.id = mr.customer_id
      LEFT JOIN meters m ON m.id = mr.meter_id
+     LEFT JOIN source_billing_requests sbr ON sbr.current_reading_id = mr.id
      LEFT JOIN meter_readings prev ON prev.id = mr.previous_reading_id
      LEFT JOIN billing_periods bp ON bp.id = mr.billing_period_id
      LEFT JOIN users u ON u.id = mr.created_by
@@ -399,6 +587,7 @@ const listReadings = asyncHandler(async (req, res) => {
 const getReadingContext = asyncHandler(async (req, res) => {
   const customerId = Number(req.query.customer_id);
   const readingDate = req.query.reading_date || new Date().toISOString().slice(0, 10);
+  const selectedMeterId = Number(req.query.meter_id || 0);
 
   if (!customerId) {
     throw new ApiError(400, "Customer is required.");
@@ -416,7 +605,27 @@ const getReadingContext = asyncHandler(async (req, res) => {
       throw new ApiError(404, "Customer not found.");
     }
 
-    const activeMeter = await ensureActiveMeter(client, customer);
+    const availableMetersResult = await client.query(
+      `SELECT *
+       FROM meters
+       WHERE customer_id = $1
+         AND status = 'active'
+         AND meter_role IN ('client_billing', 'source_backup')
+       ORDER BY
+         CASE meter_role WHEN 'client_billing' THEN 0 WHEN 'source_backup' THEN 1 ELSE 2 END,
+         installed_at DESC,
+         id DESC`,
+      [customerId]
+    );
+    const activeMeter = selectedMeterId
+      ? availableMetersResult.rows.find((meter) => Number(meter.id) === selectedMeterId)
+      : await ensureActiveMeter(client, customer);
+    if (!activeMeter) {
+      throw new ApiError(404, "Selected meter was not found for this customer.");
+    }
+    const availableMeters = availableMetersResult.rows.some((meter) => Number(meter.id) === Number(activeMeter.id))
+      ? availableMetersResult.rows
+      : [activeMeter, ...availableMetersResult.rows];
     const previousReading = await getPreviousReadingForMeter(client, activeMeter.id, readingDate);
     const period = getMonthlyPeriodDates(readingDate);
     const periodResult = await client.query("SELECT id, status FROM billing_periods WHERE period_start = $1", [
@@ -431,6 +640,7 @@ const getReadingContext = asyncHandler(async (req, res) => {
         acc_number: customer.acc_number
       },
       activeMeter,
+      availableMeters,
       previousReading,
       billingPeriod: {
         ...period,
@@ -444,7 +654,7 @@ const getReadingContext = asyncHandler(async (req, res) => {
 });
 
 const createReading = asyncHandler(async (req, res) => {
-  const { customer_id, meter_id, reading_value, reading_date, notes } = req.body;
+  const { customer_id, meter_id, reading_value, reading_date, notes, fallback_reason } = req.body;
 
   if (!customer_id || reading_value === undefined || !reading_date) {
     throw new ApiError(400, "Customer, reading value, and reading date are required.");
@@ -453,15 +663,15 @@ const createReading = asyncHandler(async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { reading, bill } = await createReadingWithBill(
+    const { reading, bill, sourceBillingRequest } = await createReadingWithBill(
       client,
       req,
-      { customer_id, meter_id, reading_value, reading_date, notes },
+      { customer_id, meter_id, reading_value, reading_date, notes, fallback_reason },
       { source: "field", correctionReason: normalizeCorrectionReason(req.body) }
     );
 
     await client.query("COMMIT");
-    res.status(201).json({ reading, bill });
+    res.status(201).json({ reading, bill, sourceBillingRequest });
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -564,9 +774,11 @@ const recalculateBillForReading = async (
   { req = null, correctionReason = null, action = "recalculate a bill", baseReadingValue = null } = {}
 ) => {
   const readingResult = await client.query(
-    `SELECT mr.*, c.rate, c.rate_id, c.acc_number, c.name AS customer_name
+    `SELECT mr.*, c.rate, c.rate_id, c.acc_number, c.name AS customer_name,
+            m.meter_role
      FROM meter_readings mr
      JOIN customers c ON c.id = mr.customer_id
+     LEFT JOIN meters m ON m.id = mr.meter_id
      WHERE mr.id = $1`,
     [readingId]
   );
@@ -578,8 +790,9 @@ const recalculateBillForReading = async (
     acc_number: reading.acc_number
   };
   const activeMeter = reading.meter_id
-    ? { id: reading.meter_id, customer_id: reading.customer_id }
+    ? { id: reading.meter_id, customer_id: reading.customer_id, meter_role: reading.meter_role || "client_billing" }
     : await ensureActiveMeter(client, customer);
+  assertMeterRole(activeMeter, ["client_billing", "source_backup"]);
   const billingPeriod = await getOrCreateBillingPeriod(client, reading.reading_date, req?.user?.id || null);
   if (req) {
     await assertBillingPeriodEditableById(client, billingPeriod.id, req, correctionReason, action);
@@ -629,6 +842,81 @@ const recalculateBillForReading = async (
   const tariff = await getTariffWithBlocks(client, reading.rate_id, reading.reading_date);
   const charge = calculateTariffCharge(tariff || reading, unitsUsed);
   const totalAmount = charge.totalAmount;
+  const sourceRequestResult = await client.query(
+    "SELECT * FROM source_billing_requests WHERE current_reading_id = $1 FOR UPDATE",
+    [reading.id]
+  );
+  const sourceRequest = sourceRequestResult.rows[0] || null;
+  const sourceFallbackReason = sourceRequest?.reason || reading.notes || correctionReason || null;
+  requireSourceFallbackReason(activeMeter, sourceFallbackReason);
+
+  if (activeMeter.meter_role === "source_backup" && !existingBill && req?.user?.role !== "admin") {
+    const requestResult = await client.query(
+      `INSERT INTO source_billing_requests (
+        customer_id, meter_id, billing_period_id, previous_reading_id, current_reading_id,
+        previous_reading, current_reading, units_used, rate, amount, subtotal_amount,
+        fixed_charge_amount, vat_amount, reconnection_fee_amount, tariff_snapshot, due_date,
+        reason, requested_by
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+        $12, $13, $14, $15::jsonb, $16, $17, $18
+      )
+      ON CONFLICT (current_reading_id) DO UPDATE
+      SET billing_period_id = EXCLUDED.billing_period_id,
+          previous_reading_id = EXCLUDED.previous_reading_id,
+          previous_reading = EXCLUDED.previous_reading,
+          current_reading = EXCLUDED.current_reading,
+          units_used = EXCLUDED.units_used,
+          rate = EXCLUDED.rate,
+          amount = EXCLUDED.amount,
+          subtotal_amount = EXCLUDED.subtotal_amount,
+          fixed_charge_amount = EXCLUDED.fixed_charge_amount,
+          vat_amount = EXCLUDED.vat_amount,
+          reconnection_fee_amount = EXCLUDED.reconnection_fee_amount,
+          tariff_snapshot = EXCLUDED.tariff_snapshot,
+          due_date = EXCLUDED.due_date,
+          reason = EXCLUDED.reason,
+          status = 'pending',
+          updated_at = NOW()
+      WHERE source_billing_requests.status = 'pending'
+      RETURNING *`,
+      [
+        reading.customer_id,
+        activeMeter.id,
+        billingPeriod.id,
+        previous.id,
+        reading.id,
+        previous.reading_value,
+        reading.reading_value,
+        unitsUsed,
+        charge.rateAmount,
+        totalAmount,
+        charge.subtotalAmount,
+        charge.fixedChargeAmount,
+        charge.vatAmount,
+        charge.reconnectionFeeAmount,
+        JSON.stringify(charge.tariffSnapshot),
+        billingPeriod.due_date,
+        sourceFallbackReason,
+        req.user.id
+      ]
+    );
+    if (!requestResult.rows[0]) {
+      throw new ApiError(400, "This source reading has already been reviewed and cannot be submitted again.");
+    }
+    if (req) {
+      await recordAuditEvent(client, {
+        req,
+        action: "source_billing_request.updated",
+        entityType: "source_billing_request",
+        entityId: requestResult.rows[0].id,
+        afterData: requestResult.rows[0],
+        reason: sourceFallbackReason
+      });
+    }
+    return null;
+  }
 
   if (existingBill) {
     const nextPaidAmount = Math.min(Number(existingBill.paid_amount), totalAmount);
@@ -657,9 +945,13 @@ const recalculateBillForReading = async (
            status = $15::varchar,
            tariff_snapshot = $16::jsonb,
            due_date = $17,
+           billing_meter_id = $18,
+           billing_meter_role = $19,
+           billing_source = $20,
+           source_fallback_reason = $21,
            paid_at = CASE WHEN $15::text = 'paid' THEN COALESCE(paid_at, NOW()) ELSE NULL END,
            issued_at = COALESCE(issued_at, NOW())
-       WHERE id = $18
+       WHERE id = $22
        RETURNING *`,
       [
         previous.id,
@@ -679,10 +971,15 @@ const recalculateBillForReading = async (
         nextStatus,
         JSON.stringify(charge.tariffSnapshot),
         billingPeriod.due_date,
+        activeMeter.id,
+        activeMeter.meter_role,
+        billingSourceForMeter(activeMeter),
+        activeMeter.meter_role === "source_backup" ? sourceFallbackReason : null,
         existingBill.id
       ]
     );
     const bill = billResult.rows[0];
+    if (bill.bill_pay_status !== "payable") return bill;
     const creditApplication = await applyCustomerCreditToBill(client, {
       customerId: bill.customer_id,
       billId: bill.id
@@ -690,17 +987,33 @@ const recalculateBillForReading = async (
     return creditApplication.appliedAmount > 0 ? creditApplication.bill : bill;
   }
 
+  const recalcCompetingPayableResult = activeMeter.meter_role === "source_backup"
+    ? await client.query(
+        `SELECT id
+         FROM bills
+         WHERE customer_id = $1
+           AND billing_period_id = $2
+           AND bill_pay_status = 'payable'
+           AND billing_source <> 'source_backup'
+         FOR UPDATE`,
+        [reading.customer_id, billingPeriod.id]
+      )
+    : { rows: [] };
+  const recalcHasClientBillConflict = recalcCompetingPayableResult.rows.length > 0;
   const billNumber = await createBillNumber(client);
   const billResult = await client.query(
     `INSERT INTO bills (
       customer_id, billing_period_id, bill_number, previous_reading_id, current_reading_id,
       billing_month, previous_reading, current_reading, units_used, rate, amount,
       subtotal_amount, fixed_charge_amount, penalty_amount, vat_amount, reconnection_fee_amount,
-      deposit_applied_amount, adjustment_amount, total_amount, balance_amount, tariff_snapshot, due_date, issued_at
+      deposit_applied_amount, adjustment_amount, total_amount, balance_amount, tariff_snapshot, due_date,
+      issued_at, billing_meter_id, billing_meter_role, billing_source, source_fallback_reason,
+      bill_pay_status, payability_reason, promoted_by, promoted_at
     )
     VALUES (
       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-      $12, $13, 0, $14, $15, 0, 0, $11, $11, $16::jsonb, $17, NOW()
+      $12, $13, 0, $14, $15, 0, 0, $11, $11, $16::jsonb, $17,
+      NOW(), $18, $19::varchar, $20::varchar, $21, $22::varchar, $23, $24, CASE WHEN $22::varchar = 'payable' THEN NOW() ELSE NULL END
     )
     RETURNING *`,
     [
@@ -720,10 +1033,18 @@ const recalculateBillForReading = async (
       charge.vatAmount,
       charge.reconnectionFeeAmount,
       JSON.stringify(charge.tariffSnapshot),
-      billingPeriod.due_date
+      billingPeriod.due_date,
+      activeMeter.id,
+      activeMeter.meter_role,
+      billingSourceForMeter(activeMeter),
+      activeMeter.meter_role === "source_backup" ? sourceFallbackReason : null,
+      recalcHasClientBillConflict ? "held" : "payable",
+      recalcHasClientBillConflict ? "Held pending source/client bill promotion choice" : null,
+      recalcHasClientBillConflict ? null : req?.user?.id || null
     ]
   );
   const bill = billResult.rows[0];
+  if (bill.bill_pay_status !== "payable") return bill;
   const creditApplication = await applyCustomerCreditToBill(client, {
     customerId: bill.customer_id,
     billId: bill.id

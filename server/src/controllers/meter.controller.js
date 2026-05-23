@@ -7,6 +7,8 @@ const { ensureActiveMeter, getMeterHistory, getPreviousReadingForMeter } = requi
 const { recalculateBillForReading } = require("./reading.controller");
 const { recordAuditEvent } = require("../services/audit.service");
 
+const meterRoles = ["client_billing", "source_backup", "shared_source_monitoring"];
+
 const listMeters = asyncHandler(async (req, res) => {
   const customerId = Number(req.query.customer_id);
   if (!customerId) {
@@ -67,6 +69,81 @@ const listMeterEvents = asyncHandler(async (req, res) => {
   );
 
   res.json(rows);
+});
+
+const createMeter = asyncHandler(async (req, res) => {
+  const {
+    customer_id,
+    meter_number,
+    meter_role = "client_billing",
+    installed_at,
+    initial_reading = 0,
+    notes
+  } = req.body;
+
+  if (!customer_id || !String(meter_number || "").trim()) {
+    throw new ApiError(400, "Customer and meter number are required.");
+  }
+  if (!meterRoles.includes(meter_role)) {
+    throw new ApiError(400, "Meter role must be client billing, source backup, or shared source monitoring.");
+  }
+  if (meter_role === "shared_source_monitoring") {
+    throw new ApiError(400, "Shared source monitoring meters will be configured in production monitoring.");
+  }
+  const initialReading = Number(initial_reading || 0);
+  if (!Number.isFinite(initialReading) || initialReading < 0) {
+    throw new ApiError(400, "Initial reading must be zero or greater.");
+  }
+  const installedAt = installed_at || new Date().toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(installedAt))) {
+    throw new ApiError(400, "Installed date must use YYYY-MM-DD.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const customerResult = await client.query("SELECT * FROM customers WHERE id = $1", [customer_id]);
+    const customer = customerResult.rows[0];
+    if (!customer) throw new ApiError(404, "Customer not found.");
+
+    const duplicateMeter = await client.query("SELECT id FROM meters WHERE meter_number = $1", [
+      String(meter_number).trim()
+    ]);
+    if (duplicateMeter.rows[0]) {
+      throw new ApiError(400, "Meter number is already in use.");
+    }
+
+    const { rows } = await client.query(
+      `INSERT INTO meters (customer_id, meter_number, meter_role, installed_at, initial_reading, status, notes)
+       VALUES ($1, $2, $3, $4, $5, 'active', $6)
+       RETURNING *`,
+      [
+        customer.id,
+        String(meter_number).trim(),
+        meter_role,
+        installedAt,
+        initialReading,
+        notes || null
+      ]
+    );
+
+    await recordAuditEvent(client, {
+      req,
+      action: "meter.created",
+      entityType: "meter",
+      entityId: rows[0].id,
+      afterData: rows[0],
+      reason: notes || null
+    });
+
+    await client.query("COMMIT");
+    res.status(201).json(rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 });
 
 const replaceMeter = asyncHandler(async (req, res) => {
@@ -216,9 +293,9 @@ const replaceMeter = asyncHandler(async (req, res) => {
 
     const newMeterResult = await client.query(
       `INSERT INTO meters (
-        customer_id, meter_number, installed_at, initial_reading, status, notes
+        customer_id, meter_number, meter_role, installed_at, initial_reading, status, notes
       )
-      VALUES ($1, $2, $3, $4, 'active', $5)
+      VALUES ($1, $2, 'client_billing', $3, $4, 'active', $5)
       RETURNING *`,
       [customer.id, new_meter_number, event_date, newInitialReading, reason || "Meter replacement"]
     );
@@ -418,6 +495,7 @@ const updateMeterEvent = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  createMeter,
   listMeterEvents,
   listMeters,
   replaceMeter,

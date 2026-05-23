@@ -136,7 +136,7 @@ const findCustomer = async (client, customerIdentifier, customerId) => {
 const selectAllocatableBills = async (client, customerId, billId = null) => {
   if (billId) {
     const billResult = await client.query(
-      "SELECT * FROM bills WHERE id = $1 AND customer_id = $2 FOR UPDATE",
+      "SELECT * FROM bills WHERE id = $1 AND customer_id = $2 AND bill_pay_status = 'payable' FOR UPDATE",
       [billId, customerId]
     );
     return billResult.rows;
@@ -145,7 +145,7 @@ const selectAllocatableBills = async (client, customerId, billId = null) => {
   const billResult = await client.query(
     `SELECT *
      FROM bills
-     WHERE customer_id = $1 AND status <> 'paid'
+     WHERE customer_id = $1 AND status <> 'paid' AND bill_pay_status = 'payable'
      ORDER BY billing_month ASC, id ASC
      FOR UPDATE`,
     [customerId]
@@ -158,7 +158,7 @@ const allocatePayment = async (client, paymentId, customerId, amount, billId = n
   const bills = await selectAllocatableBills(client, customerId, billId);
 
   if (billId && !bills.length) {
-    throw new ApiError(404, "No unpaid bill found for this customer.");
+    throw new ApiError(404, "No payable unpaid bill found for this customer.");
   }
 
   let remainingPayment = paymentAmount;
@@ -385,7 +385,7 @@ const getPayment = asyncHandler(async (req, res) => {
        COALESCE((
          SELECT SUM(COALESCE(NULLIF(balance_amount, 0), amount - paid_amount))
          FROM bills
-         WHERE customer_id = $1 AND status <> 'paid'
+         WHERE customer_id = $1 AND status <> 'paid' AND bill_pay_status = 'payable'
        ), 0) -
        COALESCE((
          SELECT SUM(unallocated_amount)
@@ -652,7 +652,7 @@ const getCustomerOpenBalance = async (client, customerId) => {
   const { rows } = await client.query(
     `SELECT COALESCE(SUM(COALESCE(NULLIF(balance_amount, 0), amount - paid_amount)), 0) AS balance
      FROM bills
-     WHERE customer_id = $1 AND status <> 'paid'`,
+     WHERE customer_id = $1 AND status <> 'paid' AND bill_pay_status = 'payable'`,
     [customerId]
   );
   return Number(rows[0]?.balance || 0);
@@ -666,6 +666,7 @@ const getOpenBillForImport = async (client, customerId, billId, billNumber) => {
             COALESCE(NULLIF(balance_amount, 0), amount - paid_amount) AS import_balance
      FROM bills
      WHERE customer_id = $1
+       AND bill_pay_status = 'payable'
        AND (($2::integer IS NOT NULL AND id = $2) OR ($3::text IS NOT NULL AND bill_number = $3))
      LIMIT 1`,
     [customerId, billId || null, billNumber || null]

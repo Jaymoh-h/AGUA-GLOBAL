@@ -1,8 +1,9 @@
 const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
-const { getMonthlyPeriodDates } = require("../services/billingPeriod.service");
+const { createBillNumber, getMonthlyPeriodDates } = require("../services/billingPeriod.service");
 const { recordAuditEvent } = require("../services/audit.service");
+const { applyCustomerCreditToBill } = require("../services/credit.service");
 const {
   assertBillEditable,
   assertBillingPeriodEditable,
@@ -36,6 +37,7 @@ const buildPenaltyEligibilityQuery = () => `
       GREATEST(COALESCE(NULLIF(b.total_amount, 0), b.amount) - COALESCE(b.penalty_amount, 0), 0) AS principal_total,
       GREATEST(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount) - COALESCE(b.penalty_amount, 0), 0) AS unpaid_principal
     FROM bills b
+    WHERE b.bill_pay_status = 'payable'
   )
   SELECT
     b.id,
@@ -364,6 +366,235 @@ const listPenaltyApplications = asyncHandler(async (req, res) => {
      LIMIT 300`
   );
   res.json(rows);
+});
+
+const listSourceBillingRequests = asyncHandler(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT sbr.*,
+            c.name AS customer_name,
+            c.acc_number,
+            m.meter_number,
+            m.meter_role,
+            bp.name AS billing_period_name,
+            requested.name AS requested_by_name,
+            reviewed.name AS reviewed_by_name,
+            b.bill_number,
+            b.bill_pay_status,
+            COALESCE(competing.bills, '[]'::json) AS competing_bills
+     FROM source_billing_requests sbr
+     JOIN customers c ON c.id = sbr.customer_id
+     JOIN meters m ON m.id = sbr.meter_id
+     LEFT JOIN billing_periods bp ON bp.id = sbr.billing_period_id
+     LEFT JOIN users requested ON requested.id = sbr.requested_by
+     LEFT JOIN users reviewed ON reviewed.id = sbr.reviewed_by
+     LEFT JOIN bills b ON b.id = sbr.bill_id
+     LEFT JOIN LATERAL (
+       SELECT json_agg(
+         json_build_object(
+           'id', cb.id,
+           'bill_number', cb.bill_number,
+           'billing_source', cb.billing_source,
+           'bill_pay_status', cb.bill_pay_status,
+           'total_amount', COALESCE(NULLIF(cb.total_amount, 0), cb.amount),
+           'paid_amount', cb.paid_amount,
+           'balance_amount', cb.balance_amount,
+           'units_used', cb.units_used
+         )
+         ORDER BY cb.bill_pay_status = 'payable' DESC, cb.id ASC
+       ) AS bills
+       FROM bills cb
+       WHERE cb.customer_id = sbr.customer_id
+         AND cb.billing_period_id = sbr.billing_period_id
+         AND (cb.id <> sbr.bill_id OR sbr.bill_id IS NULL)
+         AND (cb.source_billing_request_id IS NOT NULL OR cb.billing_source <> 'source_backup')
+     ) competing ON TRUE
+     ORDER BY
+       CASE sbr.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
+       sbr.created_at DESC
+     LIMIT 300`
+  );
+  res.json(rows);
+});
+
+const reviewSourceBillingRequest = asyncHandler(async (req, res) => {
+  const { action, review_notes } = req.body;
+  const reviewAction = String(action || "").trim();
+  const notes = String(review_notes || "").trim();
+  if (!["approve", "reject"].includes(reviewAction)) {
+    throw new ApiError(400, "Review action must be approve or reject.");
+  }
+  if (reviewAction === "reject" && !notes) {
+    throw new ApiError(400, "Review notes are required when rejecting source billing.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const requestResult = await client.query(
+      `SELECT sbr.*, c.rate_id
+       FROM source_billing_requests sbr
+       JOIN customers c ON c.id = sbr.customer_id
+       WHERE sbr.id = $1
+       FOR UPDATE`,
+      [req.params.id]
+    );
+    const request = requestResult.rows[0];
+    if (!request) throw new ApiError(404, "Source billing request not found.");
+    if (request.status !== "pending") throw new ApiError(400, "Only pending source billing requests can be reviewed.");
+
+    if (reviewAction === "reject") {
+      const rejected = await client.query(
+        `UPDATE source_billing_requests
+         SET status = 'rejected',
+             reviewed_by = $1,
+             reviewed_at = NOW(),
+             review_notes = $2,
+             updated_at = NOW()
+         WHERE id = $3
+         RETURNING *`,
+        [req.user.id, notes, request.id]
+      );
+      await recordAuditEvent(client, {
+        req,
+        action: "source_billing_request.rejected",
+        entityType: "source_billing_request",
+        entityId: request.id,
+        beforeData: request,
+        afterData: rejected.rows[0],
+        reason: notes
+      });
+      await client.query("COMMIT");
+      return res.json({ request: rejected.rows[0], bill: null });
+    }
+
+    const existingBill = await client.query("SELECT id FROM bills WHERE current_reading_id = $1", [
+      request.current_reading_id
+    ]);
+    if (existingBill.rows[0]) {
+      throw new ApiError(400, "A bill already exists for this source reading.");
+    }
+    const competingPayableResult = await client.query(
+      `SELECT id, bill_number, paid_amount
+       FROM bills
+       WHERE customer_id = $1
+         AND billing_period_id = $2
+         AND bill_pay_status = 'payable'
+         AND billing_source <> 'source_backup'
+       FOR UPDATE`,
+      [request.customer_id, request.billing_period_id]
+    );
+    const hasClientBillConflict = competingPayableResult.rows.length > 0;
+
+    const billNumber = await createBillNumber(client);
+    const billResult = await client.query(
+      `INSERT INTO bills (
+        customer_id, billing_period_id, bill_number, previous_reading_id, current_reading_id,
+        billing_month, previous_reading, current_reading, units_used, rate, amount,
+        subtotal_amount, fixed_charge_amount, penalty_amount, vat_amount, reconnection_fee_amount,
+        deposit_applied_amount, adjustment_amount, total_amount, balance_amount, tariff_snapshot, due_date,
+        issued_at, billing_meter_id, billing_meter_role, billing_source, source_fallback_reason, source_billing_request_id,
+        bill_pay_status, payability_reason, promoted_by, promoted_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5,
+        COALESCE((SELECT period_start FROM billing_periods WHERE id = $2), date_trunc('month', CURRENT_DATE)::date),
+        $6, $7, $8, $9, $10,
+        $11, $12, 0, $13, $14, 0, 0, $10, $10, $15::jsonb, $16,
+        NOW(), $17, 'source_backup'::varchar, 'source_backup'::varchar, $18, $19,
+        $20::varchar, $21, $22, CASE WHEN $20::varchar = 'payable' THEN NOW() ELSE NULL END
+      )
+      RETURNING *`,
+      [
+        request.customer_id,
+        request.billing_period_id,
+        billNumber,
+        request.previous_reading_id,
+        request.current_reading_id,
+        request.previous_reading,
+        request.current_reading,
+        request.units_used,
+        request.rate,
+        request.amount,
+        request.subtotal_amount,
+        request.fixed_charge_amount,
+        request.vat_amount,
+        request.reconnection_fee_amount,
+        JSON.stringify(request.tariff_snapshot || {}),
+        request.due_date,
+        request.meter_id,
+        request.reason,
+        request.id,
+        hasClientBillConflict ? "held" : "payable",
+        hasClientBillConflict ? "Held pending source/client bill promotion choice" : notes || request.reason,
+        hasClientBillConflict ? null : req.user.id
+      ]
+    );
+    let bill = billResult.rows[0];
+    if (bill.bill_pay_status === "payable") {
+      const creditApplication = await applyCustomerCreditToBill(client, {
+        customerId: bill.customer_id,
+        billId: bill.id
+      });
+      if (creditApplication.appliedAmount > 0) {
+        bill = creditApplication.bill;
+        await recordAuditEvent(client, {
+          req,
+          action: "bill.credit_applied",
+          entityType: "bill",
+          entityId: bill.id,
+          afterData: {
+            bill,
+            allocations: creditApplication.allocations,
+            appliedAmount: creditApplication.appliedAmount
+          },
+          reason: notes || request.reason
+        });
+      }
+    }
+
+    const approved = await client.query(
+      `UPDATE source_billing_requests
+       SET status = 'approved',
+           bill_id = $1,
+           reviewed_by = $2,
+           reviewed_at = NOW(),
+           review_notes = $3,
+           updated_at = NOW()
+       WHERE id = $4
+       RETURNING *`,
+      [bill.id, req.user.id, notes || null, request.id]
+    );
+
+    await recordAuditEvent(client, {
+      req,
+      action: "source_billing_request.approved",
+      entityType: "source_billing_request",
+      entityId: request.id,
+      beforeData: request,
+      afterData: {
+        request: approved.rows[0],
+        bill
+      },
+      reason: notes || request.reason
+    });
+
+    await recordAuditEvent(client, {
+      req,
+      action: "bill.created_from_source_backup",
+      entityType: "bill",
+      entityId: bill.id,
+      afterData: bill,
+      reason: notes || request.reason
+    });
+
+    await client.query("COMMIT");
+    res.json({ request: approved.rows[0], bill });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 });
 
 const applyPenaltyApplications = asyncHandler(async (req, res) => {
@@ -699,8 +930,10 @@ module.exports = {
   getBillingSettings,
   listPenaltyApplications,
   listBillingPeriods,
+  listSourceBillingRequests,
   previewPenaltyApplications,
   reapplyPenaltyApplication,
+  reviewSourceBillingRequest,
   waivePenaltyApplication,
   updateBillingPeriodStatus,
   updateBillingSettings

@@ -5,8 +5,10 @@ const {
   getBillingSettings,
   listPenaltyApplications,
   listBillingPeriods,
+  listSourceBillingRequests,
   previewPenaltyApplications,
   reapplyPenaltyApplication,
+  reviewSourceBillingRequest,
   waivePenaltyApplication,
   updateBillingPeriodStatus,
   updateBillingSettings
@@ -22,6 +24,8 @@ router.patch("/periods/:id/status", authorize("admin", "accountant"), updateBill
 router.get("/settings", authorize("admin", "accountant"), getBillingSettings);
 router.put("/settings", authorize("admin", "accountant"), updateBillingSettings);
 router.get("/penalties", authorize("admin", "accountant"), listPenaltyApplications);
+router.get("/source-billing-requests", authorize("admin", "accountant"), listSourceBillingRequests);
+router.patch("/source-billing-requests/:id/review", authorize("admin"), reviewSourceBillingRequest);
 router.get("/penalties/preview", authorize("admin", "accountant"), previewPenaltyApplications);
 router.post("/penalties/apply", authorize("admin", "accountant"), applyPenaltyApplications);
 router.patch("/penalties/:id/waive", authorize("admin", "accountant"), waivePenaltyApplication);

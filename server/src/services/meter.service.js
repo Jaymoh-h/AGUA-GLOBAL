@@ -1,23 +1,24 @@
 const ApiError = require("../utils/apiError");
 
-const getActiveMeter = async (client, customerId) => {
+const getActiveMeter = async (client, customerId, meterRole = "client_billing") => {
   const { rows } = await client.query(
     `SELECT *
      FROM meters
-     WHERE customer_id = $1 AND status = 'active'
+     WHERE customer_id = $1 AND status = 'active' AND meter_role = $2
      ORDER BY installed_at DESC, id DESC
      LIMIT 1`,
-    [customerId]
+    [customerId, meterRole]
   );
   return rows[0] || null;
 };
 
 const createGeneratedMeter = async (client, customer) => {
   const { rows } = await client.query(
-    `INSERT INTO meters (customer_id, meter_number, installed_at, initial_reading, status, notes)
+    `INSERT INTO meters (customer_id, meter_number, meter_role, installed_at, initial_reading, status, notes)
      VALUES (
        $1,
        $2,
+       'client_billing',
        COALESCE(
          (SELECT MIN(reading_date) FROM meter_readings WHERE customer_id = $1),
          CURRENT_DATE
@@ -69,6 +70,12 @@ const assertMeterBelongsToCustomer = (meter, customerId) => {
   }
 };
 
+const assertMeterRole = (meter, allowedRoles) => {
+  if (!allowedRoles.includes(meter?.meter_role)) {
+    throw new ApiError(400, "Selected meter role is not allowed for this action.");
+  }
+};
+
 const getMeterHistory = async (client, customerId) => {
   const { rows } = await client.query(
     `SELECT m.*,
@@ -83,7 +90,15 @@ const getMeterHistory = async (client, customerId) => {
        LIMIT 1
      ) latest ON TRUE
      WHERE m.customer_id = $1
-     ORDER BY m.status = 'active' DESC, m.installed_at DESC, m.id DESC`,
+     ORDER BY
+       CASE m.meter_role
+         WHEN 'client_billing' THEN 0
+         WHEN 'source_backup' THEN 1
+         ELSE 2
+       END,
+       m.status = 'active' DESC,
+       m.installed_at DESC,
+       m.id DESC`,
     [customerId]
   );
   return rows;
@@ -91,6 +106,7 @@ const getMeterHistory = async (client, customerId) => {
 
 module.exports = {
   assertMeterBelongsToCustomer,
+  assertMeterRole,
   ensureActiveMeter,
   getActiveMeter,
   getMeterHistory,

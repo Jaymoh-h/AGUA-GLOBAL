@@ -18,7 +18,7 @@ const getCustomerBalanceDue = async (client, customerId) => {
        COALESCE((
          SELECT SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount))
          FROM bills b
-         WHERE b.customer_id = $1 AND b.status <> 'paid'
+         WHERE b.customer_id = $1 AND b.status <> 'paid' AND b.bill_pay_status = 'payable'
        ), 0) -
        COALESCE((
          SELECT SUM(p.unallocated_amount)
@@ -414,7 +414,7 @@ const listCustomers = asyncHandler(async (req, res) => {
         COALESCE((
           SELECT SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount))
           FROM bills b
-          WHERE b.customer_id = c.id AND b.status <> 'paid'
+          WHERE b.customer_id = c.id AND b.status <> 'paid' AND b.bill_pay_status = 'payable'
         ), 0) -
         COALESCE((
           SELECT SUM(p.unallocated_amount)
@@ -482,7 +482,7 @@ const getCustomerStatement = asyncHandler(async (req, res) => {
            COALESCE((
              SELECT SUM(COALESCE(NULLIF(total_amount, 0), amount))
              FROM bills
-             WHERE customer_id = $1 AND billing_month < $2::date
+             WHERE customer_id = $1 AND billing_month < $2::date AND bill_pay_status = 'payable'
            ), 0) +
            CASE
              WHEN COALESCE(c.opening_balance_amount, 0) > 0
@@ -552,6 +552,7 @@ const getCustomerStatement = asyncHandler(async (req, res) => {
        FROM bills b
        LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
        WHERE b.customer_id = $1
+         AND b.bill_pay_status = 'payable'
          AND ($2::date IS NULL OR b.billing_month >= $2::date)
          AND ($3::date IS NULL OR b.billing_month <= $3::date)
 

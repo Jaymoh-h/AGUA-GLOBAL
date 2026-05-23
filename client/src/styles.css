@@ -221,8 +221,8 @@ td button,
 .content {
   width: 100%;
   min-width: 0;
-  max-width: 100vw;
-  padding: 20px;
+  max-width: none;
+  padding: 20px clamp(18px, 2vw, 32px);
 }
 
 .page-stack {
@@ -289,10 +289,51 @@ td button,
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(320px, 0.7fr) minmax(0, 1.3fr);
+  grid-template-columns: minmax(320px, 0.55fr) minmax(0, 1.45fr);
   gap: 16px;
   align-items: start;
   min-width: 0;
+}
+
+.workspace-grid.production-workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.production-primary-stack {
+  display: contents;
+}
+
+.production-weekly-form {
+  order: 1;
+}
+
+.production-report-panel {
+  order: 2;
+}
+
+.production-weekly-history {
+  order: 3;
+}
+
+.production-topup-list {
+  order: 4;
+}
+
+.production-meter-list {
+  order: 5;
+}
+
+.production-setup-stack {
+  order: 6;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+}
+
+.production-topup-form {
+  order: 1;
+}
+
+.production-meter-form {
+  order: 2;
 }
 
 .workspace-grid.payments-workspace-grid {

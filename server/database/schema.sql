@@ -1,6 +1,11 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 DROP TABLE IF EXISTS payments CASCADE;
+DROP TABLE IF EXISTS production_meter_readings CASCADE;
+DROP TABLE IF EXISTS production_weekly_readings CASCADE;
+DROP TABLE IF EXISTS production_electricity_topups CASCADE;
+DROP TABLE IF EXISTS production_source_meters CASCADE;
+DROP TABLE IF EXISTS source_billing_requests CASCADE;
 DROP TABLE IF EXISTS customer_adjustments CASCADE;
 DROP TABLE IF EXISTS customer_deposit_transactions CASCADE;
 DROP TABLE IF EXISTS bill_penalty_applications CASCADE;
@@ -190,6 +195,7 @@ CREATE TABLE meters (
   id SERIAL PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
   meter_number VARCHAR(80) NOT NULL UNIQUE,
+  meter_role VARCHAR(30) NOT NULL DEFAULT 'client_billing' CHECK (meter_role IN ('client_billing', 'source_backup', 'shared_source_monitoring')),
   installed_at DATE NOT NULL DEFAULT CURRENT_DATE,
   removed_at DATE,
   initial_reading NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (initial_reading >= 0),
@@ -260,6 +266,15 @@ CREATE TABLE bills (
   paid_at TIMESTAMPTZ,
   issued_at TIMESTAMPTZ,
   locked_at TIMESTAMPTZ,
+  billing_meter_id INTEGER REFERENCES meters(id) ON DELETE SET NULL,
+  billing_meter_role VARCHAR(30) NOT NULL DEFAULT 'client_billing' CHECK (billing_meter_role IN ('client_billing', 'source_backup', 'shared_source_monitoring')),
+  billing_source VARCHAR(30) NOT NULL DEFAULT 'client_meter' CHECK (billing_source IN ('client_meter', 'source_backup')),
+  source_fallback_reason TEXT,
+  source_billing_request_id INTEGER,
+  bill_pay_status VARCHAR(20) NOT NULL DEFAULT 'payable' CHECK (bill_pay_status IN ('payable', 'held', 'superseded')),
+  payability_reason TEXT,
+  promoted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  promoted_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -339,6 +354,38 @@ CREATE TABLE bill_penalty_applications (
   UNIQUE (bill_id, application_month)
 );
 
+CREATE TABLE source_billing_requests (
+  id SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  meter_id INTEGER NOT NULL REFERENCES meters(id) ON DELETE CASCADE,
+  billing_period_id INTEGER REFERENCES billing_periods(id) ON DELETE SET NULL,
+  previous_reading_id INTEGER REFERENCES meter_readings(id) ON DELETE SET NULL,
+  current_reading_id INTEGER UNIQUE NOT NULL REFERENCES meter_readings(id) ON DELETE CASCADE,
+  previous_reading NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  current_reading NUMERIC(12, 2) NOT NULL,
+  units_used NUMERIC(12, 2) NOT NULL CHECK (units_used >= 0),
+  rate NUMERIC(12, 2) NOT NULL CHECK (rate >= 0),
+  amount NUMERIC(12, 2) NOT NULL CHECK (amount >= 0),
+  subtotal_amount NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (subtotal_amount >= 0),
+  fixed_charge_amount NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (fixed_charge_amount >= 0),
+  vat_amount NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (vat_amount >= 0),
+  reconnection_fee_amount NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (reconnection_fee_amount >= 0),
+  tariff_snapshot JSONB,
+  due_date DATE,
+  reason TEXT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  bill_id INTEGER REFERENCES bills(id) ON DELETE SET NULL,
+  requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ,
+  review_notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE bills
+  ADD CONSTRAINT bills_source_billing_request_id_fkey FOREIGN KEY (source_billing_request_id) REFERENCES source_billing_requests(id) ON DELETE SET NULL;
+
 CREATE TABLE expenses (
   id SERIAL PRIMARY KEY,
   expense_date DATE NOT NULL DEFAULT CURRENT_DATE,
@@ -414,6 +461,62 @@ CREATE TABLE maintenance_requests (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE production_source_meters (
+  id SERIAL PRIMARY KEY,
+  zone_id INTEGER REFERENCES zones(id) ON DELETE SET NULL,
+  customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+  meter_id INTEGER REFERENCES meters(id) ON DELETE SET NULL,
+  rate_id INTEGER REFERENCES rates(id) ON DELETE SET NULL,
+  meter_number VARCHAR(80) NOT NULL UNIQUE,
+  name VARCHAR(160),
+  meter_type VARCHAR(30) NOT NULL DEFAULT 'shared_source' CHECK (meter_type IN ('customer_source', 'shared_source')),
+  status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (
+    (meter_type = 'customer_source' AND customer_id IS NOT NULL)
+    OR (meter_type = 'shared_source' AND rate_id IS NOT NULL)
+  )
+);
+
+CREATE TABLE production_electricity_topups (
+  id SERIAL PRIMARY KEY,
+  topup_date DATE NOT NULL,
+  kwh_units NUMERIC(12, 2) NOT NULL CHECK (kwh_units > 0),
+  total_cost NUMERIC(12, 2) NOT NULL CHECK (total_cost >= 0),
+  cost_per_unit NUMERIC(12, 4) NOT NULL CHECK (cost_per_unit >= 0),
+  reference VARCHAR(120),
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE production_weekly_readings (
+  id SERIAL PRIMARY KEY,
+  reading_date DATE NOT NULL UNIQUE,
+  prepaid_kwh_balance NUMERIC(12, 2) NOT NULL CHECK (prepaid_kwh_balance >= 0),
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE production_meter_readings (
+  id SERIAL PRIMARY KEY,
+  weekly_reading_id INTEGER NOT NULL REFERENCES production_weekly_readings(id) ON DELETE CASCADE,
+  production_meter_id INTEGER NOT NULL REFERENCES production_source_meters(id) ON DELETE CASCADE,
+  reading_value NUMERIC(12, 2) NOT NULL CHECK (reading_value >= 0),
+  previous_reading_value NUMERIC(12, 2),
+  consumption NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (consumption >= 0),
+  tariff_snapshot JSONB,
+  revenue_amount NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (revenue_amount >= 0),
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (weekly_reading_id, production_meter_id)
+);
+
 CREATE TABLE audit_events (
   id SERIAL PRIMARY KEY,
   actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -435,6 +538,7 @@ CREATE INDEX idx_rate_version_blocks_version_order ON rate_version_blocks(rate_v
 CREATE INDEX idx_customers_rate_id ON customers(rate_id);
 CREATE INDEX idx_customers_zone_id ON customers(zone_id);
 CREATE INDEX idx_meters_customer_status ON meters(customer_id, status);
+CREATE INDEX idx_meters_customer_role_status ON meters(customer_id, meter_role, status);
 CREATE INDEX idx_meter_events_customer_date ON meter_events(customer_id, event_date DESC);
 CREATE INDEX idx_meter_events_old_meter_id ON meter_events(old_meter_id);
 CREATE INDEX idx_meter_events_new_meter_id ON meter_events(new_meter_id);
@@ -444,6 +548,8 @@ CREATE INDEX idx_meter_readings_customer_date ON meter_readings(customer_id, rea
 CREATE INDEX idx_billing_periods_status ON billing_periods(status);
 CREATE INDEX idx_bills_billing_period_id ON bills(billing_period_id);
 CREATE INDEX idx_bills_customer_status ON bills(customer_id, status);
+CREATE INDEX idx_bills_billing_meter_id ON bills(billing_meter_id);
+CREATE INDEX idx_bills_customer_period_pay_status ON bills(customer_id, billing_period_id, bill_pay_status);
 CREATE INDEX idx_payments_customer_date ON payments(customer_id, payment_date DESC);
 CREATE INDEX idx_payments_receipt_number ON payments(receipt_number);
 CREATE INDEX idx_payment_allocations_payment_id ON payment_allocations(payment_id);
@@ -454,6 +560,8 @@ CREATE INDEX idx_payment_suspense_customer ON payment_suspense_items(customer_id
 CREATE INDEX idx_bill_penalty_applications_bill_id ON bill_penalty_applications(bill_id);
 CREATE INDEX idx_bill_penalty_applications_application_month ON bill_penalty_applications(application_month DESC);
 CREATE INDEX idx_bill_penalty_applications_waived_at ON bill_penalty_applications(waived_at);
+CREATE INDEX idx_source_billing_requests_status ON source_billing_requests(status, created_at DESC);
+CREATE INDEX idx_source_billing_requests_customer ON source_billing_requests(customer_id, created_at DESC);
 CREATE INDEX idx_expenses_date ON expenses(expense_date DESC);
 CREATE INDEX idx_expenses_category ON expenses(category);
 CREATE INDEX idx_expenses_recorded_by ON expenses(recorded_by);
@@ -465,6 +573,10 @@ CREATE INDEX idx_maintenance_requests_customer ON maintenance_requests(customer_
 CREATE INDEX idx_maintenance_requests_zone ON maintenance_requests(zone_id);
 CREATE INDEX idx_maintenance_requests_assigned_to ON maintenance_requests(assigned_to);
 CREATE INDEX idx_maintenance_requests_reported_at ON maintenance_requests(reported_at DESC);
+CREATE INDEX idx_production_source_meters_status ON production_source_meters(status, meter_type);
+CREATE INDEX idx_production_weekly_readings_date ON production_weekly_readings(reading_date DESC);
+CREATE INDEX idx_production_meter_readings_meter ON production_meter_readings(production_meter_id, id DESC);
+CREATE INDEX idx_production_electricity_topups_date ON production_electricity_topups(topup_date DESC);
 CREATE INDEX idx_audit_events_entity ON audit_events(entity_type, entity_id);
 CREATE INDEX idx_audit_events_actor ON audit_events(actor_user_id);
 CREATE INDEX idx_audit_events_created_at ON audit_events(created_at DESC);

@@ -14,6 +14,7 @@ const ExpensesPage = lazy(() => import("./pages/ExpensesPage"));
 const MaintenancePage = lazy(() => import("./pages/MaintenancePage"));
 const PaymentsPage = lazy(() => import("./pages/PaymentsPage"));
 const PortalPage = lazy(() => import("./pages/PortalPage"));
+const ProductionPage = lazy(() => import("./pages/ProductionPage"));
 const RatesPage = lazy(() => import("./pages/RatesPage"));
 const ReadingsPage = lazy(() => import("./pages/ReadingsPage"));
 const ReportsPage = lazy(() => import("./pages/ReportsPage"));
@@ -112,6 +113,7 @@ function App() {
     payments: <PaymentsPage user={user} />,
     expenses: <ExpensesPage user={user} />,
     maintenance: <MaintenancePage user={user} />,
+    production: <ProductionPage user={user} />,
     reports: <ReportsPage user={user} />,
     rates: <RatesPage user={user} />,
     zones: <ZonesPage user={user} />,

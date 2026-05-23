@@ -34,14 +34,14 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
 
   const balanceResult = await pool.query(
     `SELECT
-       COUNT(*) FILTER (WHERE status <> 'paid') AS open_bills,
-       COALESCE(SUM(COALESCE(NULLIF(balance_amount, 0), amount - paid_amount)) FILTER (WHERE status <> 'paid'), 0) -
+       COUNT(*) FILTER (WHERE status <> 'paid' AND bill_pay_status = 'payable') AS open_bills,
+       COALESCE(SUM(COALESCE(NULLIF(balance_amount, 0), amount - paid_amount)) FILTER (WHERE status <> 'paid' AND bill_pay_status = 'payable'), 0) -
          COALESCE((SELECT SUM(unallocated_amount) FROM payments WHERE customer_id = $1 AND status = 'posted'), 0) AS balance_due,
        COALESCE((SELECT SUM(unallocated_amount) FROM payments WHERE customer_id = $1 AND status = 'posted'), 0) AS credit_balance,
        COALESCE(SUM(COALESCE(NULLIF(total_amount, 0), amount)), 0) AS lifetime_billed,
        COALESCE(SUM(paid_amount), 0) AS lifetime_paid
      FROM bills
-     WHERE customer_id = $1`,
+     WHERE customer_id = $1 AND bill_pay_status = 'payable'`,
     [customerId]
   );
 
@@ -63,7 +63,7 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
             b.paid_amount, b.balance_amount, b.status
      FROM bills b
      LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
-     WHERE b.customer_id = $1
+     WHERE b.customer_id = $1 AND b.bill_pay_status = 'payable'
      ORDER BY b.billing_month DESC, b.created_at DESC
      LIMIT 300`,
     [customerId]

@@ -8,6 +8,7 @@ const getDashboard = asyncHandler(async (req, res) => {
     params.push(req.user.customer_id || 0);
     where.push(`customer_id = $${params.length}`);
   }
+  where.push("bill_pay_status = 'payable'");
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
   const summaryResult = await pool.query(
@@ -41,7 +42,8 @@ const getDashboard = asyncHandler(async (req, res) => {
     `SELECT b.id, b.billing_month, b.amount, b.total_amount, b.balance_amount, b.paid_amount, b.status, c.name AS customer_name, c.acc_number
      FROM bills b
      JOIN customers c ON c.id = b.customer_id
-     ${req.user.role === "customer" ? "WHERE b.customer_id = $1" : ""}
+     WHERE b.bill_pay_status = 'payable'
+       ${req.user.role === "customer" ? "AND b.customer_id = $1" : ""}
      ORDER BY b.created_at DESC
      LIMIT 8`,
     req.user.role === "customer" ? [req.user.customer_id || 0] : []
@@ -49,8 +51,8 @@ const getDashboard = asyncHandler(async (req, res) => {
 
   const operationsResult = await pool.query(
     `SELECT
-       COALESCE(COUNT(*) FILTER (WHERE b.status <> 'paid' AND b.due_date < CURRENT_DATE), 0) AS overdue_bills,
-       COALESCE(SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount)) FILTER (WHERE b.status <> 'paid' AND b.due_date < CURRENT_DATE), 0) AS overdue_amount,
+       COALESCE(COUNT(*) FILTER (WHERE b.status <> 'paid' AND b.bill_pay_status = 'payable' AND b.due_date < CURRENT_DATE), 0) AS overdue_bills,
+       COALESCE(SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount)) FILTER (WHERE b.status <> 'paid' AND b.bill_pay_status = 'payable' AND b.due_date < CURRENT_DATE), 0) AS overdue_amount,
        (
          SELECT COUNT(*)
          FROM customers c
@@ -72,6 +74,7 @@ const getDashboard = asyncHandler(async (req, res) => {
              FROM bills ib
              WHERE ib.customer_id = c.id
                AND ib.status <> 'paid'
+               AND ib.bill_pay_status = 'payable'
                AND COALESCE(NULLIF(ib.balance_amount, 0), ib.amount - ib.paid_amount) > 0
            )
        ) AS inactive_accounts_with_debt,
@@ -87,7 +90,7 @@ const getDashboard = asyncHandler(async (req, res) => {
     `SELECT b.id, b.bill_number, b.billing_month, b.units_used, c.name AS customer_name, c.acc_number
      FROM bills b
      JOIN customers c ON c.id = b.customer_id
-     WHERE b.units_used > 0
+     WHERE b.units_used > 0 AND b.bill_pay_status = 'payable'
      ORDER BY b.billing_month DESC, b.units_used DESC
      LIMIT 5`
   );

@@ -91,8 +91,10 @@ export const api = {
   },
   readings: {
     list: () => request("/readings"),
-    context: (customerId, readingDate) =>
-      request(`/readings/context?customer_id=${customerId}&reading_date=${readingDate}`),
+    context: (customerId, readingDate, meterId = "") =>
+      request(
+        `/readings/context?customer_id=${customerId}&reading_date=${readingDate}${meterId ? `&meter_id=${meterId}` : ""}`
+      ),
     create: (payload) => request("/readings", { method: "POST", body: payload }),
     previewImport: (csv) => request("/readings/imports/preview", { method: "POST", body: { csv } }),
     commitImport: (csv, correctionReason = "") =>
@@ -102,6 +104,7 @@ export const api = {
   bills: {
     list: (status = "") => request(`/bills${status ? `?status=${status}` : ""}`),
     get: (id) => request(`/bills/${id}`),
+    promote: (id, payload) => request(`/bills/${id}/promote`, { method: "PATCH", body: payload }),
     markStatus: (id, status, correctionReason = "") =>
       request(`/bills/${id}/status`, { method: "PATCH", body: { status, correction_reason: correctionReason } })
   },
@@ -123,6 +126,11 @@ export const api = {
       apply: (payload) => request("/billing/penalties/apply", { method: "POST", body: payload }),
       waive: (id, payload) => request(`/billing/penalties/${id}/waive`, { method: "PATCH", body: payload }),
       reapply: (id, payload) => request(`/billing/penalties/${id}/reapply`, { method: "PATCH", body: payload })
+    },
+    sourceBillingRequests: {
+      list: () => request("/billing/source-billing-requests"),
+      review: (id, payload) =>
+        request(`/billing/source-billing-requests/${id}/review`, { method: "PATCH", body: payload })
     }
   },
   businessSettings: {
@@ -134,6 +142,7 @@ export const api = {
   meters: {
     list: (customerId) => request(`/meters?customer_id=${customerId}`),
     events: (customerId = "") => request(`/meters/events${customerId ? `?customer_id=${customerId}` : ""}`),
+    create: (payload) => request("/meters", { method: "POST", body: payload }),
     replace: (payload) => request("/meters/replace", { method: "POST", body: payload }),
     updateEvent: (id, payload) => request(`/meters/events/${id}`, { method: "PUT", body: payload })
   },
@@ -175,6 +184,21 @@ export const api = {
     create: (payload) => request("/maintenance-requests", { method: "POST", body: payload }),
     update: (id, payload) => request(`/maintenance-requests/${id}`, { method: "PUT", body: payload }),
     resolve: (id, payload) => request(`/maintenance-requests/${id}/resolve`, { method: "PATCH", body: payload })
+  },
+  production: {
+    meters: () => request("/production/meters"),
+    createMeter: (payload) => request("/production/meters", { method: "POST", body: payload }),
+    topups: () => request("/production/electricity-topups"),
+    createTopup: (payload) => request("/production/electricity-topups", { method: "POST", body: payload }),
+    weeklyReadings: () => request("/production/weekly-readings"),
+    getWeeklyReading: (id) => request(`/production/weekly-readings/${id}`),
+    createWeeklyReading: (payload) => request("/production/weekly-readings", { method: "POST", body: payload }),
+    updateWeeklyReading: (id, payload) => request(`/production/weekly-readings/${id}`, { method: "PUT", body: payload }),
+    rollbackWeeklyReading: (id, payload) => request(`/production/weekly-readings/${id}`, { method: "DELETE", body: payload }),
+    report: (params = {}) => {
+      const query = new URLSearchParams(params);
+      return request(`/production/report${query.toString() ? `?${query}` : ""}`);
+    }
   },
   users: {
     list: () => request("/users"),

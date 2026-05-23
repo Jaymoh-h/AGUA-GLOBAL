@@ -26,6 +26,9 @@
     "db:migrate:penalty-policy": "node src/db/runSqlFile.js database/migrations/018_penalty_policy_and_waivers.sql",
     "db:migrate:tariff-effective-dates": "node src/db/runSqlFile.js database/migrations/019_tariff_effective_dates.sql",
     "db:migrate:payment-suspense": "node src/db/runSqlFile.js database/migrations/020_payment_suspense.sql",
+    "db:migrate:dual-meter-billing": "node src/db/runSqlFile.js database/migrations/021_dual_meter_billing.sql",
+    "db:migrate:production-monitoring": "node src/db/runSqlFile.js database/migrations/022_production_monitoring.sql",
+    "db:migrate:bill-payability": "node src/db/runSqlFile.js database/migrations/023_bill_payability_promotion.sql",
     "payment:check": "node src/db/paymentCheck.js",
     "db:seed": "node src/db/seed.js"
   },

@@ -28,6 +28,7 @@ const getReportsSummary = asyncHandler(async (_req, res) => {
        COALESCE(SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount)) FILTER (WHERE b.status <> 'paid'), 0) AS balance_amount
      FROM bills b
      LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
+     WHERE b.bill_pay_status = 'payable'
      GROUP BY COALESCE(bp.name, to_char(b.billing_month, 'FMMonth YYYY')), COALESCE(bp.period_start, b.billing_month)
      ORDER BY COALESCE(bp.period_start, b.billing_month) DESC
      LIMIT 12`
@@ -61,7 +62,7 @@ const getReportsSummary = asyncHandler(async (_req, res) => {
          COUNT(*) AS bill_count,
          COALESCE(SUM(COALESCE(NULLIF(balance_amount, 0), amount - paid_amount)), 0) AS balance_amount
        FROM bills
-       WHERE status <> 'paid'
+       WHERE status <> 'paid' AND bill_pay_status = 'payable'
        GROUP BY 1
      ) aging
      ORDER BY CASE bucket
@@ -79,15 +80,15 @@ const getReportsSummary = asyncHandler(async (_req, res) => {
        c.name,
        c.acc_number,
        z.name AS zone_name,
-       COUNT(b.id) FILTER (WHERE b.status <> 'paid') AS open_bills,
-       COALESCE(SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount)) FILTER (WHERE b.status <> 'paid'), 0) -
+       COUNT(b.id) FILTER (WHERE b.status <> 'paid' AND b.bill_pay_status = 'payable') AS open_bills,
+       COALESCE(SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount)) FILTER (WHERE b.status <> 'paid' AND b.bill_pay_status = 'payable'), 0) -
          COALESCE((SELECT SUM(p.unallocated_amount) FROM payments p WHERE p.customer_id = c.id AND p.status = 'posted'), 0) AS balance_due,
-       MIN(b.due_date) FILTER (WHERE b.status <> 'paid') AS oldest_due_date
+       MIN(b.due_date) FILTER (WHERE b.status <> 'paid' AND b.bill_pay_status = 'payable') AS oldest_due_date
      FROM customers c
      JOIN zones z ON z.id = c.zone_id
      LEFT JOIN bills b ON b.customer_id = c.id
      GROUP BY c.id, z.name
-     HAVING COALESCE(SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount)) FILTER (WHERE b.status <> 'paid'), 0) -
+     HAVING COALESCE(SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount)) FILTER (WHERE b.status <> 'paid' AND b.bill_pay_status = 'payable'), 0) -
        COALESCE((SELECT SUM(p.unallocated_amount) FROM payments p WHERE p.customer_id = c.id AND p.status = 'posted'), 0) <> 0
      ORDER BY balance_due DESC, oldest_due_date ASC NULLS LAST
      LIMIT 100`
