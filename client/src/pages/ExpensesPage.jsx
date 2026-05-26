@@ -2,6 +2,7 @@ import { Banknote, Download, Eye, FileUp, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
+import ToastMessage, { toastTypeFromMessage } from "../components/ToastMessage";
 import { api } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
 
@@ -213,7 +214,7 @@ function ExpensesPage() {
               Notes
               <textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} rows="3" />
             </label>
-            {message ? <p className="form-note">{message}</p> : null}
+            <ToastMessage message={message} type={toastTypeFromMessage(message)} onClose={() => setMessage("")} />
             <button className="primary-button" type="submit">
               <Save size={17} />
               Save expense

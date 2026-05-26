@@ -340,6 +340,60 @@ td button,
   grid-template-columns: minmax(0, 1fr);
 }
 
+.workspace-grid.payroll-workspace-grid {
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  grid-auto-flow: dense;
+  align-items: start;
+}
+
+.payroll-workspace-grid > .page-stack {
+  display: contents;
+}
+
+.payroll-run-panel {
+  grid-column: 1;
+  order: 1;
+}
+
+.payroll-review-panel {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  order: 3;
+}
+
+.payroll-create-run {
+  grid-column: 1;
+  order: 2;
+}
+
+.payroll-period-form {
+  grid-column: 1;
+  order: 4;
+}
+
+.payroll-line-editor {
+  grid-column: 2;
+  order: 4;
+}
+
+.payroll-recurring-form {
+  grid-column: 1;
+  order: 5;
+}
+
+.payroll-recurring-register,
+.payroll-period-register {
+  grid-column: 1 / -1;
+}
+
+.payroll-recurring-register {
+  order: 6;
+}
+
+.payroll-period-register {
+  order: 7;
+}
+
 .workspace-grid.dashboard-grid {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -389,6 +443,89 @@ td button,
 .statement-preview {
   display: grid;
   gap: 13px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(23, 32, 51, 0.42);
+}
+
+.modal-panel {
+  width: min(960px, 100%);
+  max-height: min(860px, calc(100vh - 40px));
+  overflow: auto;
+  background: #ffffff;
+  border: 1px solid #dde3ea;
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 24px 70px rgba(23, 32, 51, 0.18);
+}
+
+.audit-detail-modal {
+  display: grid;
+  gap: 14px;
+}
+
+.audit-detail-grid,
+.audit-snapshot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.audit-detail-grid > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #edf0f4;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.audit-detail-grid span {
+  color: #637083;
+  font-size: 12px;
+}
+
+.audit-detail-grid strong,
+.audit-detail-grid small {
+  overflow-wrap: anywhere;
+}
+
+.audit-snapshot-grid h3 {
+  margin: 0 0 8px;
+}
+
+.json-block,
+.json-inline {
+  margin: 0;
+  max-width: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.json-block {
+  min-height: 120px;
+  max-height: 320px;
+  padding: 10px;
+  border: 1px solid #edf0f4;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.json-inline {
+  max-height: 170px;
 }
 
 .customer-statement-print {
@@ -734,6 +871,89 @@ button:disabled {
   color: #2f6b2f;
 }
 
+.toast-message {
+  position: fixed;
+  top: 18px;
+  right: clamp(12px, 2vw, 28px);
+  z-index: 80;
+  width: min(420px, calc(100vw - 24px));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  align-items: start;
+  padding: 12px 14px;
+  border: 1px solid #dde3ea;
+  border-left: 4px solid #16a34a;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #172033;
+  box-shadow: 0 18px 48px rgba(23, 32, 51, 0.16);
+  animation: toast-in 0.18s ease-out;
+}
+
+.toast-message strong {
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-transform: uppercase;
+  color: #637083;
+}
+
+.toast-message span {
+  grid-column: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.toast-message button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: #eef2f6;
+  color: #172033;
+}
+
+.toast-success {
+  border-left-color: #16a34a;
+}
+
+.toast-error {
+  border-left-color: #b42318;
+}
+
+.toast-info {
+  border-left-color: #1d4f91;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 720px) {
+  .toast-message {
+    top: 10px;
+    right: 10px;
+    left: 10px;
+    width: auto;
+  }
+}
+
 .balance-note {
   background: #eef6ff;
   color: #1d4f91;
@@ -755,6 +975,63 @@ button:disabled {
 .reading-context div {
   display: grid;
   gap: 3px;
+}
+
+.payroll-run-context {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 10px;
+}
+
+.payroll-run-list {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.payroll-run {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #dde3ea;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #172033;
+  text-align: left;
+}
+
+.payroll-run:hover,
+.payroll-run.active {
+  border-color: #b9e6df;
+  background: #f3faf8;
+}
+
+.payroll-run strong,
+.payroll-run small {
+  overflow-wrap: anywhere;
+}
+
+.payroll-line-editor {
+  grid-template-columns: repeat(5, minmax(120px, 1fr));
+}
+
+.payroll-line-editor .panel-heading,
+.payroll-line-editor label:last-of-type,
+.payroll-line-editor button {
+  grid-column: 1 / -1;
+}
+
+.payroll-review-panel .table-wrap {
+  max-height: 680px;
+}
+
+.payroll-recurring-register .table-wrap,
+.payroll-period-register .table-wrap {
+  max-height: 420px;
 }
 
 .reading-context span {
@@ -941,20 +1218,24 @@ td {
 
 .status-valid,
 .status-ready,
-.status-approved {
+.status-approved,
+.status-sent {
   background: #dcfce7;
   color: #166534;
 }
 
 .status-invalid,
-.status-rejected {
+.status-rejected,
+.status-failed {
   background: #fee2e2;
   color: #991b1b;
 }
 
 .status-open,
 .status-pending,
-.status-held {
+.status-pending_approval,
+.status-held,
+.status-skipped {
   background: #dbeafe;
   color: #1e40af;
 }
@@ -973,7 +1254,8 @@ td {
 }
 
 .status-cancelled,
-.status-discarded {
+.status-discarded,
+.status-terminated {
   background: #f4f4f5;
   color: #52525b;
 }
@@ -1070,7 +1352,8 @@ td {
 
   .workspace-grid,
   .portal-profile-grid,
-  .report-grid {
+  .report-grid,
+  .payroll-run-context {
     grid-template-columns: 1fr 1fr;
   }
 }
@@ -1088,8 +1371,22 @@ td {
 
   .workspace-grid,
   .portal-profile-grid,
-  .report-grid {
+  .report-grid,
+  .payroll-run-context,
+  .payroll-line-editor {
     grid-template-columns: 1fr;
+  }
+
+  .payroll-run-panel,
+  .payroll-review-panel,
+  .payroll-create-run,
+  .payroll-period-form,
+  .payroll-line-editor,
+  .payroll-recurring-form,
+  .payroll-recurring-register,
+  .payroll-period-register {
+    grid-column: 1;
+    grid-row: auto;
   }
 
   .payments-entry-grid {

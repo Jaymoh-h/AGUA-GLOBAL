@@ -40,6 +40,9 @@ export const assetUrl = (path) => {
 
 export const api = {
   login: (email, password) => request("/auth/login", { method: "POST", body: { email, password } }),
+  requestPasswordReset: (email) => request("/auth/password-reset/request", { method: "POST", body: { email } }),
+  resetPassword: (token, newPassword) =>
+    request("/auth/password-reset/confirm", { method: "POST", body: { token, new_password: newPassword } }),
   me: () => request("/auth/me"),
   changePassword: (currentPassword, newPassword) =>
     request("/auth/change-password", {
@@ -105,6 +108,7 @@ export const api = {
     list: (status = "") => request(`/bills${status ? `?status=${status}` : ""}`),
     get: (id) => request(`/bills/${id}`),
     promote: (id, payload) => request(`/bills/${id}/promote`, { method: "PATCH", body: payload }),
+    sendEmail: (id) => request(`/bills/${id}/email`, { method: "POST" }),
     markStatus: (id, status, correctionReason = "") =>
       request(`/bills/${id}/status`, { method: "PATCH", body: { status, correction_reason: correctionReason } })
   },
@@ -168,6 +172,7 @@ export const api = {
     previewImport: (csv) => request("/payments/imports/preview", { method: "POST", body: { csv } }),
     commitImport: (csv) => request("/payments/imports/commit", { method: "POST", body: { csv } }),
     update: (id, payload) => request(`/payments/${id}`, { method: "PUT", body: payload }),
+    sendReceiptEmail: (id) => request(`/payments/${id}/email`, { method: "POST" }),
     voidToSuspense: (id, payload) => request(`/payments/${id}/void`, { method: "POST", body: payload }),
     reapplySuspense: (id, payload) => request(`/payments/suspense/${id}/reapply`, { method: "POST", body: payload }),
     discardSuspense: (id, payload) => request(`/payments/suspense/${id}/discard`, { method: "POST", body: payload })
@@ -177,6 +182,17 @@ export const api = {
     create: (payload) => request("/expenses", { method: "POST", body: payload }),
     previewImport: (csv) => request("/expenses/imports/preview", { method: "POST", body: { csv } }),
     commitImport: (csv) => request("/expenses/imports/commit", { method: "POST", body: { csv } })
+  },
+  payroll: {
+    payees: () => request("/payroll/payees"),
+    createPayee: (payload) => request("/payroll/payees", { method: "POST", body: payload }),
+    terminatePayee: (id, payload) => request(`/payroll/payees/${id}/terminate`, { method: "PATCH", body: payload }),
+    runs: () => request("/payroll/runs"),
+    createRun: (payload) => request("/payroll/runs", { method: "POST", body: payload }),
+    getRun: (id) => request(`/payroll/runs/${id}`),
+    addRunLineItem: (id, payload) => request(`/payroll/runs/${id}/line-items`, { method: "POST", body: payload }),
+    updateRunStatus: (id, payload) => request(`/payroll/runs/${id}/status`, { method: "PATCH", body: payload }),
+    updateLineItem: (id, payload) => request(`/payroll/line-items/${id}`, { method: "PATCH", body: payload })
   },
   maintenance: {
     list: (status = "") => request(`/maintenance-requests${status ? `?status=${status}` : ""}`),

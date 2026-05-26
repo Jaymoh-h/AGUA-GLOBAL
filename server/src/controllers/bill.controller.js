@@ -3,6 +3,13 @@ const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
 const { assertBillEditable, normalizeCorrectionReason } = require("../services/billingPeriodGuard.service");
+const {
+  buildBillEmail,
+  getBusinessSettings,
+  getCustomerEmailRecipient,
+  listDeliveryLogs,
+  sendDocumentEmail
+} = require("../services/documentDelivery.service");
 
 const listBills = asyncHandler(async (req, res) => {
   const status = req.query.status;
@@ -61,10 +68,68 @@ const getBill = asyncHandler(async (req, res) => {
     [req.params.id]
   );
 
+  const deliveryLogs = await listDeliveryLogs(pool, "bill", req.params.id);
+
   res.json({
     ...rows[0],
-    penalty_applications: penalties.rows
+    penalty_applications: penalties.rows,
+    delivery_logs: deliveryLogs
   });
+});
+
+const sendBillEmail = asyncHandler(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const billResult = await client.query(
+      `SELECT b.*, c.name AS customer_name, c.acc_number, c.phone, c.location, z.name AS zone_name,
+              bp.name AS billing_period_name,
+              bp.status AS billing_period_status
+       FROM bills b
+       JOIN customers c ON c.id = b.customer_id
+       LEFT JOIN zones z ON z.id = c.zone_id
+       LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
+       WHERE b.id = $1`,
+      [req.params.id]
+    );
+    const bill = billResult.rows[0];
+    if (!bill) throw new ApiError(404, "Bill not found.");
+
+    const [business, recipient] = await Promise.all([
+      getBusinessSettings(client),
+      getCustomerEmailRecipient(client, bill.customer_id)
+    ]);
+    const email = buildBillEmail({ bill, business });
+    const result = await sendDocumentEmail(client, req, {
+      documentType: "bill",
+      documentId: bill.id,
+      customerId: bill.customer_id,
+      recipient: recipient.email,
+      subject: email.subject,
+      text: email.text
+    });
+
+    await recordAuditEvent(client, {
+      req,
+      action: "bill.email_sent",
+      entityType: "bill",
+      entityId: bill.id,
+      afterData: {
+        recipient: recipient.email,
+        status: result.status,
+        delivery_log_id: result.log.id
+      },
+      reason: `Bill email ${result.status}`
+    });
+
+    await client.query("COMMIT");
+    res.json({ ...result, message: result.status === "sent" ? "Bill email sent." : "Bill email was not sent." });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 });
 
 const markBillStatus = asyncHandler(async (req, res) => {
@@ -216,5 +281,6 @@ module.exports = {
   listBills,
   getBill,
   markBillStatus,
-  promoteBillForPayment
+  promoteBillForPayment,
+  sendBillEmail
 };

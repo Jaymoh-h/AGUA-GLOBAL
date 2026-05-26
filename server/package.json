@@ -29,6 +29,13 @@
     "db:migrate:dual-meter-billing": "node src/db/runSqlFile.js database/migrations/021_dual_meter_billing.sql",
     "db:migrate:production-monitoring": "node src/db/runSqlFile.js database/migrations/022_production_monitoring.sql",
     "db:migrate:bill-payability": "node src/db/runSqlFile.js database/migrations/023_bill_payability_promotion.sql",
+    "db:migrate:payroll": "node src/db/runSqlFile.js database/migrations/024_payroll_management.sql",
+    "db:migrate:password-reset": "node src/db/runSqlFile.js database/migrations/025_password_reset_tokens.sql",
+    "db:migrate:payroll-expense-posting": "node src/db/runSqlFile.js database/migrations/026_payroll_expense_posting.sql",
+    "db:migrate:payroll-lifecycle": "node src/db/runSqlFile.js database/migrations/027_payroll_lifecycle_and_period_payees.sql",
+    "db:migrate:document-delivery": "node src/db/runSqlFile.js database/migrations/028_document_delivery_logs.sql",
+    "db:migrate:customer-contact-preferences": "node src/db/runSqlFile.js database/migrations/029_customer_contact_preferences.sql",
+    "db:migrate:production-topup-expenses": "node src/db/runSqlFile.js database/migrations/030_production_topup_expenses.sql",
     "payment:check": "node src/db/paymentCheck.js",
     "db:seed": "node src/db/seed.js"
   },
@@ -40,6 +47,7 @@
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
+    "nodemailer": "^6.9.16",
     "pg": "^8.13.1"
   },
   "devDependencies": {

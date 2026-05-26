@@ -3,6 +3,7 @@ const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
 const { calculateTariffCharge, getTariffWithBlocks } = require("../services/tariff.service");
+const { createExpenseRecord } = require("./expense.controller");
 
 const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
 const dateOnly = (value) => (value instanceof Date ? value.toISOString().slice(0, 10) : String(value || "").slice(0, 10));
@@ -110,9 +111,14 @@ const createProductionMeter = asyncHandler(async (req, res) => {
 
 const listElectricityTopups = asyncHandler(async (_req, res) => {
   const { rows } = await pool.query(
-    `SELECT pet.*, u.name AS created_by_name
+    `SELECT pet.*,
+            u.name AS created_by_name,
+            e.reference AS expense_reference,
+            e.category AS expense_category,
+            e.amount AS expense_amount
      FROM production_electricity_topups pet
      LEFT JOIN users u ON u.id = pet.created_by
+     LEFT JOIN expenses e ON e.id = pet.expense_id
      ORDER BY pet.topup_date DESC, pet.id DESC
      LIMIT 500`
   );
@@ -125,18 +131,63 @@ const createElectricityTopup = asyncHandler(async (req, res) => {
   const units = toNumber(kwh_units);
   const cost = toNumber(total_cost);
   if (!Number.isFinite(units) || units <= 0) throw new ApiError(400, "kWh units must be greater than zero.");
-  if (!Number.isFinite(cost) || cost < 0) throw new ApiError(400, "Total cost cannot be negative.");
+  if (!Number.isFinite(cost) || cost <= 0) throw new ApiError(400, "Total cost must be greater than zero.");
   const costPerUnit = units > 0 ? roundMoney(cost / units) : 0;
 
-  const { rows } = await pool.query(
-    `INSERT INTO production_electricity_topups (
-      topup_date, kwh_units, total_cost, cost_per_unit, reference, notes, created_by
-    )
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
-    RETURNING *`,
-    [topup_date, units, cost, costPerUnit, reference || null, notes || null, req.user.id]
-  );
-  res.status(201).json(rows[0]);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const topupResult = await client.query(
+      `INSERT INTO production_electricity_topups (
+        topup_date, kwh_units, total_cost, cost_per_unit, reference, notes, created_by
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *`,
+      [topup_date, units, cost, costPerUnit, reference || null, notes || null, req.user.id]
+    );
+    const topup = topupResult.rows[0];
+    const expense = await createExpenseRecord(
+      client,
+      req,
+      {
+        expense_date: topup.topup_date,
+        category: "Production - Electricity",
+        vendor: "Electricity top-up",
+        description: `Electricity top-up ${Number(topup.kwh_units || 0).toLocaleString()} kWh`,
+        amount: topup.total_cost,
+        payment_channel: "mpesa_paybill",
+        reference: topup.reference || `PROD-TOPUP-${topup.id}`,
+        notes: topup.notes || `Posted from production electricity top-up #${topup.id}.`
+      },
+      { auditReason: `Production electricity top-up #${topup.id}` }
+    );
+    const updatedResult = await client.query(
+      `UPDATE production_electricity_topups
+       SET expense_id = $1
+       WHERE id = $2
+       RETURNING *`,
+      [expense.id, topup.id]
+    );
+
+    await recordAuditEvent(client, {
+      req,
+      action: "production_electricity_topup.created",
+      entityType: "production_electricity_topup",
+      entityId: topup.id,
+      afterData: {
+        topup: updatedResult.rows[0],
+        expense
+      }
+    });
+
+    await client.query("COMMIT");
+    res.status(201).json({ ...updatedResult.rows[0], expense_reference: expense.reference });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 });
 
 const resolveProductionMeters = async (client, activeOnly = true) => {

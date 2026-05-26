@@ -16,6 +16,7 @@ import {
   Settings2,
   Tags,
   Users,
+  UserRoundCog,
   WalletCards,
   Wrench
 } from "lucide-react";
@@ -32,6 +33,7 @@ export const navItems = [
   { key: "business", label: "Business Settings", icon: Building2, roles: ["admin", "accountant"] },
   { key: "payments", label: "Payments", icon: WalletCards, roles: ["admin", "accountant"] },
   { key: "expenses", label: "Expenses", icon: Banknote, roles: ["admin", "accountant"] },
+  { key: "payroll", label: "Payroll", icon: UserRoundCog, roles: ["admin", "accountant"] },
   { key: "maintenance", label: "Maintenance", icon: Wrench, roles: ["admin", "accountant", "meter_reader"] },
   { key: "production", label: "Production", icon: PlugZap, roles: ["admin", "accountant", "meter_reader"] },
   { key: "reports", label: "Reports", icon: FileSpreadsheet, roles: ["admin", "accountant"] },

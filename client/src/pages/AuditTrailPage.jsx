@@ -1,4 +1,4 @@
-import { Download, History } from "lucide-react";
+import { Download, Eye, History, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
@@ -31,9 +31,46 @@ const importSummary = (event) => {
   return parts.length ? parts.join(" | ") : summarizeSnapshot(event);
 };
 
+const flattenRecord = (value, prefix = "", result = {}) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    Object.entries(value).forEach(([key, nestedValue]) => {
+      flattenRecord(nestedValue, prefix ? `${prefix}.${key}` : key, result);
+    });
+    return result;
+  }
+  result[prefix || "value"] = value;
+  return result;
+};
+
+const stringifyValue = (value) => {
+  if (value === null || value === undefined || value === "") return "-";
+  if (typeof value === "object") return JSON.stringify(value, null, 2);
+  return String(value);
+};
+
+const buildChangeRows = (event) => {
+  const before = flattenRecord(event.before_data || {});
+  const after = flattenRecord(event.after_data || {});
+  const fields = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
+  return fields
+    .filter((field) => JSON.stringify(before[field] ?? null) !== JSON.stringify(after[field] ?? null))
+    .map((field) => ({
+      field,
+      before: before[field],
+      after: after[field]
+    }));
+};
+
+const changeSummary = (event) => {
+  const changes = buildChangeRows(event).length;
+  if (changes) return `${changes} changed field${changes === 1 ? "" : "s"}`;
+  return summarizeSnapshot(event);
+};
+
 function AuditTrailPage() {
   const [events, setEvents] = useState([]);
   const [message, setMessage] = useState("");
+  const [selectedEvent, setSelectedEvent] = useState(null);
 
   useEffect(() => {
     api.auditEvents.list().then(setEvents).catch((err) => setMessage(err.message));
@@ -75,6 +112,8 @@ function AuditTrailPage() {
     );
   };
 
+  const selectedChanges = selectedEvent ? buildChangeRows(selectedEvent) : [];
+
   return (
     <section className="page-stack">
       <header className="page-header">
@@ -106,6 +145,7 @@ function AuditTrailPage() {
                 <th>Import</th>
                 <th>Summary</th>
                 <th>Reason</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -119,10 +159,16 @@ function AuditTrailPage() {
                   <td>{event.action.replace("_import.committed", "")}</td>
                   <td>{importSummary(event)}</td>
                   <td>{event.reason || "-"}</td>
+                  <td>
+                    <button type="button" onClick={() => setSelectedEvent(event)} title="View audit details">
+                      <Eye size={14} />
+                      View
+                    </button>
+                  </td>
                 </tr>
               ))}
               {!importTable.visibleRows.length ? (
-                <EmptyTableRow colSpan={5} title="No import activity found" detail="Committed imports will appear here." />
+                <EmptyTableRow colSpan={6} title="No import activity found" detail="Committed imports will appear here." />
               ) : null}
             </tbody>
           </table>
@@ -148,8 +194,9 @@ function AuditTrailPage() {
                 <th>Actor</th>
                 <th>Action</th>
                 <th>Entity</th>
-                <th>Snapshot</th>
+                <th>Changes</th>
                 <th>Reason</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -165,17 +212,106 @@ function AuditTrailPage() {
                     <strong>{event.entity_type}</strong>
                     <small>{event.entity_id || "-"}</small>
                   </td>
-                  <td>{summarizeSnapshot(event)}</td>
+                  <td>{changeSummary(event)}</td>
                   <td>{event.reason || "-"}</td>
+                  <td>
+                    <button type="button" onClick={() => setSelectedEvent(event)} title="View audit details">
+                      <Eye size={14} />
+                      View
+                    </button>
+                  </td>
                 </tr>
               ))}
               {!eventTable.visibleRows.length ? (
-                <EmptyTableRow colSpan={6} title="No audit events found" detail="System activity will appear here as changes are made." />
+                <EmptyTableRow colSpan={7} title="No audit events found" detail="System activity will appear here as changes are made." />
               ) : null}
             </tbody>
           </table>
         </div>
       </div>
+      {selectedEvent ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => setSelectedEvent(null)}>
+          <div className="modal-panel audit-detail-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Audit Record</p>
+                <h3>{selectedEvent.action}</h3>
+              </div>
+              <button className="icon-button" type="button" onClick={() => setSelectedEvent(null)} title="Close audit details">
+                <X size={15} />
+              </button>
+            </div>
+            <div className="audit-detail-grid">
+              <div>
+                <span>Time</span>
+                <strong>{formatDate(selectedEvent.created_at)}</strong>
+              </div>
+              <div>
+                <span>Actor</span>
+                <strong>{selectedEvent.actor_name || "System"}</strong>
+                <small>{selectedEvent.actor_email || ""}</small>
+              </div>
+              <div>
+                <span>Entity</span>
+                <strong>{selectedEvent.entity_type}</strong>
+                <small>Record ID: {selectedEvent.entity_id || "-"}</small>
+              </div>
+              <div>
+                <span>Reason</span>
+                <strong>{selectedEvent.reason || "-"}</strong>
+              </div>
+              <div>
+                <span>IP address</span>
+                <strong>{selectedEvent.ip_address || "-"}</strong>
+              </div>
+              <div>
+                <span>User agent</span>
+                <strong>{selectedEvent.user_agent || "-"}</strong>
+              </div>
+            </div>
+
+            <div className="panel-heading compact-heading">
+              <h3>Field Changes</h3>
+              <small>{selectedChanges.length ? `${selectedChanges.length} changed field(s)` : "No before/after difference captured"}</small>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Field</th>
+                    <th>Before</th>
+                    <th>After</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedChanges.length ? (
+                    selectedChanges.map((row) => (
+                      <tr key={row.field}>
+                        <td>{row.field}</td>
+                        <td><pre className="json-inline">{stringifyValue(row.before)}</pre></td>
+                        <td><pre className="json-inline">{stringifyValue(row.after)}</pre></td>
+                      </tr>
+                    ))
+                  ) : (
+                    <EmptyTableRow colSpan={3} title="No field-level changes" detail="This event captured a snapshot rather than a before/after edit." />
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="audit-snapshot-grid">
+              <div>
+                <h3>Before Snapshot</h3>
+                <pre className="json-block">{stringifyValue(selectedEvent.before_data)}</pre>
+              </div>
+              <div>
+                <h3>After Snapshot</h3>
+                <pre className="json-block">{stringifyValue(selectedEvent.after_data)}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

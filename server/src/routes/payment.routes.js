@@ -8,6 +8,7 @@ const {
   createPayment,
   previewPaymentImport,
   reapplyPaymentSuspense,
+  sendReceiptEmail,
   voidPaymentToSuspense,
   updatePayment
 } = require("../controllers/payment.controller");
@@ -25,6 +26,7 @@ router.post("/suspense/:id/discard", authorize("admin"), discardPaymentSuspense)
 router.get("/:id", authorize("admin", "accountant"), getPayment);
 router.post("/", authorize("admin", "accountant"), createPayment);
 router.put("/:id", authorize("admin", "accountant"), updatePayment);
+router.post("/:id/email", authorize("admin", "accountant"), sendReceiptEmail);
 router.post("/:id/void", authorize("admin", "accountant"), voidPaymentToSuspense);
 
 module.exports = router;

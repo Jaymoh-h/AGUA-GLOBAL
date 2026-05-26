@@ -11,6 +11,22 @@ const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
 const toMoney = (value) => Number(Number(value || 0).toFixed(2));
 
 const normalizeImportHeader = (value) => String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+const normalizeEmail = (value) => {
+  if (value === undefined || value === null || value === "") return null;
+  const email = String(value).trim().toLowerCase();
+  if (!email) return null;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new ApiError(400, "Email must be a valid address.");
+  }
+  return email;
+};
+const normalizeDeliveryChannel = (value) => {
+  const channel = String(value || "email").trim().toLowerCase();
+  if (!["email", "sms", "whatsapp"].includes(channel)) {
+    throw new ApiError(400, "Preferred delivery channel must be email, sms, or whatsapp.");
+  }
+  return channel;
+};
 
 const getCustomerBalanceDue = async (client, customerId) => {
   const { rows } = await client.query(
@@ -259,6 +275,7 @@ const prepareCustomerImport = async (csvText, client) => {
     const warnings = [];
     const name = readImportValue(row, ["name", "customer_name"]);
     const phone = readImportValue(row, ["phone", "mobile", "telephone"]) || "";
+    const email = readImportValue(row, ["email", "customer_email", "billing_email"]) || "";
     const accNumber = readImportValue(row, ["acc_number", "account", "account_number"]);
     const rateKey = readImportValue(row, ["rate_id", "tariff_id"]);
     const rateName = readImportValue(row, ["rate_name", "tariff", "rate"]);
@@ -270,11 +287,18 @@ const prepareCustomerImport = async (csvText, client) => {
     const openingBalanceAmount = parseImportAmount(readImportValue(row, ["opening_balance_amount", "opening_balance"]), 0);
     const openingBalanceDate = readImportValue(row, ["opening_balance_date", "balance_date"]) || "";
     const status = String(readImportValue(row, ["status"]) || "active").trim().toLowerCase();
+    const preferredDeliveryChannel = String(readImportValue(row, ["preferred_delivery_channel", "delivery_channel"]) || "email")
+      .trim()
+      .toLowerCase();
+    const emailDeliveryEnabled = readImportValue(row, ["email_delivery_enabled", "email_invoices"]);
+    const smsDeliveryEnabled = readImportValue(row, ["sms_delivery_enabled", "sms_invoices"]);
+    const whatsappDeliveryEnabled = readImportValue(row, ["whatsapp_delivery_enabled", "whatsapp_invoices"]);
 
     const rate = rateKey ? ratesById.get(String(rateKey)) : ratesByName.get(String(rateName || "").toLowerCase());
     const zone = zoneKey ? zonesById.get(String(zoneKey)) : zonesByName.get(String(zoneName || "").toLowerCase());
 
     if (!name) errors.push("Name is required.");
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("Email must be a valid address.");
     if (!accNumber) errors.push("Account number is required.");
     if (accNumber && existingAccounts.has(accNumber.toLowerCase())) errors.push("Account number already exists.");
     if (accNumber && seenAccounts.has(accNumber.toLowerCase())) errors.push("Duplicate account number in CSV.");
@@ -286,6 +310,9 @@ const prepareCustomerImport = async (csvText, client) => {
     if (openingBalanceAmount !== 0 && !openingBalanceDate) errors.push("Opening balance date is required.");
     if (openingBalanceDate && !isDateOnly(openingBalanceDate)) errors.push("Opening balance date must use YYYY-MM-DD format.");
     if (!["active", "inactive"].includes(status)) errors.push("Status must be active or inactive.");
+    if (!["email", "sms", "whatsapp"].includes(preferredDeliveryChannel)) {
+      errors.push("Preferred delivery channel must be email, sms, or whatsapp.");
+    }
     if (depositPaid && !depositPaidAt) warnings.push("Deposit marked paid; deposit date will default to today.");
 
     if (accNumber) seenAccounts.add(accNumber.toLowerCase());
@@ -294,6 +321,7 @@ const prepareCustomerImport = async (csvText, client) => {
       rowNumber: row.rowNumber,
       name,
       phone,
+      email: email ? email.toLowerCase() : "",
       acc_number: accNumber,
       rate_id: rate?.id || null,
       rate_name: rate?.name || rateName || "",
@@ -305,6 +333,10 @@ const prepareCustomerImport = async (csvText, client) => {
       opening_balance_amount: Number.isFinite(openingBalanceAmount) ? openingBalanceAmount : "",
       opening_balance_date: openingBalanceDate,
       status,
+      preferred_delivery_channel: preferredDeliveryChannel,
+      email_delivery_enabled: emailDeliveryEnabled === undefined || emailDeliveryEnabled === "" ? true : parseBoolean(emailDeliveryEnabled),
+      sms_delivery_enabled: parseBoolean(smsDeliveryEnabled),
+      whatsapp_delivery_enabled: parseBoolean(whatsappDeliveryEnabled),
       errors,
       warnings,
       status_label: errors.length ? "invalid" : "valid"
@@ -424,7 +456,7 @@ const listCustomers = asyncHandler(async (req, res) => {
      FROM customers c
      JOIN rates r ON r.id = c.rate_id
      JOIN zones z ON z.id = c.zone_id
-     WHERE (c.name ILIKE $1 OR c.acc_number ILIKE $1 OR c.phone ILIKE $1)
+     WHERE (c.name ILIKE $1 OR c.acc_number ILIKE $1 OR c.phone ILIKE $1 OR c.email ILIKE $1)
      ${customerScope}
      ORDER BY c.created_at DESC`,
     params
@@ -637,18 +669,20 @@ const commitCustomerImport = asyncHandler(async (req, res) => {
     for (const row of preview.rows) {
       const result = await client.query(
         `INSERT INTO customers (
-           name, phone, location, acc_number, rate, rate_id, zone_id,
+           name, phone, email, location, acc_number, rate, rate_id, zone_id,
            deposit_amount, deposit_paid, deposit_paid_at,
-           opening_balance_amount, opening_balance_date, status
+           opening_balance_amount, opening_balance_date, status,
+           preferred_delivery_channel, email_delivery_enabled, sms_delivery_enabled, whatsapp_delivery_enabled
          )
-         SELECT $1, $2, z.name, $3, r.amount, r.id, z.id, $6, $7, $8, $9, $10, $11
+         SELECT $1, $2, $3, z.name, $4, r.amount, r.id, z.id, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
          FROM rates r
          CROSS JOIN zones z
-         WHERE r.id = $4 AND z.id = $5 AND r.is_active = TRUE AND z.is_active = TRUE
+         WHERE r.id = $5 AND z.id = $6 AND r.is_active = TRUE AND z.is_active = TRUE
          RETURNING *`,
         [
           row.name,
           row.phone || null,
+          row.email || null,
           row.acc_number,
           row.rate_id,
           row.zone_id,
@@ -657,7 +691,11 @@ const commitCustomerImport = asyncHandler(async (req, res) => {
           row.deposit_paid ? row.deposit_paid_at || new Date().toISOString().slice(0, 10) : null,
           Number(row.opening_balance_amount || 0),
           row.opening_balance_amount !== 0 ? row.opening_balance_date : null,
-          row.status
+          row.status,
+          row.preferred_delivery_channel,
+          Boolean(row.email_delivery_enabled),
+          Boolean(row.sms_delivery_enabled),
+          Boolean(row.whatsapp_delivery_enabled)
         ]
       );
 
@@ -778,6 +816,7 @@ const createCustomer = asyncHandler(async (req, res) => {
   const {
     name,
     phone,
+    email,
     acc_number,
     rate_id,
     zone_id,
@@ -785,31 +824,39 @@ const createCustomer = asyncHandler(async (req, res) => {
     deposit_paid = false,
     deposit_paid_at,
     opening_balance_amount = 0,
-    opening_balance_date
+    opening_balance_date,
+    preferred_delivery_channel = "email",
+    email_delivery_enabled = true,
+    sms_delivery_enabled = false,
+    whatsapp_delivery_enabled = false
   } = req.body;
   if (!name || !acc_number || !rate_id || !zone_id) {
     throw new ApiError(400, "Name, account number, rate, and zone/location are required.");
   }
 
   const openingBalance = normalizeOpeningBalance(opening_balance_amount, opening_balance_date);
+  const nextEmail = normalizeEmail(email);
+  const nextDeliveryChannel = normalizeDeliveryChannel(preferred_delivery_channel);
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const { rows } = await client.query(
       `INSERT INTO customers (
-         name, phone, location, acc_number, rate, rate_id, zone_id,
+         name, phone, email, location, acc_number, rate, rate_id, zone_id,
          deposit_amount, deposit_paid, deposit_paid_at,
-         opening_balance_amount, opening_balance_date
+         opening_balance_amount, opening_balance_date,
+         preferred_delivery_channel, email_delivery_enabled, sms_delivery_enabled, whatsapp_delivery_enabled
        )
-       SELECT $1, $2, z.name, $3, r.amount, r.id, z.id, $6, $7, $8, $9, $10
+       SELECT $1, $2, $3, z.name, $4, r.amount, r.id, z.id, $7, $8, $9, $10, $11, $12, $13, $14, $15
        FROM rates r
        CROSS JOIN zones z
-       WHERE r.id = $4 AND z.id = $5 AND r.is_active = TRUE AND z.is_active = TRUE
+       WHERE r.id = $5 AND z.id = $6 AND r.is_active = TRUE AND z.is_active = TRUE
        RETURNING *`,
       [
         name,
         phone || null,
+        nextEmail,
         acc_number,
         rate_id,
         zone_id,
@@ -817,7 +864,11 @@ const createCustomer = asyncHandler(async (req, res) => {
         Boolean(deposit_paid),
         deposit_paid ? deposit_paid_at || new Date().toISOString().slice(0, 10) : null,
         openingBalance.balanceAmount,
-        openingBalance.balanceDate
+        openingBalance.balanceDate,
+        nextDeliveryChannel,
+        Boolean(email_delivery_enabled),
+        Boolean(sms_delivery_enabled),
+        Boolean(whatsapp_delivery_enabled)
       ]
     );
     if (!rows[0]) {
@@ -860,6 +911,7 @@ const updateCustomer = asyncHandler(async (req, res) => {
   const {
     name,
     phone,
+    email,
     acc_number,
     rate_id,
     zone_id,
@@ -868,7 +920,11 @@ const updateCustomer = asyncHandler(async (req, res) => {
     deposit_paid,
     deposit_paid_at,
     opening_balance_amount,
-    opening_balance_date
+    opening_balance_date,
+    preferred_delivery_channel,
+    email_delivery_enabled,
+    sms_delivery_enabled,
+    whatsapp_delivery_enabled
   } = payload;
   const client = await pool.connect();
   try {
@@ -901,6 +957,7 @@ const updateCustomer = asyncHandler(async (req, res) => {
     const nextValues = {
       name: hasField("name") ? name : before.name,
       phone: hasField("phone") ? phone || null : before.phone,
+      email: hasField("email") ? normalizeEmail(email) : before.email,
       acc_number: hasField("acc_number") ? acc_number : before.acc_number,
       rate_id: selectedRate ? selectedRate.id : before.rate_id,
       zone_id: selectedZone ? selectedZone.id : before.zone_id,
@@ -911,7 +968,19 @@ const updateCustomer = asyncHandler(async (req, res) => {
       deposit_paid: hasField("deposit_paid") ? Boolean(deposit_paid) : Boolean(before.deposit_paid),
       deposit_paid_at: hasField("deposit_paid_at") ? deposit_paid_at || null : before.deposit_paid_at,
       opening_balance_amount: openingBalance ? openingBalance.balanceAmount : Number(before.opening_balance_amount || 0),
-      opening_balance_date: openingBalance ? openingBalance.balanceDate : before.opening_balance_date
+      opening_balance_date: openingBalance ? openingBalance.balanceDate : before.opening_balance_date,
+      preferred_delivery_channel: hasField("preferred_delivery_channel")
+        ? normalizeDeliveryChannel(preferred_delivery_channel)
+        : before.preferred_delivery_channel || "email",
+      email_delivery_enabled: hasField("email_delivery_enabled")
+        ? Boolean(email_delivery_enabled)
+        : Boolean(before.email_delivery_enabled),
+      sms_delivery_enabled: hasField("sms_delivery_enabled")
+        ? Boolean(sms_delivery_enabled)
+        : Boolean(before.sms_delivery_enabled),
+      whatsapp_delivery_enabled: hasField("whatsapp_delivery_enabled")
+        ? Boolean(whatsapp_delivery_enabled)
+        : Boolean(before.whatsapp_delivery_enabled)
     };
     if (!nextValues.deposit_paid) {
       nextValues.deposit_paid_at = null;
@@ -924,7 +993,9 @@ const updateCustomer = asyncHandler(async (req, res) => {
     const numericCustomerFields = new Set(["rate_id", "zone_id", "rate", "deposit_amount", "opening_balance_amount"]);
     const comparable = (field, value) => {
       if (numericCustomerFields.has(field)) return Number(value || 0).toFixed(2);
-      if (field === "deposit_paid") return Boolean(value) ? "true" : "false";
+      if (["deposit_paid", "email_delivery_enabled", "sms_delivery_enabled", "whatsapp_delivery_enabled"].includes(field)) {
+        return Boolean(value) ? "true" : "false";
+      }
       if (value instanceof Date) return value.toISOString().slice(0, 10);
       if (value === null || value === undefined) return "";
       return String(value);

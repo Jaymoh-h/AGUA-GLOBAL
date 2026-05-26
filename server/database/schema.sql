@@ -70,6 +70,7 @@ CREATE TABLE customers (
   zone_id INTEGER NOT NULL REFERENCES zones(id) ON DELETE RESTRICT,
   name VARCHAR(160) NOT NULL,
   phone VARCHAR(40),
+  email VARCHAR(160),
   location VARCHAR(180),
   acc_number VARCHAR(80) UNIQUE NOT NULL,
   rate NUMERIC(12, 2) NOT NULL CHECK (rate >= 0),
@@ -83,6 +84,10 @@ CREATE TABLE customers (
   closed_by INTEGER,
   closure_bill_id INTEGER,
   closure_reason TEXT,
+  preferred_delivery_channel VARCHAR(30) NOT NULL DEFAULT 'email' CHECK (preferred_delivery_channel IN ('email', 'sms', 'whatsapp')),
+  email_delivery_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  sms_delivery_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  whatsapp_delivery_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -102,6 +107,43 @@ CREATE TABLE users (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE password_reset_tokens (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  requested_ip VARCHAR(80),
+  user_agent TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_password_reset_tokens_user_active
+  ON password_reset_tokens(user_id, expires_at DESC)
+  WHERE used_at IS NULL;
+
+CREATE TABLE document_delivery_logs (
+  id SERIAL PRIMARY KEY,
+  document_type VARCHAR(30) NOT NULL CHECK (document_type IN ('bill', 'receipt')),
+  document_id INTEGER NOT NULL,
+  customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+  channel VARCHAR(30) NOT NULL DEFAULT 'email' CHECK (channel IN ('email', 'sms', 'whatsapp')),
+  recipient VARCHAR(180) NOT NULL,
+  subject VARCHAR(220),
+  status VARCHAR(30) NOT NULL CHECK (status IN ('sent', 'failed', 'skipped')),
+  error_message TEXT,
+  provider_message_id VARCHAR(180),
+  sent_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  sent_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_document_delivery_logs_document
+  ON document_delivery_logs(document_type, document_id, created_at DESC);
+
+CREATE INDEX idx_document_delivery_logs_customer
+  ON document_delivery_logs(customer_id, created_at DESC);
 
 CREATE TABLE rate_versions (
   id SERIAL PRIMARY KEY,

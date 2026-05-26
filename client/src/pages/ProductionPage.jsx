@@ -2,6 +2,7 @@ import { Edit2, FileUp, Gauge, PlugZap, RotateCcw, Save, X } from "lucide-react"
 import { useEffect, useMemo, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
+import ToastMessage, { toastTypeFromMessage } from "../components/ToastMessage";
 import { api } from "../services/api";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
@@ -140,7 +141,7 @@ function ProductionPage({ user }) {
     searchFields: ["meter_number", "name", "meter_type", "customer_name", "acc_number", "zone_name", "rate_name"]
   });
   const topupTable = useTableControls(topups, {
-    searchFields: ["topup_date", "kwh_units", "total_cost", "reference", "notes"]
+    searchFields: ["topup_date", "kwh_units", "total_cost", "reference", "expense_id", "expense_reference", "notes"]
   });
   const weekTable = useTableControls(weeks, {
     searchFields: ["reading_date", "meter_count", "total_consumption", "total_revenue"]
@@ -193,7 +194,7 @@ function ProductionPage({ user }) {
         notes: ""
       });
       await load();
-      setMessage("Electricity top-up recorded.");
+      setMessage("Electricity top-up recorded and posted to expenses.");
     } catch (err) {
       setMessage(err.message);
     }
@@ -329,7 +330,7 @@ function ProductionPage({ user }) {
         </div>
       </header>
 
-      {message ? <p className="form-note">{message}</p> : null}
+      <ToastMessage message={message} type={toastTypeFromMessage(message)} onClose={() => setMessage("")} />
 
       <section className="workspace-grid production-workspace">
         <div className="page-stack production-setup-stack">
@@ -424,7 +425,7 @@ function ProductionPage({ user }) {
               </label>
               <label>
                 Total cost
-                <input value={topupForm.total_cost} onChange={(event) => setTopupField("total_cost", event.target.value)} type="number" min="0" step="0.01" required />
+                <input value={topupForm.total_cost} onChange={(event) => setTopupField("total_cost", event.target.value)} type="number" min="0.01" step="0.01" required />
               </label>
               <label>
                 Reference
@@ -670,6 +671,7 @@ function ProductionPage({ user }) {
                     <th>Total Cost</th>
                     <th>Cost / Unit</th>
                     <th>Reference</th>
+                    <th>Expense</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -681,10 +683,14 @@ function ProductionPage({ user }) {
                         <td>{money(topup.total_cost)}</td>
                         <td>{money(topup.cost_per_unit)}</td>
                         <td>{topup.reference || "-"}</td>
+                        <td>
+                          {topup.expense_id ? `Expense #${topup.expense_id}` : "-"}
+                          {topup.expense_reference ? <small>{topup.expense_reference}</small> : null}
+                        </td>
                       </tr>
                     ))
                   ) : (
-                    <EmptyTableRow colSpan={5} title="No top-ups recorded" detail="Record electricity purchases for production cost tracking." />
+                    <EmptyTableRow colSpan={6} title="No top-ups recorded" detail="Record electricity purchases for production cost tracking." />
                   )}
                 </tbody>
               </table>

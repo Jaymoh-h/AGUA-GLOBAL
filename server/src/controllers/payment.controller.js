@@ -3,6 +3,13 @@ const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
 const { createReceiptNumber } = require("../services/billingPeriod.service");
+const {
+  buildReceiptEmail,
+  getBusinessSettings,
+  getCustomerEmailRecipient,
+  listDeliveryLogs,
+  sendDocumentEmail
+} = require("../services/documentDelivery.service");
 
 const paymentChannels = ["cash", "bank", "mpesa_paybill", "manual_adjustment"];
 
@@ -398,8 +405,103 @@ const getPayment = asyncHandler(async (req, res) => {
   res.json({
     payment,
     allocations: allocationsResult.rows,
-    customerBalance: balanceResult.rows[0]?.balance_due || 0
+    customerBalance: balanceResult.rows[0]?.balance_due || 0,
+    delivery_logs: await listDeliveryLogs(pool, "receipt", payment.id)
   });
+});
+
+const sendReceiptEmail = asyncHandler(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const paymentResult = await client.query(
+      `SELECT p.*,
+              c.name AS customer_name,
+              c.acc_number,
+              c.phone,
+              c.location,
+              z.name AS zone_name,
+              u.name AS recorded_by_name
+       FROM payments p
+       JOIN customers c ON c.id = p.customer_id
+       JOIN zones z ON z.id = c.zone_id
+       LEFT JOIN users u ON u.id = p.recorded_by
+       WHERE p.id = $1`,
+      [req.params.id]
+    );
+    const payment = paymentResult.rows[0];
+    if (!payment) throw new ApiError(404, "Payment not found.");
+
+    const allocationsResult = await client.query(
+      `SELECT pa.*,
+              b.bill_number,
+              b.billing_month,
+              b.due_date,
+              COALESCE(NULLIF(b.total_amount, 0), b.amount) AS bill_total,
+              b.paid_amount,
+              b.balance_amount,
+              b.status AS bill_status
+       FROM payment_allocations pa
+       JOIN bills b ON b.id = pa.bill_id
+       WHERE pa.payment_id = $1
+       ORDER BY b.billing_month ASC, b.id ASC`,
+      [payment.id]
+    );
+    const balanceResult = await client.query(
+      `SELECT
+         COALESCE((
+           SELECT SUM(COALESCE(NULLIF(balance_amount, 0), amount - paid_amount))
+           FROM bills
+           WHERE customer_id = $1 AND status <> 'paid' AND bill_pay_status = 'payable'
+         ), 0) -
+         COALESCE((
+           SELECT SUM(unallocated_amount)
+           FROM payments
+           WHERE customer_id = $1 AND status = 'posted'
+         ), 0) AS balance_due`,
+      [payment.customer_id]
+    );
+
+    const [business, recipient] = await Promise.all([
+      getBusinessSettings(client),
+      getCustomerEmailRecipient(client, payment.customer_id)
+    ]);
+    const email = buildReceiptEmail({
+      payment,
+      allocations: allocationsResult.rows,
+      customerBalance: balanceResult.rows[0]?.balance_due || 0,
+      business
+    });
+    const result = await sendDocumentEmail(client, req, {
+      documentType: "receipt",
+      documentId: payment.id,
+      customerId: payment.customer_id,
+      recipient: recipient.email,
+      subject: email.subject,
+      text: email.text
+    });
+
+    await recordAuditEvent(client, {
+      req,
+      action: "payment.receipt_email_sent",
+      entityType: "payment",
+      entityId: payment.id,
+      afterData: {
+        recipient: recipient.email,
+        status: result.status,
+        delivery_log_id: result.log.id
+      },
+      reason: `Receipt email ${result.status}`
+    });
+
+    await client.query("COMMIT");
+    res.json({ ...result, message: result.status === "sent" ? "Receipt email sent." : "Receipt email was not sent." });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 });
 
 const createPayment = asyncHandler(async (req, res) => {
@@ -1017,6 +1119,7 @@ module.exports = {
   listPayments,
   createPayment,
   previewPaymentImport,
+  sendReceiptEmail,
   listPaymentSuspense,
   voidPaymentToSuspense,
   reapplyPaymentSuspense,

@@ -13,6 +13,7 @@ const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const ExpensesPage = lazy(() => import("./pages/ExpensesPage"));
 const MaintenancePage = lazy(() => import("./pages/MaintenancePage"));
 const PaymentsPage = lazy(() => import("./pages/PaymentsPage"));
+const PayrollPage = lazy(() => import("./pages/PayrollPage"));
 const PortalPage = lazy(() => import("./pages/PortalPage"));
 const ProductionPage = lazy(() => import("./pages/ProductionPage"));
 const RatesPage = lazy(() => import("./pages/RatesPage"));
@@ -35,10 +36,13 @@ const getSavedUser = () => {
   }
 };
 
+const IDLE_LOGOUT_MS = 30 * 60 * 1000;
+
 function App() {
   const [user, setUser] = useState(getSavedUser);
   const [currentPage, setCurrentPage] = useState(() => (getSavedUser()?.role === "customer" ? "portal" : "dashboard"));
   const [appName, setAppName] = useState("Water Billing");
+  const [sessionMessage, setSessionMessage] = useState("");
 
   const allowedPages = useMemo(() => {
     if (!user) return [];
@@ -69,18 +73,40 @@ function App() {
     document.title = appName;
   }, [appName]);
 
+  useEffect(() => {
+    if (!user) return undefined;
+
+    let timeoutId;
+    const resetIdleTimer = () => {
+      window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(() => {
+        handleLogout("You were signed out after 30 minutes of inactivity.");
+      }, IDLE_LOGOUT_MS);
+    };
+    const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll", "focus"];
+    events.forEach((eventName) => window.addEventListener(eventName, resetIdleTimer, { passive: true }));
+    resetIdleTimer();
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      events.forEach((eventName) => window.removeEventListener(eventName, resetIdleTimer));
+    };
+  }, [user]);
+
   const handleLogin = ({ token, user: nextUser }) => {
     localStorage.setItem("agua_token", token);
     localStorage.setItem("agua_user", JSON.stringify(nextUser));
+    setSessionMessage("");
     setUser(nextUser);
     if (nextUser.role === "customer") {
       setCurrentPage("portal");
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = (message = "") => {
     localStorage.removeItem("agua_token");
     localStorage.removeItem("agua_user");
+    setSessionMessage(message);
     setUser(null);
     setCurrentPage("dashboard");
   };
@@ -92,7 +118,7 @@ function App() {
   };
 
   if (!user) {
-    return <LoginPage appName={appName} onLogin={handleLogin} />;
+    return <LoginPage appName={appName} onLogin={handleLogin} sessionMessage={sessionMessage} />;
   }
 
   if (user.must_change_password) {
@@ -112,6 +138,7 @@ function App() {
     audit: <AuditTrailPage user={user} />,
     payments: <PaymentsPage user={user} />,
     expenses: <ExpensesPage user={user} />,
+    payroll: <PayrollPage user={user} />,
     maintenance: <MaintenancePage user={user} />,
     production: <ProductionPage user={user} />,
     reports: <ReportsPage user={user} />,

@@ -1,4 +1,4 @@
-import { CheckCircle2, Printer, X } from "lucide-react";
+import { CheckCircle2, Mail, Printer, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
 import { EmptyTableRow } from "../components/EmptyState";
@@ -64,6 +64,18 @@ function BillsPage({ user }) {
   const printBill = () => {
     if (!selectedBill) return;
     window.print();
+  };
+  const sendBillEmail = async (id) => {
+    setMessage("");
+    try {
+      const result = await api.bills.sendEmail(id);
+      setMessage(result.message || "Bill email request completed.");
+      if (selectedBill?.id === id) {
+        setSelectedBill(await api.bills.get(id));
+      }
+    } catch (err) {
+      setMessage(err.message);
+    }
   };
   const billTable = useTableControls(bills, {
     searchFields: ["customer_name", "acc_number", "billing_period_name", "billing_month", "bill_number", "status"]
@@ -159,6 +171,12 @@ function BillsPage({ user }) {
                         <Printer size={15} />
                         Print
                       </button>
+                      {canManage ? (
+                        <button type="button" onClick={() => sendBillEmail(bill.id)}>
+                          <Mail size={15} />
+                          Email
+                        </button>
+                      ) : null}
                       {canManage && bill.status !== "paid" ? (
                         <button type="button" onClick={() => markPaid(bill.id)}>
                           <CheckCircle2 size={15} />
@@ -183,6 +201,12 @@ function BillsPage({ user }) {
               <Printer size={17} />
               Print bill
             </button>
+            {canManage ? (
+              <button type="button" onClick={() => sendBillEmail(selectedBill.id)}>
+                <Mail size={17} />
+                Email bill
+              </button>
+            ) : null}
             <button type="button" onClick={() => setSelectedBill(null)} title="Close bill">
               <X size={17} />
               Close
@@ -384,6 +408,38 @@ function BillsPage({ user }) {
             <small>{businessSettings?.business_name || "Water Billing"} customer bill</small>
           </div>
           <div className="screen-only">
+            <div className="panel-heading compact-heading">
+              <h3>Delivery History</h3>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Recipient</th>
+                    <th>Status</th>
+                    <th>Sent By</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedBill.delivery_logs?.length ? (
+                    selectedBill.delivery_logs.map((log) => (
+                      <tr key={log.id}>
+                        <td>{date(log.created_at)}</td>
+                        <td>
+                          {log.recipient}
+                          <small>{log.error_message || log.subject || ""}</small>
+                        </td>
+                        <td><span className={`status status-${log.status}`}>{log.status}</span></td>
+                        <td>{log.sent_by_name || "-"}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <EmptyTableRow colSpan={4} title="No delivery history" detail="Bill email attempts will appear here." />
+                  )}
+                </tbody>
+              </table>
+            </div>
             <AuditPanel entityType="bill" entityId={selectedBill.id} title="Bill Audit" />
           </div>
         </div>

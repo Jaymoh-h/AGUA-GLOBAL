@@ -1,8 +1,9 @@
-import { CircleDollarSign, Download, Eye, FileUp, Printer, Save, X } from "lucide-react";
+import { CircleDollarSign, Download, Eye, FileUp, Mail, Printer, Save, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
 import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
+import ToastMessage, { toastTypeFromMessage } from "../components/ToastMessage";
 import { api, assetUrl } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate, rowsToCsv } from "../utils/csvTemplate";
 
@@ -966,6 +967,19 @@ function PaymentsPage({ user }) {
     setTimeout(() => window.print(), 50);
   };
 
+  const sendReceiptEmail = async (id) => {
+    setMessage("");
+    try {
+      const result = await api.payments.sendReceiptEmail(id);
+      setMessage(result.message || "Receipt email request completed.");
+      if (receiptDetail?.payment?.id === id) {
+        setReceiptDetail(await api.payments.get(id));
+      }
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
   const cancelEdit = () => {
     setEditingId(null);
     setForm({
@@ -1211,7 +1225,7 @@ function PaymentsPage({ user }) {
               Notes
               <textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} rows="3" />
             </label>
-            {message ? <p className="form-note">{message}</p> : null}
+            <ToastMessage message={message} type={toastTypeFromMessage(message)} onClose={() => setMessage("")} />
             <button className="primary-button" type="submit">
               {editingId ? <Save size={17} /> : <CircleDollarSign size={17} />}
               {editingId ? "Save payment" : "Record payment"}
@@ -1642,6 +1656,10 @@ function PaymentsPage({ user }) {
                   <Printer size={17} />
                   Print receipt
                 </button>
+                <button type="button" onClick={() => sendReceiptEmail(receiptDetail.payment.id)}>
+                  <Mail size={17} />
+                  Email receipt
+                </button>
                 <button type="button" onClick={() => setReceiptDetail(null)} title="Close receipt">
                   <X size={17} />
                   Close
@@ -1749,6 +1767,38 @@ function PaymentsPage({ user }) {
                 <small>Recorded by {receiptDetail.payment.recorded_by_name || "-"}</small>
               </div>
               <div className="screen-only">
+                <div className="panel-heading compact-heading">
+                  <h3>Delivery History</h3>
+                </div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>When</th>
+                        <th>Recipient</th>
+                        <th>Status</th>
+                        <th>Sent By</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {receiptDetail.delivery_logs?.length ? (
+                        receiptDetail.delivery_logs.map((log) => (
+                          <tr key={log.id}>
+                            <td>{date(log.created_at)}</td>
+                            <td>
+                              {log.recipient}
+                              <small>{log.error_message || log.subject || ""}</small>
+                            </td>
+                            <td><span className={`status status-${log.status}`}>{log.status}</span></td>
+                            <td>{log.sent_by_name || "-"}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <EmptyTableRow colSpan={4} title="No delivery history" detail="Receipt email attempts will appear here." />
+                      )}
+                    </tbody>
+                  </table>
+                </div>
                 <AuditPanel entityType="payment" entityId={receiptDetail.payment.id} title="Payment Audit" />
               </div>
             </div>
@@ -1826,6 +1876,9 @@ function PaymentsPage({ user }) {
                           <div className="row-actions">
                             <button type="button" onClick={() => openReceipt(payment)} disabled={loadingReceipt}>
                               Print
+                            </button>
+                            <button type="button" onClick={() => sendReceiptEmail(payment.id)}>
+                              Email
                             </button>
                             {payment.status === "posted" ? (
                               <>

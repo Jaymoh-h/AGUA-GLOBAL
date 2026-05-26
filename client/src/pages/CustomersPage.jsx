@@ -14,19 +14,25 @@ const sameValue = (left, right) => String(left ?? "") === String(right ?? "");
 const blank = {
   name: "",
   phone: "",
+  email: "",
   acc_number: "",
   rate_id: "",
   zone_id: "",
   deposit_amount: "",
   deposit_paid: false,
   opening_balance_amount: "",
-  opening_balance_date: ""
+  opening_balance_date: "",
+  preferred_delivery_channel: "email",
+  email_delivery_enabled: true,
+  sms_delivery_enabled: false,
+  whatsapp_delivery_enabled: false
 };
 
 const customerImportHeaders = [
   "name",
   "acc_number",
   "phone",
+  "email",
   "rate_name",
   "zone_name",
   "deposit_amount",
@@ -34,7 +40,11 @@ const customerImportHeaders = [
   "deposit_paid_at",
   "opening_balance_amount",
   "opening_balance_date",
-  "status"
+  "status",
+  "preferred_delivery_channel",
+  "email_delivery_enabled",
+  "sms_delivery_enabled",
+  "whatsapp_delivery_enabled"
 ];
 
 const openingBalanceImportHeaders = ["acc_number", "opening_balance_amount", "opening_balance_date"];
@@ -121,7 +131,7 @@ function CustomersPage({ user }) {
             if (["deposit_amount", "opening_balance_amount"].includes(field)) {
               return Number(value || 0) !== Number(existingCustomer[field] || 0);
             }
-            if (field === "deposit_paid") {
+            if (["deposit_paid", "email_delivery_enabled", "sms_delivery_enabled", "whatsapp_delivery_enabled"].includes(field)) {
               return Boolean(value) !== Boolean(existingCustomer[field]);
             }
             return !sameValue(value, existingCustomer[field]);
@@ -152,13 +162,18 @@ function CustomersPage({ user }) {
     setForm({
       name: customer.name || "",
       phone: customer.phone || "",
+      email: customer.email || "",
       acc_number: customer.acc_number || "",
       rate_id: customer.rate_id || "",
       zone_id: customer.zone_id || "",
       deposit_amount: customer.deposit_amount || "",
       deposit_paid: Boolean(customer.deposit_paid),
       opening_balance_amount: customer.opening_balance_amount || "",
-      opening_balance_date: customer.opening_balance_date ? customer.opening_balance_date.slice(0, 10) : ""
+      opening_balance_date: customer.opening_balance_date ? customer.opening_balance_date.slice(0, 10) : "",
+      preferred_delivery_channel: customer.preferred_delivery_channel || "email",
+      email_delivery_enabled: customer.email_delivery_enabled !== false,
+      sms_delivery_enabled: Boolean(customer.sms_delivery_enabled),
+      whatsapp_delivery_enabled: Boolean(customer.whatsapp_delivery_enabled)
     });
   };
 
@@ -245,7 +260,7 @@ function CustomersPage({ user }) {
     return statusMatch && zoneMatch;
   });
   const customerTable = useTableControls(filteredCustomers, {
-    searchFields: ["name", "acc_number", "phone", "zone_name", "location", "rate_name", "status"]
+    searchFields: ["name", "acc_number", "phone", "email", "zone_name", "location", "rate_name", "status"]
   });
 
   const exportCustomers = () => {
@@ -255,8 +270,13 @@ function CustomersPage({ user }) {
         { header: "Account", value: (row) => row.acc_number },
         { header: "Name", value: (row) => row.name },
         { header: "Phone", value: (row) => row.phone },
+        { header: "Email", value: (row) => row.email },
         { header: "Zone", value: (row) => row.zone_name || row.location },
         { header: "Rate", value: (row) => row.rate_name },
+        { header: "Preferred Delivery", value: (row) => row.preferred_delivery_channel },
+        { header: "Email Delivery", value: (row) => (row.email_delivery_enabled ? "yes" : "no") },
+        { header: "SMS Delivery", value: (row) => (row.sms_delivery_enabled ? "yes" : "no") },
+        { header: "WhatsApp Delivery", value: (row) => (row.whatsapp_delivery_enabled ? "yes" : "no") },
         { header: "Deposit", value: (row) => row.deposit_amount },
         { header: "Deposit Paid", value: (row) => (row.deposit_paid ? "yes" : "no") },
         { header: "Opening Balance", value: (row) => row.opening_balance_amount },
@@ -351,6 +371,10 @@ function CustomersPage({ user }) {
               <input value={form.phone} onChange={(event) => setField("phone", event.target.value)} />
             </label>
             <label>
+              Email
+              <input value={form.email} onChange={(event) => setField("email", event.target.value)} type="email" />
+            </label>
+            <label>
               Zone/location
               <select value={form.zone_id} onChange={(event) => setField("zone_id", event.target.value)} required>
                 <option value="">Select zone/location</option>
@@ -415,6 +439,41 @@ function CustomersPage({ user }) {
                 required={Number(form.opening_balance_amount || 0) !== 0}
               />
             </label>
+            <label>
+              Preferred delivery
+              <select
+                value={form.preferred_delivery_channel}
+                onChange={(event) => setField("preferred_delivery_channel", event.target.value)}
+              >
+                <option value="email">Email</option>
+                <option value="sms">SMS</option>
+                <option value="whatsapp">WhatsApp</option>
+              </select>
+            </label>
+            <label className="checkbox-row">
+              <input
+                checked={Boolean(form.email_delivery_enabled)}
+                onChange={(event) => setField("email_delivery_enabled", event.target.checked)}
+                type="checkbox"
+              />
+              Email invoices
+            </label>
+            <label className="checkbox-row">
+              <input
+                checked={Boolean(form.sms_delivery_enabled)}
+                onChange={(event) => setField("sms_delivery_enabled", event.target.checked)}
+                type="checkbox"
+              />
+              SMS invoices
+            </label>
+            <label className="checkbox-row">
+              <input
+                checked={Boolean(form.whatsapp_delivery_enabled)}
+                onChange={(event) => setField("whatsapp_delivery_enabled", event.target.checked)}
+                type="checkbox"
+              />
+              WhatsApp invoices
+            </label>
             {editingId ? <AuditPanel entityType="customer" entityId={editingId} title="Customer Audit" /> : null}
             {message ? <p className="form-note">{message}</p> : null}
             <button className="primary-button" type="submit">
@@ -474,13 +533,15 @@ function CustomersPage({ user }) {
                     <tr key={customer.id}>
                     <td>
                       <strong>{customer.name}</strong>
-                      <small>{customer.phone}</small>
+                      <small>{[customer.phone, customer.email].filter(Boolean).join(" | ")}</small>
                     </td>
                     <td>{customer.acc_number}</td>
                     <td>{customer.zone_name || customer.location}</td>
                     <td>
                       <strong>{customer.rate_name}</strong>
-                      <small>{Number(customer.rate).toLocaleString()}</small>
+                      <small>
+                        {Number(customer.rate).toLocaleString()} | {customer.preferred_delivery_channel || "email"}
+                      </small>
                     </td>
                     <td>
                       <strong>{customer.deposit_paid ? "Paid" : "Not paid"}</strong>
@@ -550,7 +611,7 @@ function CustomersPage({ user }) {
               setImportPreview(null);
             }}
             rows="6"
-            placeholder="name,acc_number,phone,rate_name,zone_name,deposit_amount,deposit_paid,opening_balance_amount,opening_balance_date"
+            placeholder="name,acc_number,phone,email,rate_name,zone_name,deposit_amount,deposit_paid,opening_balance_amount,opening_balance_date"
           />
           <div className="row-actions">
             <button className="primary-button" type="button" onClick={previewImport} disabled={importing || !csvText.trim()}>
@@ -569,6 +630,7 @@ function CustomersPage({ user }) {
                     <th>Row</th>
                     <th>Account</th>
                     <th>Name</th>
+                    <th>Email</th>
                     <th>Rate</th>
                     <th>Zone</th>
                     <th>Deposit</th>
@@ -582,6 +644,7 @@ function CustomersPage({ user }) {
                       <td>{row.rowNumber}</td>
                       <td>{row.acc_number || "-"}</td>
                       <td>{row.name || "-"}</td>
+                      <td>{row.email || "-"}</td>
                       <td>{row.rate_name || "-"}</td>
                       <td>{row.zone_name || "-"}</td>
                       <td>

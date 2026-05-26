@@ -1,20 +1,79 @@
-import { Droplets } from "lucide-react";
+import { Droplets, LockKeyhole, Mail } from "lucide-react";
 import { useState } from "react";
 import { api } from "../services/api";
 
-function LoginPage({ appName, onLogin }) {
+const passwordIsStrong = (password) => {
+  const categories = [
+    /[a-z]/.test(password),
+    /[A-Z]/.test(password),
+    /\d/.test(password),
+    /[^A-Za-z0-9]/.test(password)
+  ].filter(Boolean).length;
+  return password.length >= 8 && categories >= 3;
+};
+
+function LoginPage({ appName, onLogin, sessionMessage = "" }) {
+  const resetToken = new URLSearchParams(window.location.search).get("reset_token") || "";
+  const [mode, setMode] = useState(resetToken ? "reset" : "login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState(sessionMessage);
   const [loading, setLoading] = useState(false);
 
   const submit = async (event) => {
     event.preventDefault();
     setLoading(true);
     setError("");
+    setNotice("");
 
     try {
       const data = await api.login(email, password);
+      onLogin(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const requestReset = async (event) => {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    setNotice("");
+
+    try {
+      const result = await api.requestPasswordReset(email);
+      setNotice(result.message);
+      setMode("login");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resetPassword = async (event) => {
+    event.preventDefault();
+    setError("");
+    setNotice("");
+
+    if (!passwordIsStrong(newPassword)) {
+      setError("New password must be at least 8 characters and include three of uppercase, lowercase, numbers, and symbols.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("New password and confirmation do not match.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const data = await api.resetPassword(resetToken, newPassword);
+      window.history.replaceState({}, "", window.location.pathname);
       onLogin(data);
     } catch (err) {
       setError(err.message);
@@ -36,32 +95,101 @@ function LoginPage({ appName, onLogin }) {
           </div>
         </div>
 
-        <form onSubmit={submit} className="form-grid">
-          <label>
-            Email
-            <input
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              type="email"
-              autoComplete="username"
-              required
-            />
-          </label>
-          <label>
-            Password
-            <input
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              type="password"
-              autoComplete="current-password"
-              required
-            />
-          </label>
-          {error ? <p className="form-error">{error}</p> : null}
-          <button className="primary-button" type="submit" disabled={loading}>
-            {loading ? "Signing in..." : "Sign in"}
-          </button>
-        </form>
+        {notice ? <p className="form-note">{notice}</p> : null}
+
+        {mode === "reset" ? (
+          <form onSubmit={resetPassword} className="form-grid">
+            <div className="panel-heading compact-heading">
+              <h3>Set New Password</h3>
+              <LockKeyhole size={17} />
+            </div>
+            <label>
+              New password
+              <input
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                type="password"
+                autoComplete="new-password"
+                minLength="8"
+                required
+              />
+              <small>Use at least 8 characters with three of uppercase, lowercase, numbers, and symbols.</small>
+            </label>
+            <label>
+              Confirm new password
+              <input
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                type="password"
+                autoComplete="new-password"
+                minLength="8"
+                required
+              />
+            </label>
+            {error ? <p className="form-error">{error}</p> : null}
+            <button className="primary-button" type="submit" disabled={loading}>
+              {loading ? "Resetting..." : "Reset password"}
+            </button>
+          </form>
+        ) : null}
+
+        {mode === "request" ? (
+          <form onSubmit={requestReset} className="form-grid">
+            <div className="panel-heading compact-heading">
+              <h3>Recover Password</h3>
+              <Mail size={17} />
+            </div>
+            <label>
+              Registered email
+              <input
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                type="email"
+                autoComplete="username"
+                required
+              />
+            </label>
+            {error ? <p className="form-error">{error}</p> : null}
+            <button className="primary-button" type="submit" disabled={loading}>
+              {loading ? "Sending..." : "Send reset link"}
+            </button>
+            <button className="secondary-wide-button" type="button" onClick={() => setMode("login")}>
+              Back to sign in
+            </button>
+          </form>
+        ) : null}
+
+        {mode === "login" ? (
+          <form onSubmit={submit} className="form-grid">
+            <label>
+              Email
+              <input
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                type="email"
+                autoComplete="username"
+                required
+              />
+            </label>
+            <label>
+              Password
+              <input
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                type="password"
+                autoComplete="current-password"
+                required
+              />
+            </label>
+            {error ? <p className="form-error">{error}</p> : null}
+            <button className="primary-button" type="submit" disabled={loading}>
+              {loading ? "Signing in..." : "Sign in"}
+            </button>
+            <button className="secondary-wide-button" type="button" onClick={() => setMode("request")}>
+              Forgot password?
+            </button>
+          </form>
+        ) : null}
       </section>
     </main>
   );
