@@ -1,5 +1,6 @@
 const ApiError = require("../utils/apiError");
 const { sendEmail } = require("./email.service");
+const { normalizePhoneNumber, sendSms } = require("./sms.service");
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const dateOnly = (value) => {
@@ -54,9 +55,42 @@ const getCustomerEmailRecipient = async (client, customerId) => {
   };
 };
 
+const getCustomerSmsRecipient = async (client, customerId) => {
+  const { rows } = await client.query(
+    `SELECT name, phone, sms_delivery_enabled
+     FROM customers
+     WHERE id = $1`,
+    [customerId]
+  );
+  const customer = rows[0];
+  if (!customer) throw new ApiError(404, "Customer not found.");
+  if (customer.sms_delivery_enabled === false) {
+    throw new ApiError(400, "SMS delivery is disabled for this customer.");
+  }
+  const phone = normalizePhoneNumber(customer.phone);
+  if (!phone) {
+    throw new ApiError(400, "This customer does not have a valid phone number for SMS delivery.");
+  }
+  return {
+    phone,
+    name: customer.name
+  };
+};
+
 const createDeliveryLog = async (
   client,
-  { documentType, documentId, customerId, recipient, subject, status, errorMessage = null, providerMessageId = null, sentBy = null }
+  {
+    documentType,
+    documentId,
+    customerId,
+    channel = "email",
+    recipient,
+    subject,
+    status,
+    errorMessage = null,
+    providerMessageId = null,
+    sentBy = null
+  }
 ) => {
   const { rows } = await client.query(
     `INSERT INTO document_delivery_logs (
@@ -64,14 +98,15 @@ const createDeliveryLog = async (
       status, error_message, provider_message_id, sent_by, sent_at
     )
     VALUES (
-      $1, $2, $3, 'email', $4::varchar, $5::varchar, $6::varchar,
-      $7, $8::varchar, $9, CASE WHEN $6::varchar = 'sent' THEN NOW() ELSE NULL END
+      $1, $2, $3, $4::varchar, $5::varchar, $6::varchar, $7::varchar,
+      $8, $9::varchar, $10, CASE WHEN $7::varchar = 'sent' THEN NOW() ELSE NULL END
     )
     RETURNING *`,
     [
       documentType,
       documentId,
       customerId,
+      channel,
       truncate(recipient, 180),
       truncate(subject, 220),
       status,
@@ -156,6 +191,24 @@ const buildReceiptEmail = ({ payment, allocations, customerBalance, business }) 
   return { subject, text: lines.join("\n") };
 };
 
+const buildBillSms = ({ bill, business }) => {
+  const businessName = business.business_name || "Water Billing";
+  const total = Number(bill.total_amount || bill.amount || 0);
+  const balance = Number(bill.balance_amount ?? total - Number(bill.paid_amount || 0));
+  const payHint = business.paybill_number ? ` Paybill ${business.paybill_number}.` : business.till_number ? ` Till ${business.till_number}.` : "";
+  return `${businessName}: Bill ${bill.bill_number || bill.id} for ${bill.acc_number}. Amount due ${money(balance)} by ${dateOnly(
+    bill.due_date
+  )}. Total ${money(total)}.${payHint}`;
+};
+
+const buildReceiptSms = ({ payment, customerBalance, business }) => {
+  const businessName = business.business_name || "Water Billing";
+  const position = Number(customerBalance || 0) < 0 ? `Credit ${money(Math.abs(Number(customerBalance || 0)))}` : `Balance ${money(customerBalance)}`;
+  return `${businessName}: Receipt ${payment.receipt_number || payment.id}. Received ${money(payment.amount)} from ${
+    payment.acc_number
+  } on ${dateOnly(payment.payment_date)}. ${position}.`;
+};
+
 const sendDocumentEmail = async (client, req, { documentType, documentId, customerId, recipient, subject, text }) => {
   let sendResult;
   try {
@@ -166,6 +219,7 @@ const sendDocumentEmail = async (client, req, { documentType, documentId, custom
         documentType,
         documentId,
         customerId,
+        channel: "email",
         recipient,
         subject,
         status: "failed",
@@ -185,6 +239,7 @@ const sendDocumentEmail = async (client, req, { documentType, documentId, custom
       documentType,
       documentId,
       customerId,
+      channel: "email",
       recipient,
       subject,
       status,
@@ -199,11 +254,60 @@ const sendDocumentEmail = async (client, req, { documentType, documentId, custom
   }
 };
 
+const sendDocumentSms = async (client, req, { documentType, documentId, customerId, recipient, subject, message }) => {
+  let sendResult;
+  try {
+    sendResult = await sendSms({ to: recipient, message });
+  } catch (error) {
+    try {
+      const log = await createDeliveryLog(client, {
+        documentType,
+        documentId,
+        customerId,
+        channel: "sms",
+        recipient,
+        subject,
+        status: "failed",
+        errorMessage: error.message,
+        sentBy: req.user.id
+      });
+      return { status: "failed", log, error_message: error.message };
+    } catch (logError) {
+      console.error("Failed to record failed document SMS delivery.", logError);
+      return { status: "failed", log: null, error_message: error.message, log_error: logError.message };
+    }
+  }
+
+  const status = sendResult.skipped ? "skipped" : "sent";
+  try {
+    const log = await createDeliveryLog(client, {
+      documentType,
+      documentId,
+      customerId,
+      channel: "sms",
+      recipient,
+      subject,
+      status,
+      errorMessage: sendResult.skipped ? sendResult.error || "SMS provider is not configured." : null,
+      providerMessageId: sendResult.messageId || sendResult.providerStatus || null,
+      sentBy: req.user.id
+    });
+    return { status, log };
+  } catch (logError) {
+    console.error("Document SMS sent, but delivery log could not be recorded.", logError);
+    return { status, log: null, log_error: logError.message };
+  }
+};
+
 module.exports = {
   buildBillEmail,
+  buildBillSms,
   buildReceiptEmail,
+  buildReceiptSms,
   getBusinessSettings,
   getCustomerEmailRecipient,
+  getCustomerSmsRecipient,
   listDeliveryLogs,
-  sendDocumentEmail
+  sendDocumentEmail,
+  sendDocumentSms
 };

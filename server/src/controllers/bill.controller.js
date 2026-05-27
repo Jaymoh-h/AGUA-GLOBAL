@@ -5,10 +5,13 @@ const { recordAuditEvent } = require("../services/audit.service");
 const { assertBillEditable, normalizeCorrectionReason } = require("../services/billingPeriodGuard.service");
 const {
   buildBillEmail,
+  buildBillSms,
   getBusinessSettings,
   getCustomerEmailRecipient,
+  getCustomerSmsRecipient,
   listDeliveryLogs,
-  sendDocumentEmail
+  sendDocumentEmail,
+  sendDocumentSms
 } = require("../services/documentDelivery.service");
 
 const listBills = asyncHandler(async (req, res) => {
@@ -134,6 +137,71 @@ const sendBillEmail = asyncHandler(async (req, res) => {
       ...result,
       audit_error: auditError,
       message: result.status === "sent" ? `Bill email sent.${logNote}${auditNote}` : `Bill email was not sent.${logNote}${auditNote}`
+    });
+  } catch (error) {
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+const sendBillSms = asyncHandler(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const billResult = await client.query(
+      `SELECT b.*, c.name AS customer_name, c.acc_number, c.phone, c.location, z.name AS zone_name,
+              bp.name AS billing_period_name,
+              bp.status AS billing_period_status
+       FROM bills b
+       JOIN customers c ON c.id = b.customer_id
+       LEFT JOIN zones z ON z.id = c.zone_id
+       LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
+       WHERE b.id = $1`,
+      [req.params.id]
+    );
+    const bill = billResult.rows[0];
+    if (!bill) throw new ApiError(404, "Bill not found.");
+
+    const [business, recipient] = await Promise.all([
+      getBusinessSettings(client),
+      getCustomerSmsRecipient(client, bill.customer_id)
+    ]);
+    const messageText = buildBillSms({ bill, business });
+    const result = await sendDocumentSms(client, req, {
+      documentType: "bill",
+      documentId: bill.id,
+      customerId: bill.customer_id,
+      recipient: recipient.phone,
+      subject: `Bill ${bill.bill_number || bill.id}`,
+      message: messageText
+    });
+
+    let auditError = null;
+    try {
+      await recordAuditEvent(client, {
+        req,
+        action: "bill.sms_sent",
+        entityType: "bill",
+        entityId: bill.id,
+        afterData: {
+          recipient: recipient.phone,
+          status: result.status,
+          delivery_log_id: result.log?.id || null,
+          delivery_log_error: result.log_error || null
+        },
+        reason: `Bill SMS ${result.status}`
+      });
+    } catch (error) {
+      auditError = error.message;
+      console.error("Bill SMS audit event could not be recorded.", error);
+    }
+
+    const logNote = result.log_error ? " Delivery history could not be updated." : "";
+    const auditNote = auditError ? " Audit event could not be recorded." : "";
+    res.json({
+      ...result,
+      audit_error: auditError,
+      message: result.status === "sent" ? `Bill SMS sent.${logNote}${auditNote}` : `Bill SMS was not sent.${logNote}${auditNote}`
     });
   } catch (error) {
     throw error;
@@ -292,5 +360,6 @@ module.exports = {
   getBill,
   markBillStatus,
   promoteBillForPayment,
-  sendBillEmail
+  sendBillEmail,
+  sendBillSms
 };

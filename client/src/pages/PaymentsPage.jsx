@@ -1,4 +1,4 @@
-import { CircleDollarSign, Download, Eye, FileUp, Mail, Printer, Save, X } from "lucide-react";
+import { CircleDollarSign, Download, Eye, FileUp, Mail, MessageSquare, Printer, Save, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
 import { EmptyTableRow } from "../components/EmptyState";
@@ -979,6 +979,18 @@ function PaymentsPage({ user }) {
       setMessage(err.message);
     }
   };
+  const sendReceiptSms = async (id) => {
+    setMessage("");
+    try {
+      const result = await api.payments.sendReceiptSms(id);
+      setMessage(result.message || "Receipt SMS request completed.");
+      if (receiptDetail?.payment?.id === id) {
+        setReceiptDetail(await api.payments.get(id));
+      }
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
 
   const cancelEdit = () => {
     setEditingId(null);
@@ -1660,6 +1672,10 @@ function PaymentsPage({ user }) {
                   <Mail size={17} />
                   Email receipt
                 </button>
+                <button type="button" onClick={() => sendReceiptSms(receiptDetail.payment.id)}>
+                  <MessageSquare size={17} />
+                  SMS receipt
+                </button>
                 <button type="button" onClick={() => setReceiptDetail(null)} title="Close receipt">
                   <X size={17} />
                   Close
@@ -1775,6 +1791,7 @@ function PaymentsPage({ user }) {
                     <thead>
                       <tr>
                         <th>When</th>
+                        <th>Channel</th>
                         <th>Recipient</th>
                         <th>Status</th>
                         <th>Sent By</th>
@@ -1785,6 +1802,7 @@ function PaymentsPage({ user }) {
                         receiptDetail.delivery_logs.map((log) => (
                           <tr key={log.id}>
                             <td>{date(log.created_at)}</td>
+                            <td>{log.channel}</td>
                             <td>
                               {log.recipient}
                               <small>{log.error_message || log.subject || ""}</small>
@@ -1794,7 +1812,7 @@ function PaymentsPage({ user }) {
                           </tr>
                         ))
                       ) : (
-                        <EmptyTableRow colSpan={4} title="No delivery history" detail="Receipt email attempts will appear here." />
+                        <EmptyTableRow colSpan={5} title="No delivery history" detail="Receipt delivery attempts will appear here." />
                       )}
                     </tbody>
                   </table>
@@ -1879,6 +1897,9 @@ function PaymentsPage({ user }) {
                             </button>
                             <button type="button" onClick={() => sendReceiptEmail(payment.id)}>
                               Email
+                            </button>
+                            <button type="button" onClick={() => sendReceiptSms(payment.id)}>
+                              SMS
                             </button>
                             {payment.status === "posted" ? (
                               <>

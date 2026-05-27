@@ -1,4 +1,4 @@
-import { CheckCircle2, Mail, Printer, X } from "lucide-react";
+import { CheckCircle2, Mail, MessageSquare, Printer, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
 import { EmptyTableRow } from "../components/EmptyState";
@@ -70,6 +70,18 @@ function BillsPage({ user }) {
     try {
       const result = await api.bills.sendEmail(id);
       setMessage(result.message || "Bill email request completed.");
+      if (selectedBill?.id === id) {
+        setSelectedBill(await api.bills.get(id));
+      }
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+  const sendBillSms = async (id) => {
+    setMessage("");
+    try {
+      const result = await api.bills.sendSms(id);
+      setMessage(result.message || "Bill SMS request completed.");
       if (selectedBill?.id === id) {
         setSelectedBill(await api.bills.get(id));
       }
@@ -177,6 +189,12 @@ function BillsPage({ user }) {
                           Email
                         </button>
                       ) : null}
+                      {canManage ? (
+                        <button type="button" onClick={() => sendBillSms(bill.id)}>
+                          <MessageSquare size={15} />
+                          SMS
+                        </button>
+                      ) : null}
                       {canManage && bill.status !== "paid" ? (
                         <button type="button" onClick={() => markPaid(bill.id)}>
                           <CheckCircle2 size={15} />
@@ -205,6 +223,12 @@ function BillsPage({ user }) {
               <button type="button" onClick={() => sendBillEmail(selectedBill.id)}>
                 <Mail size={17} />
                 Email bill
+              </button>
+            ) : null}
+            {canManage ? (
+              <button type="button" onClick={() => sendBillSms(selectedBill.id)}>
+                <MessageSquare size={17} />
+                SMS bill
               </button>
             ) : null}
             <button type="button" onClick={() => setSelectedBill(null)} title="Close bill">
@@ -416,6 +440,7 @@ function BillsPage({ user }) {
                 <thead>
                   <tr>
                     <th>When</th>
+                    <th>Channel</th>
                     <th>Recipient</th>
                     <th>Status</th>
                     <th>Sent By</th>
@@ -426,6 +451,7 @@ function BillsPage({ user }) {
                     selectedBill.delivery_logs.map((log) => (
                       <tr key={log.id}>
                         <td>{date(log.created_at)}</td>
+                        <td>{log.channel}</td>
                         <td>
                           {log.recipient}
                           <small>{log.error_message || log.subject || ""}</small>
@@ -435,7 +461,7 @@ function BillsPage({ user }) {
                       </tr>
                     ))
                   ) : (
-                    <EmptyTableRow colSpan={4} title="No delivery history" detail="Bill email attempts will appear here." />
+                    <EmptyTableRow colSpan={5} title="No delivery history" detail="Bill delivery attempts will appear here." />
                   )}
                 </tbody>
               </table>

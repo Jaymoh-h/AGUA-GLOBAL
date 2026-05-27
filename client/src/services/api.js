@@ -109,6 +109,7 @@ export const api = {
     get: (id) => request(`/bills/${id}`),
     promote: (id, payload) => request(`/bills/${id}/promote`, { method: "PATCH", body: payload }),
     sendEmail: (id) => request(`/bills/${id}/email`, { method: "POST" }),
+    sendSms: (id) => request(`/bills/${id}/sms`, { method: "POST" }),
     markStatus: (id, status, correctionReason = "") =>
       request(`/bills/${id}/status`, { method: "PATCH", body: { status, correction_reason: correctionReason } })
   },
@@ -173,6 +174,7 @@ export const api = {
     commitImport: (csv) => request("/payments/imports/commit", { method: "POST", body: { csv } }),
     update: (id, payload) => request(`/payments/${id}`, { method: "PUT", body: payload }),
     sendReceiptEmail: (id) => request(`/payments/${id}/email`, { method: "POST" }),
+    sendReceiptSms: (id) => request(`/payments/${id}/sms`, { method: "POST" }),
     voidToSuspense: (id, payload) => request(`/payments/${id}/void`, { method: "POST", body: payload }),
     reapplySuspense: (id, payload) => request(`/payments/suspense/${id}/reapply`, { method: "POST", body: payload }),
     discardSuspense: (id, payload) => request(`/payments/suspense/${id}/discard`, { method: "POST", body: payload })

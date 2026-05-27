@@ -5,10 +5,13 @@ const { recordAuditEvent } = require("../services/audit.service");
 const { createReceiptNumber } = require("../services/billingPeriod.service");
 const {
   buildReceiptEmail,
+  buildReceiptSms,
   getBusinessSettings,
   getCustomerEmailRecipient,
+  getCustomerSmsRecipient,
   listDeliveryLogs,
-  sendDocumentEmail
+  sendDocumentEmail,
+  sendDocumentSms
 } = require("../services/documentDelivery.service");
 
 const paymentChannels = ["cash", "bank", "mpesa_paybill", "manual_adjustment"];
@@ -506,6 +509,94 @@ const sendReceiptEmail = asyncHandler(async (req, res) => {
       ...result,
       audit_error: auditError,
       message: result.status === "sent" ? `Receipt email sent.${logNote}${auditNote}` : `Receipt email was not sent.${logNote}${auditNote}`
+    });
+  } catch (error) {
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+const sendReceiptSms = asyncHandler(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const paymentResult = await client.query(
+      `SELECT p.*,
+              c.name AS customer_name,
+              c.acc_number,
+              c.phone,
+              c.location,
+              z.name AS zone_name,
+              u.name AS recorded_by_name
+       FROM payments p
+       JOIN customers c ON c.id = p.customer_id
+       JOIN zones z ON z.id = c.zone_id
+       LEFT JOIN users u ON u.id = p.recorded_by
+       WHERE p.id = $1`,
+      [req.params.id]
+    );
+    const payment = paymentResult.rows[0];
+    if (!payment) throw new ApiError(404, "Payment not found.");
+
+    const balanceResult = await client.query(
+      `SELECT
+         COALESCE((
+           SELECT SUM(COALESCE(NULLIF(balance_amount, 0), amount - paid_amount))
+           FROM bills
+           WHERE customer_id = $1 AND status <> 'paid' AND bill_pay_status = 'payable'
+         ), 0) -
+         COALESCE((
+           SELECT SUM(unallocated_amount)
+           FROM payments
+           WHERE customer_id = $1 AND status = 'posted'
+         ), 0) AS balance_due`,
+      [payment.customer_id]
+    );
+
+    const [business, recipient] = await Promise.all([
+      getBusinessSettings(client),
+      getCustomerSmsRecipient(client, payment.customer_id)
+    ]);
+    const messageText = buildReceiptSms({
+      payment,
+      customerBalance: balanceResult.rows[0]?.balance_due || 0,
+      business
+    });
+    const result = await sendDocumentSms(client, req, {
+      documentType: "receipt",
+      documentId: payment.id,
+      customerId: payment.customer_id,
+      recipient: recipient.phone,
+      subject: `Receipt ${payment.receipt_number || payment.id}`,
+      message: messageText
+    });
+
+    let auditError = null;
+    try {
+      await recordAuditEvent(client, {
+        req,
+        action: "payment.receipt_sms_sent",
+        entityType: "payment",
+        entityId: payment.id,
+        afterData: {
+          recipient: recipient.phone,
+          status: result.status,
+          delivery_log_id: result.log?.id || null,
+          delivery_log_error: result.log_error || null
+        },
+        reason: `Receipt SMS ${result.status}`
+      });
+    } catch (error) {
+      auditError = error.message;
+      console.error("Receipt SMS audit event could not be recorded.", error);
+    }
+
+    const logNote = result.log_error ? " Delivery history could not be updated." : "";
+    const auditNote = auditError ? " Audit event could not be recorded." : "";
+    res.json({
+      ...result,
+      audit_error: auditError,
+      message: result.status === "sent" ? `Receipt SMS sent.${logNote}${auditNote}` : `Receipt SMS was not sent.${logNote}${auditNote}`
     });
   } catch (error) {
     throw error;
@@ -1130,6 +1221,7 @@ module.exports = {
   createPayment,
   previewPaymentImport,
   sendReceiptEmail,
+  sendReceiptSms,
   listPaymentSuspense,
   voidPaymentToSuspense,
   reapplyPaymentSuspense,

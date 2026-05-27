@@ -28,5 +28,14 @@ module.exports = {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
     from: process.env.SMTP_FROM || process.env.EMAIL_FROM || "no-reply@agua-global.local"
+  },
+  sms: {
+    provider: process.env.SMS_PROVIDER || "none",
+    defaultCountryCode: process.env.SMS_DEFAULT_COUNTRY_CODE || "254",
+    africasTalking: {
+      username: process.env.AT_USERNAME || process.env.AFRICASTALKING_USERNAME,
+      apiKey: process.env.AT_API_KEY || process.env.AFRICASTALKING_API_KEY,
+      from: process.env.AT_SENDER_ID || process.env.AFRICASTALKING_SENDER_ID || ""
+    }
   }
 };
