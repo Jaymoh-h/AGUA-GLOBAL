@@ -36,6 +36,12 @@ module.exports = {
       username: process.env.AT_USERNAME || process.env.AFRICASTALKING_USERNAME,
       apiKey: process.env.AT_API_KEY || process.env.AFRICASTALKING_API_KEY,
       from: process.env.AT_SENDER_ID || process.env.AFRICASTALKING_SENDER_ID || ""
+    },
+    twilio: {
+      accountSid: process.env.TWILIO_ACCOUNT_SID,
+      authToken: process.env.TWILIO_AUTH_TOKEN,
+      from: process.env.TWILIO_FROM || process.env.TWILIO_PHONE_NUMBER,
+      messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID
     }
   }
 };
