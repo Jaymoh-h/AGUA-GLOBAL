@@ -8,6 +8,11 @@ const dateOnly = (value) => {
   return String(value).slice(0, 10);
 };
 const label = (value) => String(value || "-").replace(/_/g, " ");
+const truncate = (value, maxLength) => {
+  if (value === null || value === undefined) return null;
+  const text = String(value);
+  return text.length > maxLength ? text.slice(0, maxLength) : text;
+};
 
 const getBusinessSettings = async (client) => {
   const { rows } = await client.query("SELECT * FROM business_settings WHERE id = 1");
@@ -60,7 +65,17 @@ const createDeliveryLog = async (
     )
     VALUES ($1, $2, $3, 'email', $4, $5, $6, $7, $8, $9, CASE WHEN $6::text = 'sent' THEN NOW() ELSE NULL END)
     RETURNING *`,
-    [documentType, documentId, customerId, recipient, subject, status, errorMessage, providerMessageId, sentBy]
+    [
+      documentType,
+      documentId,
+      customerId,
+      truncate(recipient, 180),
+      truncate(subject, 220),
+      status,
+      errorMessage,
+      truncate(providerMessageId, 180),
+      sentBy
+    ]
   );
   return rows[0];
 };
@@ -139,9 +154,30 @@ const buildReceiptEmail = ({ payment, allocations, customerBalance, business }) 
 };
 
 const sendDocumentEmail = async (client, req, { documentType, documentId, customerId, recipient, subject, text }) => {
+  let sendResult;
   try {
-    const result = await sendEmail({ to: recipient, subject, text });
-    const status = result.skipped ? "skipped" : "sent";
+    sendResult = await sendEmail({ to: recipient, subject, text });
+  } catch (error) {
+    try {
+      const log = await createDeliveryLog(client, {
+        documentType,
+        documentId,
+        customerId,
+        recipient,
+        subject,
+        status: "failed",
+        errorMessage: error.message,
+        sentBy: req.user.id
+      });
+      return { status: "failed", log, error_message: error.message };
+    } catch (logError) {
+      console.error("Failed to record failed document email delivery.", logError);
+      return { status: "failed", log: null, error_message: error.message, log_error: logError.message };
+    }
+  }
+
+  const status = sendResult.skipped ? "skipped" : "sent";
+  try {
     const log = await createDeliveryLog(client, {
       documentType,
       documentId,
@@ -149,23 +185,14 @@ const sendDocumentEmail = async (client, req, { documentType, documentId, custom
       recipient,
       subject,
       status,
-      errorMessage: result.skipped ? "SMTP is not configured." : null,
-      providerMessageId: result.messageId || null,
+      errorMessage: sendResult.skipped ? "SMTP is not configured." : null,
+      providerMessageId: sendResult.messageId || null,
       sentBy: req.user.id
     });
     return { status, log };
-  } catch (error) {
-    const log = await createDeliveryLog(client, {
-      documentType,
-      documentId,
-      customerId,
-      recipient,
-      subject,
-      status: "failed",
-      errorMessage: error.message,
-      sentBy: req.user.id
-    });
-    return { status: "failed", log };
+  } catch (logError) {
+    console.error("Document email sent, but delivery log could not be recorded.", logError);
+    return { status, log: null, log_error: logError.message };
   }
 };
 

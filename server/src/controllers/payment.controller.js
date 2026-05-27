@@ -413,7 +413,6 @@ const getPayment = asyncHandler(async (req, res) => {
 const sendReceiptEmail = asyncHandler(async (req, res) => {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
     const paymentResult = await client.query(
       `SELECT p.*,
               c.name AS customer_name,
@@ -481,23 +480,34 @@ const sendReceiptEmail = asyncHandler(async (req, res) => {
       text: email.text
     });
 
-    await recordAuditEvent(client, {
-      req,
-      action: "payment.receipt_email_sent",
-      entityType: "payment",
-      entityId: payment.id,
-      afterData: {
-        recipient: recipient.email,
-        status: result.status,
-        delivery_log_id: result.log.id
-      },
-      reason: `Receipt email ${result.status}`
-    });
+    let auditError = null;
+    try {
+      await recordAuditEvent(client, {
+        req,
+        action: "payment.receipt_email_sent",
+        entityType: "payment",
+        entityId: payment.id,
+        afterData: {
+          recipient: recipient.email,
+          status: result.status,
+          delivery_log_id: result.log?.id || null,
+          delivery_log_error: result.log_error || null
+        },
+        reason: `Receipt email ${result.status}`
+      });
+    } catch (error) {
+      auditError = error.message;
+      console.error("Receipt email audit event could not be recorded.", error);
+    }
 
-    await client.query("COMMIT");
-    res.json({ ...result, message: result.status === "sent" ? "Receipt email sent." : "Receipt email was not sent." });
+    const logNote = result.log_error ? " Delivery history could not be updated." : "";
+    const auditNote = auditError ? " Audit event could not be recorded." : "";
+    res.json({
+      ...result,
+      audit_error: auditError,
+      message: result.status === "sent" ? `Receipt email sent.${logNote}${auditNote}` : `Receipt email was not sent.${logNote}${auditNote}`
+    });
   } catch (error) {
-    await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();

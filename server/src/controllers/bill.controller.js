@@ -80,7 +80,6 @@ const getBill = asyncHandler(async (req, res) => {
 const sendBillEmail = asyncHandler(async (req, res) => {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
     const billResult = await client.query(
       `SELECT b.*, c.name AS customer_name, c.acc_number, c.phone, c.location, z.name AS zone_name,
               bp.name AS billing_period_name,
@@ -109,23 +108,34 @@ const sendBillEmail = asyncHandler(async (req, res) => {
       text: email.text
     });
 
-    await recordAuditEvent(client, {
-      req,
-      action: "bill.email_sent",
-      entityType: "bill",
-      entityId: bill.id,
-      afterData: {
-        recipient: recipient.email,
-        status: result.status,
-        delivery_log_id: result.log.id
-      },
-      reason: `Bill email ${result.status}`
-    });
+    let auditError = null;
+    try {
+      await recordAuditEvent(client, {
+        req,
+        action: "bill.email_sent",
+        entityType: "bill",
+        entityId: bill.id,
+        afterData: {
+          recipient: recipient.email,
+          status: result.status,
+          delivery_log_id: result.log?.id || null,
+          delivery_log_error: result.log_error || null
+        },
+        reason: `Bill email ${result.status}`
+      });
+    } catch (error) {
+      auditError = error.message;
+      console.error("Bill email audit event could not be recorded.", error);
+    }
 
-    await client.query("COMMIT");
-    res.json({ ...result, message: result.status === "sent" ? "Bill email sent." : "Bill email was not sent." });
+    const logNote = result.log_error ? " Delivery history could not be updated." : "";
+    const auditNote = auditError ? " Audit event could not be recorded." : "";
+    res.json({
+      ...result,
+      audit_error: auditError,
+      message: result.status === "sent" ? `Bill email sent.${logNote}${auditNote}` : `Bill email was not sent.${logNote}${auditNote}`
+    });
   } catch (error) {
-    await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
