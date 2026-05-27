@@ -63,7 +63,10 @@ const createDeliveryLog = async (
       document_type, document_id, customer_id, channel, recipient, subject,
       status, error_message, provider_message_id, sent_by, sent_at
     )
-    VALUES ($1, $2, $3, 'email', $4, $5, $6, $7, $8, $9, CASE WHEN $6::text = 'sent' THEN NOW() ELSE NULL END)
+    VALUES (
+      $1, $2, $3, 'email', $4::varchar, $5::varchar, $6::varchar,
+      $7, $8::varchar, $9, CASE WHEN $6::varchar = 'sent' THEN NOW() ELSE NULL END
+    )
     RETURNING *`,
     [
       documentType,
