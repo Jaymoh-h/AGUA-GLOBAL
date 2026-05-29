@@ -445,6 +445,142 @@ td button,
   gap: 13px;
 }
 
+.communication-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  gap: 10px;
+  padding: 13px;
+}
+
+.template-preview-field {
+  grid-column: 1 / -1;
+}
+
+.template-preview-field textarea {
+  min-height: 180px;
+}
+
+.template-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.bulk-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 13px 12px;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.bulk-action-bar > div {
+  display: grid;
+  gap: 2px;
+  min-width: 130px;
+  margin-right: auto;
+}
+
+.bulk-action-bar small {
+  display: block;
+}
+
+.communications-table-wrap {
+  max-height: 680px;
+  overflow-x: hidden;
+}
+
+.communications-table-wrap table {
+  min-width: 100%;
+  table-layout: fixed;
+}
+
+.communications-table-wrap th,
+.communications-table-wrap td {
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.communications-table-wrap th:nth-child(1),
+.communications-table-wrap td:nth-child(1) {
+  width: 4%;
+}
+
+.communications-table-wrap th:nth-child(2),
+.communications-table-wrap td:nth-child(2) {
+  width: 24%;
+}
+
+.communications-table-wrap th:nth-child(3),
+.communications-table-wrap td:nth-child(3) {
+  width: 11%;
+}
+
+.communications-table-wrap th:nth-child(4),
+.communications-table-wrap td:nth-child(4),
+.communications-table-wrap th:nth-child(5),
+.communications-table-wrap td:nth-child(5) {
+  width: 12%;
+}
+
+.communications-table-wrap th:nth-child(6),
+.communications-table-wrap td:nth-child(6) {
+  width: 7%;
+}
+
+.communications-table-wrap th:nth-child(7),
+.communications-table-wrap td:nth-child(7),
+.communications-table-wrap th:nth-child(8),
+.communications-table-wrap td:nth-child(8) {
+  width: 9%;
+}
+
+.communications-table-wrap th:nth-child(9),
+.communications-table-wrap td:nth-child(9),
+.communications-table-wrap th:nth-child(10),
+.communications-table-wrap td:nth-child(10) {
+  width: 6%;
+}
+
+.communications-table-wrap td button {
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.compact-checkbox {
+  display: inline-flex;
+  font-size: 11px;
+}
+
+.compact-checkbox span {
+  display: none;
+}
+
+.communication-message-cell {
+  min-width: 0;
+  max-width: none;
+}
+
+.message-preview {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  border: 1px solid #dde3ea;
+  border-radius: 8px;
+  padding: 10px;
+  background: #f8fafc;
+  color: #172033;
+  font-size: 12px;
+  line-height: 1.38;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -1355,6 +1491,14 @@ td {
   .report-grid,
   .payroll-run-context {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .communications-table-wrap {
+    overflow-x: auto;
+  }
+
+  .communications-table-wrap table {
+    min-width: 1120px;
   }
 }
 

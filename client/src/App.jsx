@@ -8,6 +8,7 @@ const AuditTrailPage = lazy(() => import("./pages/AuditTrailPage"));
 const BillsPage = lazy(() => import("./pages/BillsPage"));
 const BillingSetupPage = lazy(() => import("./pages/BillingSetupPage"));
 const BusinessSettingsPage = lazy(() => import("./pages/BusinessSettingsPage"));
+const CommunicationsPage = lazy(() => import("./pages/CommunicationsPage"));
 const CustomersPage = lazy(() => import("./pages/CustomersPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const ExpensesPage = lazy(() => import("./pages/ExpensesPage"));
@@ -106,7 +107,7 @@ function App() {
   const handleLogout = (message = "") => {
     localStorage.removeItem("agua_token");
     localStorage.removeItem("agua_user");
-    setSessionMessage(message);
+    setSessionMessage(typeof message === "string" ? message : "");
     setUser(null);
     setCurrentPage("dashboard");
   };
@@ -135,6 +136,7 @@ function App() {
     requests: <PortalPage user={user} view="requests" />,
     billing: <BillingSetupPage user={user} />,
     business: <BusinessSettingsPage user={user} />,
+    communications: <CommunicationsPage user={user} />,
     audit: <AuditTrailPage user={user} />,
     payments: <PaymentsPage user={user} />,
     expenses: <ExpensesPage user={user} />,

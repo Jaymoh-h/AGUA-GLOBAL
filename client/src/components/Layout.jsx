@@ -10,6 +10,7 @@ import {
   LifeBuoy,
   LogOut,
   MapPinned,
+  MessageSquare,
   MonitorSmartphone,
   PlugZap,
   Receipt,
@@ -31,6 +32,7 @@ export const navItems = [
   { key: "requests", label: "Requests", icon: LifeBuoy, roles: ["customer"] },
   { key: "billing", label: "Billing Setup", icon: Settings2, roles: ["admin", "accountant"] },
   { key: "business", label: "Business Settings", icon: Building2, roles: ["admin", "accountant"] },
+  { key: "communications", label: "Communications", icon: MessageSquare, roles: ["admin", "accountant"] },
   { key: "payments", label: "Payments", icon: WalletCards, roles: ["admin", "accountant"] },
   { key: "expenses", label: "Expenses", icon: Banknote, roles: ["admin", "accountant"] },
   { key: "payroll", label: "Payroll", icon: UserRoundCog, roles: ["admin", "accountant"] },
@@ -84,7 +86,7 @@ function Layout({ appName, user, currentPage, onNavigate, onLogout, children }) 
             <strong>{user.name}</strong>
             <small>{user.role.replace("_", " ")}</small>
           </div>
-          <button className="icon-button" onClick={onLogout} type="button" title="Log out">
+          <button className="icon-button" onClick={() => onLogout()} type="button" title="Log out">
             <LogOut size={18} />
           </button>
         </div>

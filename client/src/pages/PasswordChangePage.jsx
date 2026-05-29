@@ -95,7 +95,7 @@ function PasswordChangePage({ user, onChanged, onLogout }) {
           <Save size={17} />
           {saving ? "Saving..." : "Save password"}
         </button>
-        <button className="icon-button secondary-wide-button" type="button" onClick={onLogout}>
+        <button className="icon-button secondary-wide-button" type="button" onClick={() => onLogout()}>
           <LogOut size={16} />
           Sign out
         </button>

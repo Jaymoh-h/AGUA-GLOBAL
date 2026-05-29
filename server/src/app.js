@@ -25,6 +25,7 @@ const portalRoutes = require("./routes/portal.routes");
 const adjustmentRoutes = require("./routes/adjustment.routes");
 const productionRoutes = require("./routes/production.routes");
 const payrollRoutes = require("./routes/payroll.routes");
+const communicationRoutes = require("./routes/communication.routes");
 
 const app = express();
 
@@ -58,6 +59,7 @@ app.use("/api/portal", portalRoutes);
 app.use("/api/adjustments", adjustmentRoutes);
 app.use("/api/production", productionRoutes);
 app.use("/api/payroll", payrollRoutes);
+app.use("/api/communications", communicationRoutes);
 
 app.use(errorHandler);
 

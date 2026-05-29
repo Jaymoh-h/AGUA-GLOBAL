@@ -165,6 +165,12 @@ export const api = {
     create: (payload) => request("/adjustments", { method: "POST", body: payload }),
     review: (id, payload) => request(`/adjustments/${id}/review`, { method: "PATCH", body: payload })
   },
+  communications: {
+    invoicePreview: () => request("/communications/invoice-preview"),
+    sendInvoiceAlert: (customerId, payload) =>
+      request(`/communications/invoice-alerts/${customerId}/send`, { method: "POST", body: payload }),
+    bulkSendInvoiceAlerts: (payload) => request("/communications/invoice-alerts/bulk-send", { method: "POST", body: payload })
+  },
   payments: {
     list: () => request("/payments"),
     suspense: () => request("/payments/suspense"),
