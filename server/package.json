@@ -37,6 +37,7 @@
     "db:migrate:customer-contact-preferences": "node src/db/runSqlFile.js database/migrations/029_customer_contact_preferences.sql",
     "db:migrate:production-topup-expenses": "node src/db/runSqlFile.js database/migrations/030_production_topup_expenses.sql",
     "db:migrate:communications": "node src/db/runSqlFile.js database/migrations/031_communication_campaigns.sql",
+    "db:migrate:hold-source-backup-bills": "node src/db/runSqlFile.js database/migrations/038_hold_unallocated_source_backup_bills.sql",
     "payment:check": "node src/db/paymentCheck.js",
     "db:seed": "node src/db/seed.js"
   },

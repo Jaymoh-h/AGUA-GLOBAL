@@ -809,6 +809,9 @@ const reviewSourceBillingRequest = asyncHandler(async (req, res) => {
       [request.customer_id, request.billing_period_id]
     );
     const hasClientBillConflict = competingPayableResult.rows.length > 0;
+    const sourcePayabilityReason = hasClientBillConflict
+      ? "Held pending source/client bill promotion choice"
+      : "Held pending explicit source bill promotion";
 
     const billNumber = await createBillNumber(client);
     const billResult = await client.query(
@@ -849,9 +852,9 @@ const reviewSourceBillingRequest = asyncHandler(async (req, res) => {
         request.meter_id,
         request.reason,
         request.id,
-        hasClientBillConflict ? "held" : "payable",
-        hasClientBillConflict ? "Held pending source/client bill promotion choice" : notes || request.reason,
-        hasClientBillConflict ? null : req.user.id
+        "held",
+        sourcePayabilityReason,
+        null
       ]
     );
     let bill = billResult.rows[0];

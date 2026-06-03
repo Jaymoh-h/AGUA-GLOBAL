@@ -95,6 +95,77 @@ const requireSourceFallbackReason = (meter, reason) => {
   }
 };
 
+const upsertPendingSourceBillingRequest = async (
+  client,
+  {
+    customerId,
+    meterId,
+    billingPeriod,
+    previous,
+    reading,
+    unitsUsed,
+    charge,
+    reason,
+    requestedBy
+  }
+) => {
+  const requestResult = await client.query(
+    `INSERT INTO source_billing_requests (
+      customer_id, meter_id, billing_period_id, previous_reading_id, current_reading_id,
+      previous_reading, current_reading, units_used, rate, amount, subtotal_amount,
+      fixed_charge_amount, vat_amount, reconnection_fee_amount, tariff_snapshot, due_date,
+      reason, requested_by
+    )
+    VALUES (
+      $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+      $12, $13, $14, $15::jsonb, $16, $17, $18
+    )
+    ON CONFLICT (current_reading_id) DO UPDATE
+    SET billing_period_id = EXCLUDED.billing_period_id,
+        previous_reading_id = EXCLUDED.previous_reading_id,
+        previous_reading = EXCLUDED.previous_reading,
+        current_reading = EXCLUDED.current_reading,
+        units_used = EXCLUDED.units_used,
+        rate = EXCLUDED.rate,
+        amount = EXCLUDED.amount,
+        subtotal_amount = EXCLUDED.subtotal_amount,
+        fixed_charge_amount = EXCLUDED.fixed_charge_amount,
+        vat_amount = EXCLUDED.vat_amount,
+        reconnection_fee_amount = EXCLUDED.reconnection_fee_amount,
+        tariff_snapshot = EXCLUDED.tariff_snapshot,
+        due_date = EXCLUDED.due_date,
+        reason = EXCLUDED.reason,
+        status = 'pending',
+        updated_at = NOW()
+    WHERE source_billing_requests.status = 'pending'
+    RETURNING *`,
+    [
+      customerId,
+      meterId,
+      billingPeriod.id,
+      previous.id,
+      reading.id,
+      previous.reading_value,
+      reading.reading_value,
+      unitsUsed,
+      charge.rateAmount,
+      charge.totalAmount,
+      charge.subtotalAmount,
+      charge.fixedChargeAmount,
+      charge.vatAmount,
+      charge.reconnectionFeeAmount,
+      JSON.stringify(charge.tariffSnapshot),
+      billingPeriod.due_date,
+      reason,
+      requestedBy
+    ]
+  );
+  if (!requestResult.rows[0]) {
+    throw new ApiError(400, "This source reading has already been reviewed and cannot be submitted again.");
+  }
+  return requestResult.rows[0];
+};
+
 const resolveReadingImportRows = async (client, csvText, { commitMode = false } = {}) => {
   const parsedRows = parseCsv(csvText);
   const importKeys = new Set();
@@ -318,85 +389,29 @@ const createReadingWithBill = async (
     const tariff = await getTariffWithBlocks(client, customer.rate_id, reading_date);
     const charge = calculateTariffCharge(tariff || customer, unitsUsed);
     const fallbackReason = String(fallback_reason || notes || "").trim();
-    if (activeMeter.meter_role === "source_backup" && req.user.role !== "admin") {
-      const requestResult = await client.query(
-        `INSERT INTO source_billing_requests (
-          customer_id, meter_id, billing_period_id, previous_reading_id, current_reading_id,
-          previous_reading, current_reading, units_used, rate, amount, subtotal_amount,
-          fixed_charge_amount, vat_amount, reconnection_fee_amount, tariff_snapshot, due_date,
-          reason, requested_by
-        )
-        VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-          $12, $13, $14, $15::jsonb, $16, $17, $18
-        )
-        ON CONFLICT (current_reading_id) DO UPDATE
-        SET billing_period_id = EXCLUDED.billing_period_id,
-            previous_reading_id = EXCLUDED.previous_reading_id,
-            previous_reading = EXCLUDED.previous_reading,
-            current_reading = EXCLUDED.current_reading,
-            units_used = EXCLUDED.units_used,
-            rate = EXCLUDED.rate,
-            amount = EXCLUDED.amount,
-            subtotal_amount = EXCLUDED.subtotal_amount,
-            fixed_charge_amount = EXCLUDED.fixed_charge_amount,
-            vat_amount = EXCLUDED.vat_amount,
-            reconnection_fee_amount = EXCLUDED.reconnection_fee_amount,
-            tariff_snapshot = EXCLUDED.tariff_snapshot,
-            due_date = EXCLUDED.due_date,
-            reason = EXCLUDED.reason,
-            status = 'pending',
-            updated_at = NOW()
-        WHERE source_billing_requests.status = 'pending'
-        RETURNING *`,
-        [
-          customer_id,
-          activeMeter.id,
-          billingPeriod.id,
-          previous.id,
-          reading.id,
-          previous.reading_value,
-          reading_value,
-          unitsUsed,
-          charge.rateAmount,
-          charge.totalAmount,
-          charge.subtotalAmount,
-          charge.fixedChargeAmount,
-          charge.vatAmount,
-          charge.reconnectionFeeAmount,
-          JSON.stringify(charge.tariffSnapshot),
-          billingPeriod.due_date,
-          fallbackReason,
-          req.user.id
-        ]
-      );
-      if (!requestResult.rows[0]) {
-        throw new ApiError(400, "This source reading has already been reviewed and cannot be submitted again.");
-      }
+    if (activeMeter.meter_role === "source_backup") {
+      const request = await upsertPendingSourceBillingRequest(client, {
+        customerId: customer_id,
+        meterId: activeMeter.id,
+        billingPeriod,
+        previous,
+        reading,
+        unitsUsed,
+        charge,
+        reason: fallbackReason,
+        requestedBy: req.user.id
+      });
       await recordAuditEvent(client, {
         req,
         action: "source_billing_request.created",
         entityType: "source_billing_request",
-        entityId: requestResult.rows[0].id,
-        afterData: requestResult.rows[0],
+        entityId: request.id,
+        afterData: request,
         reason: fallbackReason
       });
-      return { reading, bill: null, sourceBillingRequest: requestResult.rows[0] };
+      return { reading, bill: null, sourceBillingRequest: request };
     }
 
-    const competingPayableResult = activeMeter.meter_role === "source_backup"
-      ? await client.query(
-          `SELECT id
-           FROM bills
-           WHERE customer_id = $1
-             AND billing_period_id = $2
-             AND bill_pay_status = 'payable'
-             AND billing_source <> 'source_backup'
-           FOR UPDATE`,
-          [customer_id, billingPeriod.id]
-        )
-      : { rows: [] };
-    const hasClientBillConflict = competingPayableResult.rows.length > 0;
     const billNumber = await createBillNumber(client);
     const billResult = await client.query(
       `INSERT INTO bills (
@@ -434,93 +449,13 @@ const createReadingWithBill = async (
         activeMeter.id,
         activeMeter.meter_role,
         billingSourceForMeter(activeMeter),
-        activeMeter.meter_role === "source_backup" ? fallbackReason : null,
-        hasClientBillConflict ? "held" : "payable",
-        hasClientBillConflict ? "Held pending source/client bill promotion choice" : null,
-        hasClientBillConflict ? null : req.user.id
+        null,
+        "payable",
+        null,
+        req.user.id
       ]
     );
     bill = billResult.rows[0];
-    if (activeMeter.meter_role === "source_backup") {
-      const requestResult = await client.query(
-        `INSERT INTO source_billing_requests (
-          customer_id, meter_id, billing_period_id, previous_reading_id, current_reading_id,
-          previous_reading, current_reading, units_used, rate, amount, subtotal_amount,
-          fixed_charge_amount, vat_amount, reconnection_fee_amount, tariff_snapshot, due_date,
-          reason, status, bill_id, requested_by, reviewed_by, reviewed_at, review_notes
-        )
-        VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-          $12, $13, $14, $15::jsonb, $16, $17, 'approved', $18, $19, $19, NOW(), $20
-        )
-        ON CONFLICT (current_reading_id) DO UPDATE
-        SET billing_period_id = EXCLUDED.billing_period_id,
-            previous_reading_id = EXCLUDED.previous_reading_id,
-            previous_reading = EXCLUDED.previous_reading,
-            current_reading = EXCLUDED.current_reading,
-            units_used = EXCLUDED.units_used,
-            rate = EXCLUDED.rate,
-            amount = EXCLUDED.amount,
-            subtotal_amount = EXCLUDED.subtotal_amount,
-            fixed_charge_amount = EXCLUDED.fixed_charge_amount,
-            vat_amount = EXCLUDED.vat_amount,
-            reconnection_fee_amount = EXCLUDED.reconnection_fee_amount,
-            tariff_snapshot = EXCLUDED.tariff_snapshot,
-            due_date = EXCLUDED.due_date,
-            reason = EXCLUDED.reason,
-            status = 'approved',
-            bill_id = EXCLUDED.bill_id,
-            reviewed_by = EXCLUDED.reviewed_by,
-            reviewed_at = NOW(),
-            review_notes = EXCLUDED.review_notes,
-            updated_at = NOW()
-        RETURNING *`,
-        [
-          customer_id,
-          activeMeter.id,
-          billingPeriod.id,
-          previous.id,
-          reading.id,
-          previous.reading_value,
-          reading_value,
-          unitsUsed,
-          charge.rateAmount,
-          charge.totalAmount,
-          charge.subtotalAmount,
-          charge.fixedChargeAmount,
-          charge.vatAmount,
-          charge.reconnectionFeeAmount,
-          JSON.stringify(charge.tariffSnapshot),
-          billingPeriod.due_date,
-          fallbackReason,
-          bill.id,
-          req.user.id,
-          hasClientBillConflict ? "Approved by admin; held pending source/client bill promotion choice" : "Approved by admin"
-        ]
-      );
-      sourceBillingRequest = requestResult.rows[0];
-      if (!bill.source_billing_request_id) {
-        const linkedBill = await client.query(
-          `UPDATE bills
-           SET source_billing_request_id = $1
-           WHERE id = $2
-           RETURNING *`,
-          [sourceBillingRequest.id, bill.id]
-        );
-        bill = linkedBill.rows[0];
-      }
-      await recordAuditEvent(client, {
-        req,
-        action: "source_billing_request.approved",
-        entityType: "source_billing_request",
-        entityId: sourceBillingRequest.id,
-        afterData: {
-          request: sourceBillingRequest,
-          bill
-        },
-        reason: fallbackReason
-      });
-    }
     if (bill.bill_pay_status === "payable") {
       const creditApplication = await applyCustomerCreditToBill(client, {
         customerId: bill.customer_id,
@@ -930,68 +865,25 @@ const recalculateBillForReading = async (
   const sourceFallbackReason = sourceRequest?.reason || reading.notes || correctionReason || null;
   requireSourceFallbackReason(activeMeter, sourceFallbackReason);
 
-  if (activeMeter.meter_role === "source_backup" && !existingBill && req?.user?.role !== "admin") {
-    const requestResult = await client.query(
-      `INSERT INTO source_billing_requests (
-        customer_id, meter_id, billing_period_id, previous_reading_id, current_reading_id,
-        previous_reading, current_reading, units_used, rate, amount, subtotal_amount,
-        fixed_charge_amount, vat_amount, reconnection_fee_amount, tariff_snapshot, due_date,
-        reason, requested_by
-      )
-      VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-        $12, $13, $14, $15::jsonb, $16, $17, $18
-      )
-      ON CONFLICT (current_reading_id) DO UPDATE
-      SET billing_period_id = EXCLUDED.billing_period_id,
-          previous_reading_id = EXCLUDED.previous_reading_id,
-          previous_reading = EXCLUDED.previous_reading,
-          current_reading = EXCLUDED.current_reading,
-          units_used = EXCLUDED.units_used,
-          rate = EXCLUDED.rate,
-          amount = EXCLUDED.amount,
-          subtotal_amount = EXCLUDED.subtotal_amount,
-          fixed_charge_amount = EXCLUDED.fixed_charge_amount,
-          vat_amount = EXCLUDED.vat_amount,
-          reconnection_fee_amount = EXCLUDED.reconnection_fee_amount,
-          tariff_snapshot = EXCLUDED.tariff_snapshot,
-          due_date = EXCLUDED.due_date,
-          reason = EXCLUDED.reason,
-          status = 'pending',
-          updated_at = NOW()
-      WHERE source_billing_requests.status = 'pending'
-      RETURNING *`,
-      [
-        reading.customer_id,
-        activeMeter.id,
-        billingPeriod.id,
-        previous.id,
-        reading.id,
-        previous.reading_value,
-        reading.reading_value,
-        unitsUsed,
-        charge.rateAmount,
-        totalAmount,
-        charge.subtotalAmount,
-        charge.fixedChargeAmount,
-        charge.vatAmount,
-        charge.reconnectionFeeAmount,
-        JSON.stringify(charge.tariffSnapshot),
-        billingPeriod.due_date,
-        sourceFallbackReason,
-        req.user.id
-      ]
-    );
-    if (!requestResult.rows[0]) {
-      throw new ApiError(400, "This source reading has already been reviewed and cannot be submitted again.");
-    }
+  if (activeMeter.meter_role === "source_backup" && !existingBill) {
+    const request = await upsertPendingSourceBillingRequest(client, {
+      customerId: reading.customer_id,
+      meterId: activeMeter.id,
+      billingPeriod,
+      previous,
+      reading,
+      unitsUsed,
+      charge,
+      reason: sourceFallbackReason,
+      requestedBy: req?.user?.id || null
+    });
     if (req) {
       await recordAuditEvent(client, {
         req,
         action: "source_billing_request.updated",
         entityType: "source_billing_request",
-        entityId: requestResult.rows[0].id,
-        afterData: requestResult.rows[0],
+        entityId: request.id,
+        afterData: request,
         reason: sourceFallbackReason
       });
     }
