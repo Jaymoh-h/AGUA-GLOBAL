@@ -2,6 +2,7 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
+const { assertNoFutureDates } = require("../services/dateGuard.service");
 const { createExpenseRecord } = require("./expense.controller");
 
 const payeeTypes = ["employee", "casual", "contractor", "subscription"];
@@ -332,6 +333,13 @@ const createRun = asyncHandler(async (req, res) => {
   if (!isDateOnly(period_start) || !isDateOnly(period_end)) {
     throw new ApiError(400, "Payroll period dates must use YYYY-MM-DD format.");
   }
+  const futureOverrideReason = assertNoFutureDates(
+    [
+      { value: period_start, label: "Payroll period start" },
+      { value: period_end, label: "Payroll period end" }
+    ],
+    req
+  );
   if (period_end < period_start) throw new ApiError(400, "Period end cannot be before period start.");
   if (payee_type && !recurringPayeeTypes.includes(payee_type)) {
     throw new ApiError(400, "Pay runs can auto-include employees, subscriptions, or all recurring payees.");
@@ -399,7 +407,8 @@ const createRun = asyncHandler(async (req, res) => {
       afterData: {
         run: updatedRun,
         recurringPayeesGenerated: payeeResult.rows.length
-      }
+      },
+      reason: futureOverrideReason
     });
 
     await client.query("COMMIT");

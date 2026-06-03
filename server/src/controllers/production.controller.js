@@ -3,6 +3,7 @@ const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
 const { calculateTariffCharge, getTariffWithBlocks } = require("../services/tariff.service");
+const { assertNotFutureDate } = require("../services/dateGuard.service");
 const { createExpenseRecord } = require("./expense.controller");
 
 const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
@@ -38,6 +39,8 @@ const createProductionMeter = asyncHandler(async (req, res) => {
     customer_id,
     meter_id,
     rate_id,
+    installed_at,
+    initial_reading = 0,
     notes
   } = req.body;
   if (!["customer_source", "shared_source"].includes(meter_type)) {
@@ -49,6 +52,12 @@ const createProductionMeter = asyncHandler(async (req, res) => {
   }
   if (meter_type === "shared_source" && !rate_id) {
     throw new ApiError(400, "Default tariff is required for a shared source meter.");
+  }
+  const installedAt = installed_at || new Date().toISOString().slice(0, 10);
+  const initialReading = toNumber(initial_reading);
+  if (!isDateOnly(installedAt)) throw new ApiError(400, "Installed date must use YYYY-MM-DD.");
+  if (!Number.isFinite(initialReading) || initialReading < 0) {
+    throw new ApiError(400, "Initial reading must be zero or greater.");
   }
 
   const client = await pool.connect();
@@ -73,9 +82,10 @@ const createProductionMeter = asyncHandler(async (req, res) => {
 
     const { rows } = await client.query(
       `INSERT INTO production_source_meters (
-        zone_id, customer_id, meter_id, rate_id, meter_number, name, meter_type, notes, created_by
+        zone_id, customer_id, meter_id, rate_id, meter_number, name, meter_type,
+        installed_at, initial_reading, notes, created_by
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *`,
       [
         zone_id || null,
@@ -85,6 +95,8 @@ const createProductionMeter = asyncHandler(async (req, res) => {
         String(meter_number).trim(),
         name || null,
         meter_type,
+        installedAt,
+        initialReading,
         notes || null,
         req.user.id
       ]
@@ -101,6 +113,141 @@ const createProductionMeter = asyncHandler(async (req, res) => {
 
     await client.query("COMMIT");
     res.status(201).json(rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+const replaceProductionMeter = asyncHandler(async (req, res) => {
+  const {
+    new_meter_number,
+    new_name,
+    old_final_reading,
+    new_initial_reading = 0,
+    event_date,
+    reason
+  } = req.body;
+
+  if (!String(new_meter_number || "").trim() || old_final_reading === undefined || !event_date) {
+    throw new ApiError(400, "New meter number, old final reading, and replacement date are required.");
+  }
+  if (!isDateOnly(event_date)) throw new ApiError(400, "Replacement date must use YYYY-MM-DD.");
+  const futureOverrideReason = assertNotFutureDate(event_date, req, "Replacement date");
+
+  const oldFinalReading = toNumber(old_final_reading);
+  const newInitialReading = toNumber(new_initial_reading);
+  if (!Number.isFinite(oldFinalReading) || oldFinalReading < 0) {
+    throw new ApiError(400, "Old final reading must be zero or greater.");
+  }
+  if (!Number.isFinite(newInitialReading) || newInitialReading < 0) {
+    throw new ApiError(400, "New initial reading must be zero or greater.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const oldMeterResult = await client.query("SELECT * FROM production_source_meters WHERE id = $1 FOR UPDATE", [
+      req.params.id
+    ]);
+    const oldMeter = oldMeterResult.rows[0];
+    if (!oldMeter) throw new ApiError(404, "Production meter not found.");
+    if (oldMeter.status !== "active") throw new ApiError(400, "Only active production meters can be replaced.");
+
+    const previous = await getPreviousProductionReading(client, oldMeter.id, event_date);
+    if (previous && oldFinalReading < toNumber(previous.reading_value)) {
+      throw new ApiError(400, "Old final reading cannot be lower than the previous production reading.");
+    }
+
+    const duplicateMeter = await client.query("SELECT id FROM production_source_meters WHERE meter_number = $1", [
+      String(new_meter_number).trim()
+    ]);
+    if (duplicateMeter.rows[0]) {
+      throw new ApiError(400, "New production meter number is already in use.");
+    }
+
+    const retiredResult = await client.query(
+      `UPDATE production_source_meters
+       SET status = 'replaced',
+           removed_at = $1,
+           updated_at = NOW()
+       WHERE id = $2
+       RETURNING *`,
+      [event_date, oldMeter.id]
+    );
+
+    const newMeterResult = await client.query(
+      `INSERT INTO production_source_meters (
+        zone_id, customer_id, meter_id, rate_id, meter_number, name, meter_type,
+        installed_at, initial_reading, status, notes, created_by
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10, $11)
+      RETURNING *`,
+      [
+        oldMeter.zone_id || null,
+        oldMeter.customer_id || null,
+        oldMeter.meter_id || null,
+        oldMeter.rate_id || null,
+        String(new_meter_number).trim(),
+        new_name || oldMeter.name || null,
+        oldMeter.meter_type,
+        event_date,
+        newInitialReading,
+        reason || `Replacement for ${oldMeter.meter_number}`,
+        req.user.id
+      ]
+    );
+
+    const eventResult = await client.query(
+      `INSERT INTO production_meter_events (
+        old_production_meter_id, new_production_meter_id, event_type, event_date,
+        old_final_reading, new_initial_reading, reason, created_by
+      )
+      VALUES ($1, $2, 'replacement', $3, $4, $5, $6, $7)
+      RETURNING *`,
+      [
+        oldMeter.id,
+        newMeterResult.rows[0].id,
+        event_date,
+        oldFinalReading,
+        newInitialReading,
+        reason || null,
+        req.user.id
+      ]
+    );
+
+    await recordAuditEvent(client, {
+      req,
+      action: "production_meter.replaced",
+      entityType: "production_source_meter",
+      entityId: oldMeter.id,
+      beforeData: oldMeter,
+      afterData: {
+        oldMeter: retiredResult.rows[0],
+        newMeter: newMeterResult.rows[0],
+        event: eventResult.rows[0]
+      },
+      reason: reason || futureOverrideReason
+    });
+
+    await recordAuditEvent(client, {
+      req,
+      action: "production_meter_event.created",
+      entityType: "production_meter_event",
+      entityId: eventResult.rows[0].id,
+      afterData: eventResult.rows[0],
+      reason: reason || futureOverrideReason
+    });
+
+    await client.query("COMMIT");
+    res.status(201).json({
+      event: eventResult.rows[0],
+      oldMeter: retiredResult.rows[0],
+      newMeter: newMeterResult.rows[0]
+    });
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -128,6 +275,7 @@ const listElectricityTopups = asyncHandler(async (_req, res) => {
 const createElectricityTopup = asyncHandler(async (req, res) => {
   const { topup_date, kwh_units, total_cost, reference, notes } = req.body;
   if (!isDateOnly(topup_date)) throw new ApiError(400, "Top-up date must use YYYY-MM-DD.");
+  const futureOverrideReason = assertNotFutureDate(topup_date, req, "Top-up date");
   const units = toNumber(kwh_units);
   const cost = toNumber(total_cost);
   if (!Number.isFinite(units) || units <= 0) throw new ApiError(400, "kWh units must be greater than zero.");
@@ -177,7 +325,8 @@ const createElectricityTopup = asyncHandler(async (req, res) => {
       afterData: {
         topup: updatedResult.rows[0],
         expense
-      }
+      },
+      reason: futureOverrideReason
     });
 
     await client.query("COMMIT");
@@ -218,7 +367,19 @@ const getPreviousProductionReading = async (client, productionMeterId, readingDa
      LIMIT 1`,
     [productionMeterId, readingDate]
   );
-  return rows[0] || null;
+  if (rows[0]) return rows[0];
+
+  const baselineResult = await client.query(
+    `SELECT new_initial_reading AS reading_value,
+            event_date AS reading_date
+     FROM production_meter_events
+     WHERE new_production_meter_id = $1
+       AND event_date < $2
+     ORDER BY event_date DESC, id DESC
+     LIMIT 1`,
+    [productionMeterId, readingDate]
+  );
+  return baselineResult.rows[0] || null;
 };
 
 const calculateProductionReading = async (client, meter, readingDate, readingValue, previousReadingValue) => {
@@ -263,6 +424,18 @@ const recalculateProductionMeterForward = async (client, productionMeterId, from
     [productionMeterId, fromDate]
   );
   let previousReadingValue = previousResult.rows[0]?.reading_value ?? null;
+  if (previousReadingValue === null || previousReadingValue === undefined) {
+    const baselineResult = await client.query(
+      `SELECT new_initial_reading AS reading_value
+       FROM production_meter_events
+       WHERE new_production_meter_id = $1
+         AND event_date < $2
+       ORDER BY event_date DESC, id DESC
+       LIMIT 1`,
+      [productionMeterId, fromDate]
+    );
+    previousReadingValue = baselineResult.rows[0]?.reading_value ?? null;
+  }
 
   const readingsResult = await client.query(
     `SELECT pmr.*, pwr.reading_date
@@ -312,6 +485,7 @@ const recalculateProductionMetersForward = async (client, productionMeterIds, fr
 const createWeeklyReading = asyncHandler(async (req, res) => {
   const { reading_date, prepaid_kwh_balance, readings = [], notes } = req.body;
   if (!isDateOnly(reading_date)) throw new ApiError(400, "Reading date must use YYYY-MM-DD.");
+  const futureOverrideReason = assertNotFutureDate(reading_date, req, "Production reading date");
   const prepaidBalance = toNumber(prepaid_kwh_balance);
   if (!Number.isFinite(prepaidBalance) || prepaidBalance < 0) {
     throw new ApiError(400, "Prepaid kWh balance cannot be negative.");
@@ -392,7 +566,8 @@ const createWeeklyReading = asyncHandler(async (req, res) => {
       action: "production_weekly_reading.saved",
       entityType: "production_weekly_reading",
       entityId: weekly.id,
-      afterData: { weekly, readings: savedRows }
+      afterData: { weekly, readings: savedRows },
+      reason: futureOverrideReason
     });
 
     await client.query("COMMIT");
@@ -432,6 +607,7 @@ const getWeeklyReading = asyncHandler(async (req, res) => {
 const updateWeeklyReading = asyncHandler(async (req, res) => {
   const { reading_date, prepaid_kwh_balance, readings = [], notes, correction_reason } = req.body;
   if (!isDateOnly(reading_date)) throw new ApiError(400, "Reading date must use YYYY-MM-DD.");
+  const futureOverrideReason = assertNotFutureDate(reading_date, req, "Production reading date");
   if (!String(correction_reason || "").trim()) throw new ApiError(400, "Correction reason is required.");
   const prepaidBalance = toNumber(prepaid_kwh_balance);
   if (!Number.isFinite(prepaidBalance) || prepaidBalance < 0) {
@@ -532,7 +708,7 @@ const updateWeeklyReading = asyncHandler(async (req, res) => {
       entityId: weekly.id,
       beforeData: { weekly: previousWeekly, readings: previousRows },
       afterData: { weekly, readings: savedRows },
-      reason: correction_reason
+      reason: correction_reason || futureOverrideReason
     });
 
     await client.query("COMMIT");
@@ -635,8 +811,17 @@ const getProductionReport = asyncHandler(async (req, res) => {
     const topups = topupsResult.rows[0];
     const topupUnits = toNumber(topups.kwh_units);
     const topupCost = toNumber(topups.total_cost);
+    const lastTopupResult = await pool.query(
+      `SELECT id, topup_date, cost_per_unit, reference
+       FROM production_electricity_topups
+       WHERE topup_date <= $1
+       ORDER BY topup_date DESC, id DESC
+       LIMIT 1`,
+      [week.reading_date]
+    );
+    const lastTopup = lastTopupResult.rows[0] || null;
     const electricityUsed = Math.max(toNumber(previousWeek?.prepaid_kwh_balance) + topupUnits - toNumber(week.prepaid_kwh_balance), 0);
-    const weightedCost = topupUnits > 0 ? topupCost / topupUnits : 0;
+    const weightedCost = topupUnits > 0 ? topupCost / topupUnits : toNumber(lastTopup?.cost_per_unit);
     const electricityCostUsed = roundMoney(electricityUsed * weightedCost);
 
     const rowsResult = await pool.query(
@@ -662,6 +847,11 @@ const getProductionReport = asyncHandler(async (req, res) => {
       previous_prepaid_kwh_balance: previousWeek?.prepaid_kwh_balance ?? null,
       topup_kwh_units: topupUnits,
       topup_total_cost: topupCost,
+      electricity_cost_per_unit: roundMoney(weightedCost),
+      electricity_cost_source: topupUnits > 0 ? "period_topups" : lastTopup ? "last_topup" : "none",
+      electricity_cost_source_topup_id: topupUnits > 0 ? null : lastTopup?.id || null,
+      electricity_cost_source_date: topupUnits > 0 ? null : lastTopup?.topup_date || null,
+      electricity_cost_source_reference: topupUnits > 0 ? null : lastTopup?.reference || null,
       electricity_used: electricityUsed,
       electricity_cost_used: electricityCostUsed,
       total_consumption: totalConsumption,
@@ -685,5 +875,6 @@ module.exports = {
   listElectricityTopups,
   listProductionMeters,
   listWeeklyReadings,
+  replaceProductionMeter,
   updateWeeklyReading
 };

@@ -1,6 +1,7 @@
 const ApiError = require("../utils/apiError");
 const { sendEmail } = require("./email.service");
 const { normalizePhoneNumber, sendSms } = require("./sms.service");
+const { normalizeWhatsAppNumber, sendWhatsApp } = require("./whatsapp.service");
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const dateOnly = (value) => {
@@ -70,6 +71,28 @@ const getCustomerSmsRecipient = async (client, customerId) => {
   const phone = normalizePhoneNumber(customer.phone);
   if (!phone) {
     throw new ApiError(400, "This customer does not have a valid phone number for SMS delivery.");
+  }
+  return {
+    phone,
+    name: customer.name
+  };
+};
+
+const getCustomerWhatsAppRecipient = async (client, customerId) => {
+  const { rows } = await client.query(
+    `SELECT name, phone, whatsapp_delivery_enabled
+     FROM customers
+     WHERE id = $1`,
+    [customerId]
+  );
+  const customer = rows[0];
+  if (!customer) throw new ApiError(404, "Customer not found.");
+  if (customer.whatsapp_delivery_enabled === false) {
+    throw new ApiError(400, "WhatsApp delivery is disabled for this customer.");
+  }
+  const phone = normalizeWhatsAppNumber(customer.phone);
+  if (!phone) {
+    throw new ApiError(400, "This customer does not have a valid phone number for WhatsApp delivery.");
   }
   return {
     phone,
@@ -299,6 +322,51 @@ const sendDocumentSms = async (client, req, { documentType, documentId, customer
   }
 };
 
+const sendDocumentWhatsApp = async (client, req, { documentType, documentId, customerId, recipient, subject, message, whatsappTemplate }) => {
+  let sendResult;
+  try {
+    sendResult = await sendWhatsApp({ to: recipient, message, template: whatsappTemplate });
+  } catch (error) {
+    try {
+      const log = await createDeliveryLog(client, {
+        documentType,
+        documentId,
+        customerId,
+        channel: "whatsapp",
+        recipient,
+        subject,
+        status: "failed",
+        errorMessage: error.message,
+        sentBy: req.user.id
+      });
+      return { status: "failed", log, error_message: error.message };
+    } catch (logError) {
+      console.error("Failed to record failed document WhatsApp delivery.", logError);
+      return { status: "failed", log: null, error_message: error.message, log_error: logError.message };
+    }
+  }
+
+  const status = sendResult.skipped ? "skipped" : "sent";
+  try {
+    const log = await createDeliveryLog(client, {
+      documentType,
+      documentId,
+      customerId,
+      channel: "whatsapp",
+      recipient,
+      subject,
+      status,
+      errorMessage: sendResult.skipped ? sendResult.error || "WhatsApp provider is not configured." : null,
+      providerMessageId: sendResult.messageId || sendResult.providerStatus || null,
+      sentBy: req.user.id
+    });
+    return { status, log };
+  } catch (logError) {
+    console.error("Document WhatsApp sent, but delivery log could not be recorded.", logError);
+    return { status, log: null, log_error: logError.message };
+  }
+};
+
 module.exports = {
   buildBillEmail,
   buildBillSms,
@@ -307,7 +375,9 @@ module.exports = {
   getBusinessSettings,
   getCustomerEmailRecipient,
   getCustomerSmsRecipient,
+  getCustomerWhatsAppRecipient,
   listDeliveryLogs,
   sendDocumentEmail,
-  sendDocumentSms
+  sendDocumentSms,
+  sendDocumentWhatsApp
 };

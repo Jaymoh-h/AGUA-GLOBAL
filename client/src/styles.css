@@ -398,6 +398,188 @@ td button,
   grid-template-columns: minmax(0, 1fr);
 }
 
+.dashboard-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.dashboard-chart-wide {
+  grid-column: 1 / -1;
+}
+
+.dashboard-chart {
+  width: 100%;
+  height: 260px;
+  min-width: 0;
+}
+
+.action-center-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+  min-width: 0;
+}
+
+.action-group-panel {
+  min-width: 0;
+}
+
+.action-list {
+  display: grid;
+  gap: 8px;
+}
+
+.action-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #dde3ea;
+  border-radius: 8px;
+  background: #ffffff;
+  min-width: 0;
+}
+
+.action-item.active {
+  border-color: #cbd5e1;
+  background: #fbfcfd;
+}
+
+.action-item-main,
+.action-item-meta,
+.snapshot-list div {
+  display: flex;
+  align-items: center;
+}
+
+.action-item-main {
+  gap: 9px;
+  min-width: 0;
+}
+
+.action-item-main div {
+  min-width: 0;
+}
+
+.action-item-main strong,
+.action-item-main small {
+  display: block;
+}
+
+.action-item-main strong {
+  overflow-wrap: anywhere;
+}
+
+.action-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.action-icon-high {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.action-icon-medium {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.action-icon-low {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.action-icon-clear {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.action-item-meta {
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 150px;
+}
+
+.action-count {
+  font-weight: 800;
+  color: #172033;
+}
+
+.action-open-button {
+  min-height: 30px;
+  border-radius: 8px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #eef2f6;
+  color: #172033;
+}
+
+.action-open-button:hover {
+  background: #e7f5f3;
+  color: #0f766e;
+}
+
+.snapshot-list {
+  display: grid;
+  gap: 8px;
+}
+
+.snapshot-list div {
+  min-height: 34px;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.snapshot-list div:last-child {
+  border-bottom: 0;
+}
+
+.snapshot-list span {
+  flex: 1;
+  color: #637083;
+}
+
+.focus-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-left: 4px solid #0f766e;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.focus-notice strong,
+.focus-notice small {
+  display: block;
+}
+
+.focus-notice button {
+  min-height: 30px;
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #eef2f6;
+  color: #172033;
+  flex: 0 0 auto;
+}
+
 .workspace-grid.portal-workspace-grid {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -452,6 +634,31 @@ td button,
   padding: 13px;
 }
 
+.whatsapp-readiness-panel {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  padding: 10px;
+  border: 1px solid #dde3ea;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.campaign-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(110px, 1fr));
+  gap: 10px;
+  padding: 0 13px 12px;
+}
+
+.campaign-history-wrap table {
+  min-width: 1040px;
+}
+
+.campaign-results-wrap table {
+  min-width: 980px;
+}
+
 .template-preview-field {
   grid-column: 1 / -1;
 }
@@ -463,7 +670,18 @@ td button,
 .template-actions {
   grid-column: 1 / -1;
   display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.template-actions .checkbox-row {
+  margin-right: auto;
+}
+
+.template-status-message {
+  grid-column: 1 / -1;
 }
 
 .bulk-action-bar {
@@ -607,6 +825,16 @@ td button,
   gap: 14px;
 }
 
+.override-dialog {
+  display: grid;
+  gap: 12px;
+  width: min(480px, 100%);
+}
+
+.override-dialog textarea {
+  min-height: 110px;
+}
+
 .audit-detail-grid,
 .audit-snapshot-grid {
   display: grid;
@@ -668,6 +896,10 @@ td button,
   display: none;
 }
 
+.production-report-print {
+  display: none;
+}
+
 .wide-panel,
 .chart-panel {
   min-width: 0;
@@ -718,8 +950,10 @@ td button,
 }
 
 .receipt-print {
+  width: min(100%, 688px);
   max-width: 688px;
   margin: 0 auto;
+  overflow-x: hidden;
 }
 
 .receipt-header {
@@ -802,8 +1036,22 @@ td button,
 }
 
 .receipt-table {
+  width: 100%;
   min-width: 0;
   margin-top: 8px;
+  table-layout: fixed;
+}
+
+.receipt-print table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.receipt-print th,
+.receipt-print td {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .receipt-total {
@@ -814,6 +1062,35 @@ td button,
 
 .portal-profile-panel {
   overflow: hidden;
+}
+
+.portal-statement-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.portal-statement-panel .receipt-header,
+.portal-statement-panel .receipt-title,
+.portal-statement-panel .receipt-info-grid {
+  margin-top: 0;
+}
+
+.portal-account-switcher {
+  display: grid;
+  gap: 5px;
+  min-width: min(100%, 280px);
+  color: #637083;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.portal-account-switcher select {
+  min-height: 38px;
+  text-transform: none;
+  font-size: 14px;
+  font-weight: 700;
+  color: #172033;
 }
 
 .portal-profile-grid {
@@ -849,6 +1126,70 @@ td button,
   display: block;
   color: #637083;
   margin-top: 3px;
+}
+
+.compact-heading {
+  margin-bottom: 8px;
+}
+
+.compact-heading h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.linked-account-picker {
+  display: grid;
+  gap: 8px;
+  grid-column: 1 / -1;
+}
+
+.linked-account-list {
+  display: grid;
+  gap: 6px;
+  max-height: 230px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid #dde3ea;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.linked-account-option {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid #e5e9ef;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.linked-account-option input {
+  width: 16px;
+  height: 16px;
+}
+
+.linked-account-option span,
+.linked-account-option small {
+  min-width: 0;
+}
+
+.linked-account-option strong,
+.linked-account-option small {
+  display: block;
+}
+
+.linked-account-option small {
+  color: #637083;
+}
+
+.linked-account-option em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 800;
+  color: #0f766e;
 }
 
 .empty-state {
@@ -915,6 +1256,35 @@ td button,
   border-top: 1px solid #dde3ea;
   padding-top: 11px;
   text-align: center;
+}
+
+.production-week-summary td {
+  background: #f8fafc;
+  font-weight: 800;
+}
+
+.production-week-summary small {
+  font-weight: 600;
+}
+
+.report-print-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.profit-loss-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.profit-loss-statement {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
 }
 
 .form-grid {
@@ -1155,6 +1525,16 @@ button:disabled {
   grid-template-columns: repeat(5, minmax(120px, 1fr));
 }
 
+.maintenance-expense-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(140px, 1fr));
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #dde3ea;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
 .payroll-line-editor .panel-heading,
 .payroll-line-editor label:last-of-type,
 .payroll-line-editor button {
@@ -1175,6 +1555,61 @@ button:disabled {
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
+}
+
+.readiness-panel {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #edf0f4;
+  display: grid;
+  gap: 12px;
+}
+
+.readiness-list {
+  display: grid;
+  gap: 8px;
+}
+
+.readiness-check {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(126px, auto);
+  gap: 12px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #edf0f4;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.readiness-check > div:first-child {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.readiness-check strong,
+.readiness-check small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.readiness-check small {
+  grid-column: 2;
+  color: #637083;
+}
+
+.readiness-check-meta {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.readiness-check-meta span {
+  font-weight: 800;
 }
 
 .audit-panel {
@@ -1321,6 +1756,16 @@ td {
   color: #273449;
 }
 
+.selected-row td {
+  background: #eef7ff;
+}
+
+.quality-detail-panel {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #edf0f4;
+}
+
 .row-actions {
   gap: 6px;
   flex-wrap: wrap;
@@ -1362,7 +1807,8 @@ td {
 
 .status-invalid,
 .status-rejected,
-.status-failed {
+.status-failed,
+.status-critical {
   background: #fee2e2;
   color: #991b1b;
 }
@@ -1391,14 +1837,21 @@ td {
 
 .status-cancelled,
 .status-discarded,
-.status-terminated {
+.status-terminated,
+.status-replaced {
   background: #f4f4f5;
   color: #52525b;
 }
 
-.status-high {
+.status-high,
+.status-review {
   background: #fef3c7;
   color: #92400e;
+}
+
+.status-watch {
+  background: #dbeafe;
+  color: #1e40af;
 }
 
 .status-urgent {
@@ -1488,6 +1941,9 @@ td {
 
   .workspace-grid,
   .portal-profile-grid,
+  .dashboard-chart-grid,
+  .action-center-grid,
+  .profit-loss-grid,
   .report-grid,
   .payroll-run-context {
     grid-template-columns: 1fr 1fr;
@@ -1515,10 +1971,23 @@ td {
 
   .workspace-grid,
   .portal-profile-grid,
+  .dashboard-chart-grid,
+  .action-center-grid,
+  .profit-loss-grid,
   .report-grid,
   .payroll-run-context,
+  .maintenance-expense-form,
   .payroll-line-editor {
     grid-template-columns: 1fr;
+  }
+
+  .action-item {
+    grid-template-columns: 1fr;
+  }
+
+  .action-item-meta {
+    justify-content: flex-start;
+    min-width: 0;
   }
 
   .payroll-run-panel,
@@ -1619,6 +2088,17 @@ td {
     grid-template-columns: 1fr;
   }
 
+  .receipt-print {
+    padding: 10px;
+  }
+
+  .receipt-print th,
+  .receipt-print td {
+    padding: 6px 4px;
+    font-size: 11px;
+    line-height: 1.25;
+  }
+
   .report-print-meta {
     text-align: left;
   }
@@ -1634,6 +2114,13 @@ td {
     background: #ffffff;
   }
 
+  .shell,
+  .content {
+    display: block;
+    min-height: auto;
+    padding: 0;
+  }
+
   body * {
     visibility: hidden;
   }
@@ -1647,8 +2134,8 @@ td {
 
   .receipt-print,
   .active-print-surface {
-    position: absolute;
-    inset: 0 auto auto 0;
+    position: static;
+    inset: auto;
     width: 100%;
     max-width: none;
     border: 0;
@@ -1656,7 +2143,29 @@ td {
     padding: 0;
   }
 
+  .content > .page-stack > :not(.print-surface):not(.active-print-surface):not(:has(.active-print-surface)):not(:has(.receipt-print)) {
+    display: none !important;
+  }
+
+  .page-stack:has(> .receipt-print) > :not(.receipt-print) {
+    display: none !important;
+  }
+
+  .workspace-grid:has(.receipt-print),
+  .page-stack:has(> .receipt-print) {
+    display: block !important;
+  }
+
+  .workspace-grid:has(.receipt-print) > :not(:has(.receipt-print)),
+  .page-stack:has(.active-print-surface) > :not(.active-print-surface):not(:has(.active-print-surface)) {
+    display: none !important;
+  }
+
   .customer-statement-print.active-print-surface {
+    display: grid;
+  }
+
+  .production-report-print.active-print-surface {
     display: grid;
   }
 
@@ -1664,6 +2173,8 @@ td {
     display: none !important;
   }
 
+  .sidebar,
+  .page-header,
   .screen-only {
     display: none !important;
   }
@@ -1684,9 +2195,23 @@ td {
   .receipt-title div,
   .receipt-info-grid div,
   .receipt-total,
-  .stat-card,
-  .panel {
+  .stat-card {
     break-inside: avoid;
+  }
+
+  .report-print .panel,
+  .report-section,
+  .profit-loss-statement {
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  .report-print-header,
+  .report-print-footer,
+  .panel-heading,
+  tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
 
   table {
@@ -1700,7 +2225,8 @@ td {
   }
 
   .report-grid,
-  .stat-grid {
+  .stat-grid,
+  .profit-loss-grid {
     grid-template-columns: 1fr;
     gap: 10px;
   }
@@ -1719,6 +2245,7 @@ td {
   .active-print-surface.report-print-maintenanceZone .management-section-maintenanceZone,
   .active-print-surface.report-print-maintenanceAssignee .management-section-maintenanceAssignee,
   .active-print-surface.report-print-maintenanceRegister .management-section-maintenanceRegister,
+  .active-print-surface.report-print-profitLoss .report-section-profitLoss,
   .active-print-surface.report-print-billingStatus .report-section-billingStatus,
   .active-print-surface.report-print-collectionsChannel .report-section-collectionsChannel,
   .active-print-surface.report-print-billingZone .report-section-billingZone,

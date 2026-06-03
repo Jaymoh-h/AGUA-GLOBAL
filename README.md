@@ -32,13 +32,24 @@ AGUA-GLOBAL/
 - Receipt-level payments by selected customer, with allocation across oldest unpaid bills
 - Payment channels for cash, bank, M-Pesa/paybill, and manual adjustments
 - Editable receipts that reverse and reapply allocations
+- Payment voiding with suspense handling for later reapplication or discard
 - Printable receipts with business profile header, logo, allocations, and footer notes
 - CSV payment imports with preview validation before committing receipts
+- Bank statement PDF import trainer for extracting, mapping, and matching payments
 - Expense register with manual entry and CSV imports
 - Business settings for shared logo/contact/payment/footer details
 - Audit trail for customer, reading, bill, billing, payment, and meter changes
+- Detailed audit record view with before/after change details
 - User creation and role assignment
+- Password reset by email when SMTP is configured
 - Dashboard summaries for billed water units, cash collected, bills due, and arrears
+- Customer portal with dashboard, bills, receipts, requests, and PDF statement download
+- Email/SMS/WhatsApp invoice and receipt delivery hooks with delivery history
+- Communications center for invoice alerts, saved templates, campaigns, and campaign results
+- WhatsApp sending through Twilio or Meta, including approved template metadata
+- Dual/source-side meter billing review and payability promotion
+- Weekly production monitoring with source meters and electricity top-ups
+- Payroll management and payroll expense posting
 - Printable full or individual accountant reports with business profile header, logo, and footer notes
 - REST API routes for the main resources
 
@@ -67,6 +78,21 @@ Use these files in pgAdmin, DBeaver, TablePlus, or another PostgreSQL DBMS:
 - Account closure and adjustments migration path: `server/database/migrations/017_account_closure_and_adjustments.sql`
 - Penalty policy and waivers migration path: `server/database/migrations/018_penalty_policy_and_waivers.sql`
 - Tariff effective dates migration path: `server/database/migrations/019_tariff_effective_dates.sql`
+- Payment suspense migration path: `server/database/migrations/020_payment_suspense.sql`
+- Dual meter billing migration path: `server/database/migrations/021_dual_meter_billing.sql`
+- Production monitoring migration path: `server/database/migrations/022_production_monitoring.sql`
+- Bill payability migration path: `server/database/migrations/023_bill_payability_promotion.sql`
+- Payroll migration path: `server/database/migrations/024_payroll_management.sql`
+- Password reset migration path: `server/database/migrations/025_password_reset_tokens.sql`
+- Payroll expense posting migration path: `server/database/migrations/026_payroll_expense_posting.sql`
+- Payroll lifecycle migration path: `server/database/migrations/027_payroll_lifecycle_and_period_payees.sql`
+- Document delivery logs migration path: `server/database/migrations/028_document_delivery_logs.sql`
+- Customer contact preferences migration path: `server/database/migrations/029_customer_contact_preferences.sql`
+- Production top-up expenses migration path: `server/database/migrations/030_production_topup_expenses.sql`
+- Communication campaigns migration path: `server/database/migrations/031_communication_campaigns.sql`
+- Communication campaign names migration path: `server/database/migrations/032_communication_campaign_names.sql`
+- Communication templates migration path: `server/database/migrations/033_communication_templates.sql`
+- WhatsApp template metadata migration path: `server/database/migrations/034_whatsapp_template_metadata.sql`
 
 Run `schema.sql` first, then `seed.sql`.
 
@@ -162,6 +188,27 @@ cd server
 npm.cmd run db:migrate:tariff-effective-dates
 ```
 
+For the later operational modules, run the matching scripts as needed:
+
+```powershell
+cd server
+npm.cmd run db:migrate:payment-suspense
+npm.cmd run db:migrate:dual-meter-billing
+npm.cmd run db:migrate:production-monitoring
+npm.cmd run db:migrate:bill-payability
+npm.cmd run db:migrate:payroll
+npm.cmd run db:migrate:password-reset
+npm.cmd run db:migrate:payroll-expense-posting
+npm.cmd run db:migrate:payroll-lifecycle
+npm.cmd run db:migrate:document-delivery
+npm.cmd run db:migrate:customer-contact-preferences
+npm.cmd run db:migrate:production-topup-expenses
+npm.cmd run db:migrate:communications
+node src/db/runSqlFile.js database/migrations/032_communication_campaign_names.sql
+node src/db/runSqlFile.js database/migrations/033_communication_templates.sql
+node src/db/runSqlFile.js database/migrations/034_whatsapp_template_metadata.sql
+```
+
 ## Local Setup
 
 Prerequisites: Node.js with npm, PostgreSQL, and a PostgreSQL DBMS such as pgAdmin or DBeaver if you want visual monitoring.
@@ -249,6 +296,21 @@ npm.cmd run db:migrate:numbering
 npm.cmd run db:migrate:account-adjustments
 npm.cmd run db:migrate:penalty-policy
 npm.cmd run db:migrate:tariff-effective-dates
+npm.cmd run db:migrate:payment-suspense
+npm.cmd run db:migrate:dual-meter-billing
+npm.cmd run db:migrate:production-monitoring
+npm.cmd run db:migrate:bill-payability
+npm.cmd run db:migrate:payroll
+npm.cmd run db:migrate:password-reset
+npm.cmd run db:migrate:payroll-expense-posting
+npm.cmd run db:migrate:payroll-lifecycle
+npm.cmd run db:migrate:document-delivery
+npm.cmd run db:migrate:customer-contact-preferences
+npm.cmd run db:migrate:production-topup-expenses
+npm.cmd run db:migrate:communications
+node src/db/runSqlFile.js database/migrations/032_communication_campaign_names.sql
+node src/db/runSqlFile.js database/migrations/033_communication_templates.sql
+node src/db/runSqlFile.js database/migrations/034_whatsapp_template_metadata.sql
 ```
 
 ### 2. API Project
@@ -272,6 +334,48 @@ JWT_SECRET=<long-random-secret>
 JWT_EXPIRES_IN=8h
 CLIENT_ORIGIN=https://<client-project>.vercel.app
 LOGO_STORAGE_MODE=data-url
+```
+
+Optional delivery environment variables:
+
+```text
+SMTP_HOST=<smtp-host>
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=<smtp-username>
+SMTP_PASS=<smtp-password>
+SMTP_FROM=<verified-sender-email>
+
+SMS_PROVIDER=twilio
+SMS_DEFAULT_COUNTRY_CODE=254
+TWILIO_ACCOUNT_SID=<twilio-account-sid>
+TWILIO_AUTH_TOKEN=<twilio-auth-token>
+TWILIO_PHONE_NUMBER=<twilio-sms-number>
+TWILIO_MESSAGING_SERVICE_SID=<optional-twilio-messaging-service-sid>
+
+WHATSAPP_PROVIDER=twilio
+WHATSAPP_DEFAULT_COUNTRY_CODE=254
+WHATSAPP_TWILIO_ACCOUNT_SID=<twilio-account-sid>
+WHATSAPP_TWILIO_AUTH_TOKEN=<twilio-auth-token>
+WHATSAPP_TWILIO_FROM=<twilio-whatsapp-sender>
+```
+
+For Africa's Talking SMS instead of Twilio, use:
+
+```text
+SMS_PROVIDER=africastalking
+AT_USERNAME=<africas-talking-username>
+AT_API_KEY=<africas-talking-api-key>
+AT_SENDER_ID=<optional-sender-id>
+```
+
+For Meta WhatsApp Cloud API instead of Twilio, use:
+
+```text
+WHATSAPP_PROVIDER=meta
+WHATSAPP_PHONE_NUMBER_ID=<meta-phone-number-id>
+WHATSAPP_ACCESS_TOKEN=<meta-access-token>
+WHATSAPP_API_VERSION=v20.0
 ```
 
 After deployment, verify:
@@ -307,6 +411,33 @@ After the client project has its final URL or custom domain, update the API proj
 - `LOGO_STORAGE_MODE=data-url` stores uploaded business logos in PostgreSQL so they survive Vercel serverless deployments. Use `filesystem` only for local development or a server with durable disk storage.
 - If a custom domain is added later, update both `VITE_API_URL` and `CLIENT_ORIGIN` to the new production URLs.
 
+## Communications Setup
+
+The Communications page can send invoice alerts by email, SMS, or WhatsApp to selected customers and records campaign history.
+
+Before sending:
+
+- Run migrations `028` through `034`.
+- Add customer email/phone details and enable the intended delivery channel on the customer record.
+- Configure SMTP for email, SMS provider variables for SMS, and WhatsApp provider variables for WhatsApp.
+- For WhatsApp free-form sends, provider policy may still reject messages outside the allowed customer-service window.
+
+For approved WhatsApp templates:
+
+- In the Communications page, select `WhatsApp`.
+- Save or update a communication template.
+- Set `Approved template / Content SID`.
+  - Meta uses the approved WhatsApp template name.
+  - Twilio uses the Content SID, usually starting with `HX`.
+- Set the language code, for example `en_US`.
+- Add comma-separated variables in the same order as the approved template body placeholders, for example:
+
+```text
+customer_name, acc_number, invoice_period, total_outstanding, due_date
+```
+
+The message preview still shows the rendered internal alert body. When an approved WhatsApp template is configured, the provider receives the approved template payload plus the ordered variable values.
+
 ## Login Troubleshooting
 
 If login says `Something went wrong` or `Database login failed`, check `server/.env`.
@@ -335,14 +466,15 @@ npm.cmd run db:check
 npm.cmd run dev
 ```
 
-## Important Next Requirements To Decide
+## Remaining Work
 
-These are the decisions that will shape the next version:
+Most core modules are now implemented. The remaining work is mainly hardening, automation, and larger external integrations:
 
-- Billing period rules: monthly closing date, due date, penalties, and deposits.
-- Meter replacement workflow: how to reset or transfer previous readings.
-- Payment integrations: manual cash, bank, M-Pesa/paybill, receipt numbers.
-- Customer portal scope: whether customers can view bills, download receipts, or submit complaints.
-- Tariffs: single flat rate now; future blocks, fixed charges, VAT, reconnection fees, or exemptions.
-- Audit trail: who changed customers, readings, bills, and payments.
-- Reports: regulatory reports, accountant exports, aging analysis, and route summaries for meter readers.
+- Run end-to-end test passes for billing, receipts, imports, corrections, payroll, production, reports, and customer portal flows.
+- Add automated test coverage around high-risk money and meter-reading workflows.
+- Complete live provider testing for SMS and WhatsApp after production credentials and approved templates are configured.
+- Add M-Pesa/paybill transaction import or API integration.
+- Add bank integration beyond the current PDF statement import trainer.
+- Add email/SMS/WhatsApp scheduling, retries, and opt-out handling if bulk messaging volume grows.
+- Add a formal migration runner/table so applied migrations are tracked automatically.
+- Finish production deployment checks, backups, restore drills, and role-by-role user acceptance testing.

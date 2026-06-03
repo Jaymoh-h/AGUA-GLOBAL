@@ -1,6 +1,7 @@
-import { Ban, CheckCircle2, Play, RefreshCw, Save, Wrench } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Ban, Banknote, CheckCircle2, Play, RefreshCw, Save, Wrench, X } from "lucide-react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
+import FocusNotice from "../components/FocusNotice";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
@@ -8,6 +9,7 @@ import { api } from "../services/api";
 const today = () => new Date().toISOString().slice(0, 10);
 const date = (value) => value?.slice(0, 10) || "-";
 const label = (value) => String(value || "-").replaceAll("_", " ");
+const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 
 const emptyForm = () => ({
   title: "",
@@ -21,7 +23,19 @@ const emptyForm = () => ({
   description: ""
 });
 
-function MaintenancePage() {
+const emptyExpenseDraft = (request = {}) => ({
+  expense_date: today(),
+  category: `Maintenance - ${label(request.category || "other")}`,
+  vendor: "",
+  description: request.id ? `${request.request_number || `Request ${request.id}`}: ${request.title}` : "",
+  amount: "",
+  payment_channel: "cash",
+  reference: "",
+  receipt_number: "",
+  notes: ""
+});
+
+function MaintenancePage({ navigationIntent, onClearNavigationIntent }) {
   const [requests, setRequests] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [zones, setZones] = useState([]);
@@ -29,6 +43,8 @@ function MaintenancePage() {
   const [form, setForm] = useState(emptyForm);
   const [statusFilter, setStatusFilter] = useState("");
   const [resolutionDrafts, setResolutionDrafts] = useState({});
+  const [activeExpenseRequestId, setActiveExpenseRequestId] = useState(null);
+  const [expenseDrafts, setExpenseDrafts] = useState({});
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -110,6 +126,14 @@ function MaintenancePage() {
       setMessage("Resolution notes are required before closing a request.");
       return;
     }
+    if (Number(request.expense_count || 0) === 0) {
+      const attachExpense = window.confirm("No expense has been attached to this request. Add one before resolving?");
+      if (attachExpense) {
+        openExpenseForm(request);
+        setMessage("Add the expense, then resolve the request.");
+        return;
+      }
+    }
     setSaving(true);
     try {
       await api.maintenance.resolve(request.id, { resolution_notes });
@@ -122,7 +146,58 @@ function MaintenancePage() {
       setSaving(false);
     }
   };
-  const requestTable = useTableControls(requests, {
+
+  const openExpenseForm = (request) => {
+    setActiveExpenseRequestId(request.id);
+    setExpenseDrafts((current) => ({
+      ...current,
+      [request.id]: current[request.id] || emptyExpenseDraft(request)
+    }));
+  };
+
+  const setExpenseField = (requestId, field, value) => {
+    setExpenseDrafts((current) => ({
+      ...current,
+      [requestId]: {
+        ...emptyExpenseDraft(),
+        ...(current[requestId] || {}),
+        [field]: value
+      }
+    }));
+  };
+
+  const submitExpense = async (event, request) => {
+    event.preventDefault();
+    const draft = expenseDrafts[request.id] || emptyExpenseDraft(request);
+    setMessage("");
+    setSaving(true);
+    try {
+      await api.maintenance.addExpense(request.id, {
+        ...draft,
+        amount: Number(draft.amount)
+      });
+      setActiveExpenseRequestId(null);
+      setExpenseDrafts((current) => ({ ...current, [request.id]: emptyExpenseDraft(request) }));
+      await loadRequests();
+      setMessage(`Expense posted to ${request.request_number || "maintenance request"}.`);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const focusKey = navigationIntent?.page === "maintenance" ? navigationIntent.focus : "";
+  const hasMaintenanceFocus = ["urgent_maintenance", "overdue_maintenance"].includes(focusKey);
+  const focusedRequests = requests.filter((request) => {
+    if (focusKey === "urgent_maintenance") {
+      return request.priority === "urgent" && !["resolved", "cancelled"].includes(request.status);
+    }
+    if (focusKey === "overdue_maintenance") {
+      return request.target_date && request.target_date.slice(0, 10) < today() && ["open", "in_progress"].includes(request.status);
+    }
+    return true;
+  });
+  const requestTable = useTableControls(focusedRequests, {
     searchFields: [
       "request_number",
       "title",
@@ -158,6 +233,22 @@ function MaintenancePage() {
         </div>
       </header>
 
+      {focusKey === "urgent_maintenance" ? (
+        <FocusNotice
+          title="Urgent maintenance"
+          detail="Showing active requests marked urgent."
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
+      {focusKey === "overdue_maintenance" ? (
+        <FocusNotice
+          title="Overdue maintenance"
+          detail="Showing open or in-progress requests past their target date."
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
+
+      {!hasMaintenanceFocus ? (
       <div className="stat-grid">
         <div className="stat-card">
           <span>Open</span>
@@ -180,8 +271,10 @@ function MaintenancePage() {
           <small>Current view</small>
         </div>
       </div>
+      ) : null}
 
       <section className="workspace-grid">
+        {!hasMaintenanceFocus ? (
         <form className="panel form-grid" onSubmit={submit}>
           <div className="panel-heading">
             <h3>Raise Request</h3>
@@ -271,6 +364,7 @@ function MaintenancePage() {
             Save request
           </button>
         </form>
+        ) : null}
 
         <div className="panel wide-panel">
           <div className="panel-heading">
@@ -293,84 +387,184 @@ function MaintenancePage() {
               </thead>
               <tbody>
                 {requestTable.total ? (
-                  requestTable.visibleRows.map((request) => (
-                    <tr key={request.id}>
-                      <td>
-                        <strong>{request.request_number || `Request ${request.id}`}</strong>
-                        <small>{request.title}</small>
-                        <small>Reported {date(request.reported_at)}</small>
-                      </td>
-                      <td>
-                        {request.customer_name || "General"}
-                        <small>{request.acc_number || request.zone_name || "-"}</small>
-                      </td>
-                      <td>{label(request.category)}</td>
-                      <td>
-                        <span className={`status status-${request.priority}`}>{label(request.priority)}</span>
-                      </td>
-                      <td>
-                        <StatusBadge status={request.status} />
-                      </td>
-                      <td>
-                        {request.assigned_to_name || "Unassigned"}
-                        <small>{request.target_date ? `Target ${date(request.target_date)}` : "No target date"}</small>
-                      </td>
-                      <td>
-                        {request.status === "resolved" ? (
-                          <>
-                            <span>{date(request.resolved_at)}</span>
-                            <small>{request.resolution_notes || "-"}</small>
-                          </>
-                        ) : (
-                          <textarea
-                            value={resolutionDrafts[request.id] || ""}
-                            onChange={(event) =>
-                              setResolutionDrafts((current) => ({ ...current, [request.id]: event.target.value }))
-                            }
-                            rows="2"
-                            placeholder="Resolution notes"
-                          />
-                        )}
-                      </td>
-                      <td>
-                        <div className="row-actions">
-                          {request.status === "open" ? (
-                            <button
-                              className="icon-button"
-                              type="button"
-                              onClick={() => updateRequest(request.id, { status: "in_progress" }, "Maintenance request started.")}
-                              title="Start work"
-                              disabled={saving}
-                            >
-                              <Play size={16} />
-                            </button>
-                          ) : null}
-                          {request.status !== "resolved" && request.status !== "cancelled" ? (
-                            <button
-                              className="icon-button"
-                              type="button"
-                              onClick={() => resolveRequest(request)}
-                              title="Resolve request"
-                              disabled={saving}
-                            >
-                              <CheckCircle2 size={16} />
-                            </button>
-                          ) : null}
-                          {request.status !== "resolved" && request.status !== "cancelled" ? (
-                            <button
-                              className="icon-button"
-                              type="button"
-                              onClick={() => updateRequest(request.id, { status: "cancelled" }, "Maintenance request cancelled.")}
-                              title="Cancel request"
-                              disabled={saving}
-                            >
-                              <Ban size={16} />
-                            </button>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                  requestTable.visibleRows.map((request) => {
+                    const expenseDraft = expenseDrafts[request.id] || emptyExpenseDraft(request);
+                    return (
+                      <Fragment key={request.id}>
+                        <tr>
+                          <td>
+                            <strong>{request.request_number || `Request ${request.id}`}</strong>
+                            <small>{request.title}</small>
+                            <small>Reported {date(request.reported_at)}</small>
+                            {Number(request.expense_count || 0) > 0 ? (
+                              <small>{Number(request.expense_count).toLocaleString()} expense(s) | {money(request.expense_total)}</small>
+                            ) : null}
+                          </td>
+                          <td>
+                            {request.customer_name || "General"}
+                            <small>{request.acc_number || request.zone_name || "-"}</small>
+                          </td>
+                          <td>{label(request.category)}</td>
+                          <td>
+                            <span className={`status status-${request.priority}`}>{label(request.priority)}</span>
+                          </td>
+                          <td>
+                            <StatusBadge status={request.status} />
+                          </td>
+                          <td>
+                            {request.assigned_to_name || "Unassigned"}
+                            <small>{request.target_date ? `Target ${date(request.target_date)}` : "No target date"}</small>
+                          </td>
+                          <td>
+                            {request.status === "resolved" ? (
+                              <>
+                                <span>{date(request.resolved_at)}</span>
+                                <small>{request.resolution_notes || "-"}</small>
+                              </>
+                            ) : (
+                              <textarea
+                                value={resolutionDrafts[request.id] || ""}
+                                onChange={(event) =>
+                                  setResolutionDrafts((current) => ({ ...current, [request.id]: event.target.value }))
+                                }
+                                rows="2"
+                                placeholder="Resolution notes"
+                              />
+                            )}
+                          </td>
+                          <td>
+                            <div className="row-actions">
+                              {request.status === "open" ? (
+                                <button
+                                  className="icon-button"
+                                  type="button"
+                                  onClick={() => updateRequest(request.id, { status: "in_progress" }, "Maintenance request started.")}
+                                  title="Start work"
+                                  disabled={saving}
+                                >
+                                  <Play size={16} />
+                                </button>
+                              ) : null}
+                              {request.status !== "cancelled" ? (
+                                <button
+                                  className="icon-button"
+                                  type="button"
+                                  onClick={() => openExpenseForm(request)}
+                                  title="Attach expense"
+                                  disabled={saving}
+                                >
+                                  <Banknote size={16} />
+                                </button>
+                              ) : null}
+                              {request.status !== "resolved" && request.status !== "cancelled" ? (
+                                <button
+                                  className="icon-button"
+                                  type="button"
+                                  onClick={() => resolveRequest(request)}
+                                  title="Resolve request"
+                                  disabled={saving}
+                                >
+                                  <CheckCircle2 size={16} />
+                                </button>
+                              ) : null}
+                              {request.status !== "resolved" && request.status !== "cancelled" ? (
+                                <button
+                                  className="icon-button"
+                                  type="button"
+                                  onClick={() => updateRequest(request.id, { status: "cancelled" }, "Maintenance request cancelled.")}
+                                  title="Cancel request"
+                                  disabled={saving}
+                                >
+                                  <Ban size={16} />
+                                </button>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                        {activeExpenseRequestId === request.id ? (
+                          <tr>
+                            <td colSpan="8">
+                              <form className="maintenance-expense-form" onSubmit={(event) => submitExpense(event, request)}>
+                                <label>
+                                  Date
+                                  <input
+                                    value={expenseDraft.expense_date}
+                                    onChange={(event) => setExpenseField(request.id, "expense_date", event.target.value)}
+                                    type="date"
+                                    required
+                                  />
+                                </label>
+                                <label>
+                                  Category
+                                  <input
+                                    value={expenseDraft.category}
+                                    onChange={(event) => setExpenseField(request.id, "category", event.target.value)}
+                                    required
+                                  />
+                                </label>
+                                <label>
+                                  Vendor
+                                  <input
+                                    value={expenseDraft.vendor}
+                                    onChange={(event) => setExpenseField(request.id, "vendor", event.target.value)}
+                                  />
+                                </label>
+                                <label>
+                                  Amount
+                                  <input
+                                    value={expenseDraft.amount}
+                                    onChange={(event) => setExpenseField(request.id, "amount", event.target.value)}
+                                    type="number"
+                                    min="0.01"
+                                    step="0.01"
+                                    required
+                                  />
+                                </label>
+                                <label>
+                                  Channel
+                                  <select
+                                    value={expenseDraft.payment_channel}
+                                    onChange={(event) => setExpenseField(request.id, "payment_channel", event.target.value)}
+                                  >
+                                    <option value="cash">Cash</option>
+                                    <option value="bank">Bank</option>
+                                    <option value="mpesa_paybill">M-Pesa / Paybill</option>
+                                    <option value="manual_adjustment">Manual adjustment</option>
+                                  </select>
+                                </label>
+                                <label>
+                                  Reference
+                                  <input
+                                    value={expenseDraft.reference}
+                                    onChange={(event) => setExpenseField(request.id, "reference", event.target.value)}
+                                  />
+                                </label>
+                                <label className="full-span">
+                                  Description
+                                  <textarea
+                                    value={expenseDraft.description}
+                                    onChange={(event) => setExpenseField(request.id, "description", event.target.value)}
+                                    rows="2"
+                                    required
+                                  />
+                                </label>
+                                <div className="row-actions full-span">
+                                  <button className="primary-button" type="submit" disabled={saving}>
+                                    <Save size={16} />
+                                    Post expense
+                                  </button>
+                                  <button type="button" onClick={() => setActiveExpenseRequestId(null)} disabled={saving}>
+                                    <X size={16} />
+                                    Close
+                                  </button>
+                                </div>
+                              </form>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })
                 ) : (
                   <EmptyTableRow colSpan={8} title="No maintenance requests found" detail="Create a request or adjust the search." />
                 )}

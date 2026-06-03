@@ -1,6 +1,7 @@
 import { Banknote, CalendarDays, CheckCircle2, Download, Lock, Plus, Save, Send, UserMinus, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
+import FocusNotice from "../components/FocusNotice";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
@@ -23,7 +24,7 @@ const readDefaultUnits = (metadata) => {
   return Number.isFinite(units) && units >= 0 ? units : "";
 };
 
-function PayrollPage({ user }) {
+function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [payees, setPayees] = useState([]);
   const [runs, setRuns] = useState([]);
   const [selectedRun, setSelectedRun] = useState(null);
@@ -128,6 +129,16 @@ function PayrollPage({ user }) {
   useEffect(() => {
     load().catch((err) => setMessage(err.message));
   }, []);
+
+  const focusKey = navigationIntent?.page === "payroll" ? navigationIntent.focus : "";
+  const hasPayrollFocus = focusKey === "payroll_attention";
+  useEffect(() => {
+    if (focusKey !== "payroll_attention" || !runs.length) return;
+    const attentionRun = runs.find((run) => ["pending_approval", "approved"].includes(run.status));
+    if (attentionRun && attentionRun.id !== selectedRun?.id) {
+      api.payroll.getRun(attentionRun.id).then(setSelectedRun).catch((err) => setMessage(err.message));
+    }
+  }, [focusKey, runs, selectedRun?.id]);
 
   const setPayeeField = (field, value) => {
     setPayeeForm((current) => {
@@ -346,17 +357,28 @@ function PayrollPage({ user }) {
         </select>
       </header>
 
+      {focusKey === "payroll_attention" ? (
+        <FocusNotice
+          title="Payroll awaiting action"
+          detail="Selected the first pay run pending approval or payment, where available."
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
+
+      {!hasPayrollFocus ? (
       <div className="stat-grid">
         <StatCard label="Net Payable" value={money(summary.payable)} detail={selectedRun?.name || "No run selected"} />
         <StatCard label="Gross" value={money(summary.gross)} detail={`${summary.payees} line item(s)`} />
         <StatCard label="Period Payees" value={summary.manual.toLocaleString()} detail="Casuals and contractors" />
         <StatCard label="Posted Expenses" value={summary.posted.toLocaleString()} detail={selectedRun ? label(selectedRun.status) : "No run"} />
       </div>
+      ) : null}
 
       <ToastMessage message={message} type={toastTypeFromMessage(message)} onClose={() => setMessage("")} />
 
       <section className="workspace-grid payroll-workspace-grid">
         <div className="page-stack">
+          {!hasPayrollFocus ? (
           <form className="panel form-grid payroll-create-run" onSubmit={createRun}>
             <div className="panel-heading">
               <h3>Create Pay Run</h3>
@@ -394,7 +416,9 @@ function PayrollPage({ user }) {
               Create draft run
             </button>
           </form>
+          ) : null}
 
+          {!hasPayrollFocus ? (
           <form className="panel form-grid payroll-recurring-form" onSubmit={createPayee}>
             <div className="panel-heading">
               <h3>Add Recurring Payee</h3>
@@ -466,7 +490,9 @@ function PayrollPage({ user }) {
               Save payee
             </button>
           </form>
+          ) : null}
 
+          {!hasPayrollFocus ? (
           <form className="panel form-grid payroll-period-form" onSubmit={addPeriodPayee}>
             <div className="panel-heading">
               <h3>Add To This Run</h3>
@@ -548,6 +574,7 @@ function PayrollPage({ user }) {
               Add period payee
             </button>
           </form>
+          ) : null}
 
           <div className="panel payroll-run-panel">
             <div className="panel-heading">
@@ -741,6 +768,7 @@ function PayrollPage({ user }) {
             </form>
           ) : null}
 
+          {!hasPayrollFocus ? (
           <div className="panel payroll-recurring-register">
             <div className="panel-heading">
               <h3>Recurring Payees</h3>
@@ -806,7 +834,9 @@ function PayrollPage({ user }) {
               </table>
             </div>
           </div>
+          ) : null}
 
+          {!hasPayrollFocus ? (
           <div className="panel payroll-period-register">
             <div className="panel-heading">
               <h3>Period-Only Payees</h3>
@@ -852,6 +882,7 @@ function PayrollPage({ user }) {
               </table>
             </div>
           </div>
+          ) : null}
         </div>
       </section>
     </section>

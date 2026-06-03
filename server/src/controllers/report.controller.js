@@ -1,5 +1,6 @@
 const pool = require("../db/pool");
 const asyncHandler = require("../utils/asyncHandler");
+const { recordAuditEvent } = require("../services/audit.service");
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -14,6 +15,290 @@ const getDateRange = (query) => {
   const startDate = isoDatePattern.test(query.start_date || "") ? query.start_date : getDefaultStartDate();
   const endDate = isoDatePattern.test(query.end_date || "") ? query.end_date : getDefaultEndDate();
   return { startDate, endDate };
+};
+
+const toNumber = (value) => Number(value || 0);
+const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+const relationExists = async (name) => {
+  const { rows } = await pool.query("SELECT to_regclass($1) AS relation_name", [`public.${name}`]);
+  return Boolean(rows[0]?.relation_name);
+};
+
+const line = (label, amount, detail = "") => ({
+  label,
+  amount: roundMoney(amount),
+  detail
+});
+
+const buildStatement = ({ basis, revenueLines, expenseLines, notes = [] }) => {
+  const revenue = roundMoney(revenueLines.reduce((sum, row) => sum + toNumber(row.amount), 0));
+  const expenses = roundMoney(expenseLines.reduce((sum, row) => sum + toNumber(row.amount), 0));
+  const netProfit = roundMoney(revenue - expenses);
+  return {
+    basis,
+    revenue_lines: revenueLines,
+    expense_lines: expenseLines,
+    totals: {
+      revenue,
+      expenses,
+      net_profit: netProfit,
+      margin: revenue > 0 ? netProfit / revenue : 0
+    },
+    notes
+  };
+};
+
+const backupQueries = [
+  ["customers", "SELECT * FROM customers ORDER BY id"],
+  ["meters", "SELECT * FROM meters ORDER BY id"],
+  ["meter_readings", "SELECT * FROM meter_readings ORDER BY id"],
+  ["meter_events", "SELECT * FROM meter_events ORDER BY id"],
+  ["billing_periods", "SELECT * FROM billing_periods ORDER BY period_start, id"],
+  ["billing_settings", "SELECT * FROM billing_settings ORDER BY id"],
+  ["rates", "SELECT * FROM rates ORDER BY id"],
+  ["tariff_blocks", "SELECT * FROM tariff_blocks ORDER BY rate_id, sort_order, id"],
+  ["rate_versions", "SELECT * FROM rate_versions ORDER BY rate_id, effective_from, id"],
+  ["rate_version_blocks", "SELECT * FROM rate_version_blocks ORDER BY rate_version_id, sort_order, id"],
+  ["zones", "SELECT * FROM zones ORDER BY id"],
+  ["bills", "SELECT * FROM bills ORDER BY id"],
+  ["payments", "SELECT * FROM payments ORDER BY id"],
+  ["payment_allocations", "SELECT * FROM payment_allocations ORDER BY id"],
+  ["payment_suspense_items", "SELECT * FROM payment_suspense_items ORDER BY id"],
+  ["bill_penalty_applications", "SELECT * FROM bill_penalty_applications ORDER BY id"],
+  ["source_billing_requests", "SELECT * FROM source_billing_requests ORDER BY id"],
+  ["expenses", "SELECT * FROM expenses ORDER BY id"],
+  ["customer_deposit_transactions", "SELECT * FROM customer_deposit_transactions ORDER BY id"],
+  ["customer_adjustments", "SELECT * FROM customer_adjustments ORDER BY id"],
+  ["maintenance_requests", "SELECT * FROM maintenance_requests ORDER BY id"],
+  ["production_source_meters", "SELECT * FROM production_source_meters ORDER BY id"],
+  ["production_meter_events", "SELECT * FROM production_meter_events ORDER BY id"],
+  ["production_electricity_topups", "SELECT * FROM production_electricity_topups ORDER BY id"],
+  ["production_weekly_readings", "SELECT * FROM production_weekly_readings ORDER BY id"],
+  ["production_meter_readings", "SELECT * FROM production_meter_readings ORDER BY id"],
+  ["payroll_payees", "SELECT * FROM payroll_payees ORDER BY id"],
+  ["payroll_runs", "SELECT * FROM payroll_runs ORDER BY id"],
+  ["payroll_line_items", "SELECT * FROM payroll_line_items ORDER BY id"],
+  ["business_settings", "SELECT * FROM business_settings ORDER BY id"],
+  ["portal_user_customers", "SELECT * FROM portal_user_customers ORDER BY id"],
+  ["document_delivery_logs", "SELECT * FROM document_delivery_logs ORDER BY id"],
+  ["communication_templates", "SELECT * FROM communication_templates ORDER BY id"],
+  ["communication_campaigns", "SELECT * FROM communication_campaigns ORDER BY id"],
+  ["communication_campaign_recipients", "SELECT * FROM communication_campaign_recipients ORDER BY id"],
+  [
+    "users",
+    `SELECT id, customer_id, name, email, phone, role, is_active,
+            must_change_password, password_changed_at, last_login_at, created_at, updated_at
+     FROM users
+     ORDER BY id`
+  ],
+  ["audit_events", "SELECT * FROM audit_events ORDER BY id"]
+];
+
+const buildOperationalBackup = async () => {
+  const datasets = {};
+  const counts = {};
+  const skipped = [];
+
+  for (const [key, sql] of backupQueries) {
+    if (!(await relationExists(key))) {
+      skipped.push(key);
+      continue;
+    }
+    const { rows } = await pool.query(sql);
+    datasets[key] = rows;
+    counts[key] = rows.length;
+  }
+
+  return { datasets, counts, skipped };
+};
+
+const getPayrollProfitAndLossLines = async (startDate, endDate) => {
+  if (!(await relationExists("payroll_runs"))) {
+    return {
+      cash: line("Payroll paid", 0, "Payroll module is not installed."),
+      accrual: line("Payroll accrued", 0, "Payroll module is not installed.")
+    };
+  }
+
+  const [cashResult, accrualResult] = await Promise.all([
+    pool.query(
+      `SELECT COALESCE(SUM(total_net), 0) AS amount
+       FROM payroll_runs
+       WHERE status IN ('paid', 'locked')
+         AND paid_at::date BETWEEN $1 AND $2`,
+      [startDate, endDate]
+    ),
+    pool.query(
+      `SELECT COALESCE(SUM(total_net), 0) AS amount
+       FROM payroll_runs
+       WHERE status IN ('approved', 'paid', 'locked')
+         AND period_start <= $2::date
+         AND period_end >= $1::date`,
+      [startDate, endDate]
+    )
+  ]);
+
+  return {
+    cash: line("Payroll paid", cashResult.rows[0]?.amount, "Paid or locked payroll runs paid in the period."),
+    accrual: line("Payroll accrued", accrualResult.rows[0]?.amount, "Approved, paid, or locked payroll runs overlapping the period.")
+  };
+};
+
+const getProductionElectricityAccrualLine = async (startDate, endDate) => {
+  if (!(await relationExists("production_weekly_readings"))) {
+    return line("Electricity consumed", 0, "Production monitoring is not installed.");
+  }
+
+  const weeklyResult = await pool.query(
+    `SELECT *
+     FROM production_weekly_readings
+     WHERE reading_date BETWEEN $1 AND $2
+     ORDER BY reading_date ASC`,
+    [startDate, endDate]
+  );
+
+  let totalCost = 0;
+  for (const week of weeklyResult.rows) {
+    const previousWeekResult = await pool.query(
+      `SELECT *
+       FROM production_weekly_readings
+       WHERE reading_date < $1
+       ORDER BY reading_date DESC
+       LIMIT 1`,
+      [week.reading_date]
+    );
+    const previousWeek = previousWeekResult.rows[0] || null;
+    const periodStart = previousWeek?.reading_date || week.reading_date;
+
+    const topupsResult = await pool.query(
+      `SELECT COALESCE(SUM(kwh_units), 0) AS kwh_units,
+              COALESCE(SUM(total_cost), 0) AS total_cost
+       FROM production_electricity_topups
+       WHERE topup_date > $1 AND topup_date <= $2`,
+      [periodStart, week.reading_date]
+    );
+    const topupUnits = toNumber(topupsResult.rows[0]?.kwh_units);
+    const topupCost = toNumber(topupsResult.rows[0]?.total_cost);
+
+    const lastTopupResult = await pool.query(
+      `SELECT cost_per_unit
+       FROM production_electricity_topups
+       WHERE topup_date <= $1
+       ORDER BY topup_date DESC, id DESC
+       LIMIT 1`,
+      [week.reading_date]
+    );
+    const costPerUnit = topupUnits > 0 ? topupCost / topupUnits : toNumber(lastTopupResult.rows[0]?.cost_per_unit);
+    const electricityUsed = Math.max(
+      toNumber(previousWeek?.prepaid_kwh_balance) + topupUnits - toNumber(week.prepaid_kwh_balance),
+      0
+    );
+    totalCost += electricityUsed * costPerUnit;
+  }
+
+  return line("Electricity consumed", totalCost, "Production electricity cost based on usage and latest top-up cost basis.");
+};
+
+const buildProfitAndLoss = async (startDate, endDate) => {
+  const dateParams = [startDate, endDate];
+  const [cashRevenueResult, accrualRevenueResult, cashExpensesResult, accrualExpensesResult, payrollLines, electricityAccrualLine] =
+    await Promise.all([
+      pool.query(
+        `SELECT
+           COALESCE(SUM(total_allocated_amount) FILTER (WHERE payment_channel <> 'manual_adjustment'), 0) AS allocated_cash,
+           COALESCE(SUM(amount) FILTER (WHERE payment_channel <> 'manual_adjustment'), 0) AS received_cash,
+           COALESCE(SUM(unallocated_amount) FILTER (WHERE payment_channel <> 'manual_adjustment'), 0) AS unallocated_cash,
+           COALESCE(SUM(total_allocated_amount) FILTER (WHERE payment_channel = 'manual_adjustment'), 0) AS non_cash_allocated
+         FROM payments
+         WHERE status = 'posted'
+           AND payment_date BETWEEN $1 AND $2`,
+        dateParams
+      ),
+      pool.query(
+        `SELECT
+           COALESCE(SUM(
+             CASE
+               WHEN COALESCE(subtotal_amount, 0) = 0
+                AND COALESCE(fixed_charge_amount, 0) = 0
+                AND COALESCE(penalty_amount, 0) = 0
+                AND COALESCE(reconnection_fee_amount, 0) = 0
+                AND COALESCE(adjustment_amount, 0) = 0
+               THEN GREATEST(COALESCE(NULLIF(total_amount, 0), amount) - COALESCE(vat_amount, 0), 0)
+               ELSE COALESCE(subtotal_amount, 0)
+             END
+           ), 0) AS water_usage,
+           COALESCE(SUM(fixed_charge_amount), 0) AS fixed_charges,
+           COALESCE(SUM(penalty_amount), 0) AS penalties,
+           COALESCE(SUM(reconnection_fee_amount), 0) AS reconnection_fees,
+           COALESCE(SUM(adjustment_amount), 0) AS adjustments,
+           COALESCE(SUM(vat_amount), 0) AS vat_amount
+         FROM bills
+         WHERE bill_pay_status = 'payable'
+           AND billing_month BETWEEN $1 AND $2`,
+        dateParams
+      ),
+      pool.query(
+        `SELECT category,
+                COALESCE(SUM(amount), 0) AS amount
+         FROM expenses
+         WHERE expense_date BETWEEN $1 AND $2
+         GROUP BY category
+         ORDER BY amount DESC, category ASC`,
+        dateParams
+      ),
+      pool.query(
+        `SELECT category,
+                COALESCE(SUM(amount), 0) AS amount
+         FROM expenses
+         WHERE expense_date BETWEEN $1 AND $2
+           AND category <> 'Production - Electricity'
+         GROUP BY category
+         ORDER BY amount DESC, category ASC`,
+        dateParams
+      ),
+      getPayrollProfitAndLossLines(startDate, endDate),
+      getProductionElectricityAccrualLine(startDate, endDate)
+    ]);
+
+  const cashRevenue = cashRevenueResult.rows[0] || {};
+  const accrualRevenue = accrualRevenueResult.rows[0] || {};
+  const cashExpenseLines = cashExpensesResult.rows.map((row) => line(row.category, row.amount));
+  const accrualExpenseLines = [
+    ...accrualExpensesResult.rows.map((row) => line(row.category, row.amount)),
+    electricityAccrualLine
+  ];
+  if (toNumber(payrollLines.cash.amount) > 0) cashExpenseLines.push(payrollLines.cash);
+  if (toNumber(payrollLines.accrual.amount) > 0) accrualExpenseLines.push(payrollLines.accrual);
+
+  return {
+    cash: buildStatement({
+      basis: "cash",
+      revenueLines: [
+        line("Customer receipts applied to bills", cashRevenue.allocated_cash, "Posted cash, bank, and M-Pesa receipts allocated to bills.")
+      ],
+      expenseLines: cashExpenseLines,
+      notes: [
+        line("Cash received", cashRevenue.received_cash, "Total posted non-adjustment receipts in the period."),
+        line("Customer credit not yet revenue", cashRevenue.unallocated_cash, "Unallocated customer credit is excluded from cash revenue."),
+        line("Manual payment adjustments excluded", cashRevenue.non_cash_allocated, "Manual adjustment allocations are non-cash.")
+      ]
+    }),
+    accrual: buildStatement({
+      basis: "accrual",
+      revenueLines: [
+        line("Water usage revenue", accrualRevenue.water_usage),
+        line("Fixed charges", accrualRevenue.fixed_charges),
+        line("Penalties", accrualRevenue.penalties),
+        line("Reconnection fees", accrualRevenue.reconnection_fees),
+        line("Billing adjustments", accrualRevenue.adjustments)
+      ],
+      expenseLines: accrualExpenseLines,
+      notes: [
+        line("VAT billed outside operating revenue", accrualRevenue.vat_amount, "VAT is shown separately from operating revenue.")
+      ]
+    })
+  };
 };
 
 const getReportsSummary = asyncHandler(async (_req, res) => {
@@ -471,6 +756,7 @@ const getAccountantReports = asyncHandler(async (req, res) => {
      LIMIT 500`,
     dateParams
   );
+  const profitAndLoss = await buildProfitAndLoss(startDate, endDate);
 
   res.json({
     reportPeriod: {
@@ -488,7 +774,8 @@ const getAccountantReports = asyncHandler(async (req, res) => {
     depositRegister: depositRegister.rows,
     expenseTotals: expenseTotals.rows[0],
     expensesByCategory: expensesByCategory.rows,
-    expenseRegister: expenseRegister.rows
+    expenseRegister: expenseRegister.rows,
+    profitAndLoss
   });
 });
 
@@ -541,6 +828,36 @@ const getDataQualityChecks = asyncHandler(async (_req, res) => {
        WHERE status = 'posted' AND unallocated_amount > 0
        UNION ALL
        SELECT
+         'duplicate_open_payable_bills',
+         'Duplicate open payable bills',
+         COUNT(*)::integer,
+         'Only one unpaid payable bill should remain active for a customer in the same billing period. Use bill promotion or supersede the duplicate before collections.',
+         'high'
+       FROM (
+         SELECT customer_id, billing_period_id
+         FROM bills
+         WHERE billing_period_id IS NOT NULL
+           AND bill_pay_status = 'payable'
+           AND status <> 'paid'
+         GROUP BY customer_id, billing_period_id
+         HAVING COUNT(*) > 1
+       ) duplicates
+       UNION ALL
+       SELECT
+         'future_dated_operational_records',
+         'Future-dated operational records',
+         (
+           (SELECT COUNT(*) FROM meter_readings WHERE reading_date > CURRENT_DATE) +
+           (SELECT COUNT(*) FROM payments WHERE payment_date > CURRENT_DATE) +
+           (SELECT COUNT(*) FROM expenses WHERE expense_date > CURRENT_DATE) +
+           (SELECT COUNT(*) FROM meter_events WHERE event_date > CURRENT_DATE) +
+           (SELECT COUNT(*) FROM production_electricity_topups WHERE topup_date > CURRENT_DATE) +
+           (SELECT COUNT(*) FROM production_weekly_readings WHERE reading_date > CURRENT_DATE)
+         )::integer,
+         'Future-dated records require an admin override reason and should be reviewed before close.',
+         'medium'
+       UNION ALL
+       SELECT
          'inactive_accounts_with_debt',
          'Inactive accounts with debt',
          COUNT(DISTINCT c.id)::integer,
@@ -565,11 +882,113 @@ const getDataQualityChecks = asyncHandler(async (_req, res) => {
      ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, count DESC, label ASC`
   );
 
-  res.json(checks.rows);
+  const [duplicateOpenBills, futureDatedRecords] = await Promise.all([
+    pool.query(
+      `SELECT
+         c.acc_number,
+         c.name AS customer_name,
+         COALESCE(bp.name, b.billing_month::text) AS billing_period,
+         COUNT(*)::integer AS bill_count,
+         COALESCE(SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount)), 0) AS balance_amount,
+         STRING_AGG(
+           CONCAT(COALESCE(b.bill_number, 'Bill ' || b.id::text), ' / ', b.status, ' / ', b.billing_source, ' / ', b.balance_amount),
+           ' | '
+           ORDER BY b.id
+         ) AS affected_bills
+       FROM bills b
+       JOIN customers c ON c.id = b.customer_id
+       LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
+       WHERE b.billing_period_id IS NOT NULL
+         AND b.bill_pay_status = 'payable'
+         AND b.status <> 'paid'
+       GROUP BY c.acc_number, c.name, b.customer_id, b.billing_period_id, COALESCE(bp.name, b.billing_month::text)
+       HAVING COUNT(*) > 1
+       ORDER BY c.acc_number, COALESCE(bp.name, b.billing_month::text)
+       LIMIT 50`
+    ),
+    pool.query(
+      `SELECT *
+       FROM (
+         SELECT 'meter_readings' AS record_type, id, reading_date AS record_date, customer_id::text AS owner, notes
+         FROM meter_readings
+         WHERE reading_date > CURRENT_DATE
+         UNION ALL
+         SELECT 'payments', id, payment_date, customer_id::text, notes
+         FROM payments
+         WHERE payment_date > CURRENT_DATE
+         UNION ALL
+         SELECT 'expenses', id, expense_date, category, description
+         FROM expenses
+         WHERE expense_date > CURRENT_DATE
+         UNION ALL
+         SELECT 'meter_events', id, event_date, customer_id::text, reason
+         FROM meter_events
+         WHERE event_date > CURRENT_DATE
+         UNION ALL
+         SELECT 'production_electricity_topups', id, topup_date, reference, notes
+         FROM production_electricity_topups
+         WHERE topup_date > CURRENT_DATE
+         UNION ALL
+         SELECT 'production_weekly_readings', id, reading_date, NULL::text, notes
+         FROM production_weekly_readings
+         WHERE reading_date > CURRENT_DATE
+       ) future_records
+       ORDER BY record_date ASC, record_type ASC, id ASC
+       LIMIT 50`
+    )
+  ]);
+
+  const detailRecords = {
+    duplicate_open_payable_bills: duplicateOpenBills.rows,
+    future_dated_operational_records: futureDatedRecords.rows
+  };
+
+  res.json(
+    checks.rows.map((check) => ({
+      ...check,
+      records: detailRecords[check.key] || []
+    }))
+  );
+});
+
+const getOperationalBackup = asyncHandler(async (req, res) => {
+  const backup = await buildOperationalBackup();
+  const payload = {
+    export_type: "operational_backup",
+    exported_at: new Date().toISOString(),
+    exported_by: {
+      id: req.user.id,
+      name: req.user.name,
+      email: req.user.email,
+      role: req.user.role
+    },
+    notes: [
+      "This export includes operational business records for review and continuity.",
+      "Password hashes, reset tokens, and environment secrets are intentionally excluded."
+    ],
+    dataset_counts: backup.counts,
+    skipped_datasets: backup.skipped,
+    datasets: backup.datasets
+  };
+
+  await recordAuditEvent(pool, {
+    req,
+    action: "reports.operational_backup_exported",
+    entityType: "report",
+    afterData: {
+      exported_at: payload.exported_at,
+      dataset_counts: payload.dataset_counts,
+      skipped_datasets: payload.skipped_datasets
+    },
+    reason: "Admin generated operational backup pack"
+  });
+
+  res.json(payload);
 });
 
 module.exports = {
   getReportsSummary,
   getAccountantReports,
-  getDataQualityChecks
+  getDataQualityChecks,
+  getOperationalBackup
 };

@@ -2,6 +2,7 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
+const { createExpenseRecord } = require("./expense.controller");
 
 const categories = ["leak", "meter_fault", "no_water", "low_pressure", "water_quality", "connection", "billing_support", "other"];
 const priorities = ["low", "normal", "high", "urgent"];
@@ -37,7 +38,9 @@ const selectMaintenanceRequestSql = `
     m.meter_number,
     assigned.name AS assigned_to_name,
     creator.name AS created_by_name,
-    resolver.name AS resolved_by_name
+    resolver.name AS resolved_by_name,
+    COALESCE(expense_summary.expense_count, 0) AS expense_count,
+    COALESCE(expense_summary.expense_total, 0) AS expense_total
   FROM maintenance_requests mr
   LEFT JOIN customers c ON c.id = mr.customer_id
   LEFT JOIN zones z ON z.id = mr.zone_id
@@ -45,6 +48,12 @@ const selectMaintenanceRequestSql = `
   LEFT JOIN users assigned ON assigned.id = mr.assigned_to
   LEFT JOIN users creator ON creator.id = mr.created_by
   LEFT JOIN users resolver ON resolver.id = mr.resolved_by
+  LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS expense_count,
+           COALESCE(SUM(amount), 0) AS expense_total
+    FROM expenses e
+    WHERE e.maintenance_request_id = mr.id
+  ) expense_summary ON TRUE
 `;
 
 const getMaintenanceRequest = async (client, id, { lock = false } = {}) => {
@@ -288,7 +297,49 @@ const resolveMaintenanceRequest = asyncHandler(async (req, res) => {
   }
 });
 
+const createMaintenanceExpense = asyncHandler(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const request = await getMaintenanceRequest(client, req.params.id, { lock: true });
+    if (!request) throw new ApiError(404, "Maintenance request not found.");
+    if (request.status === "cancelled") throw new ApiError(400, "Cancelled maintenance requests cannot accept expenses.");
+
+    const expense = await createExpenseRecord(
+      client,
+      req,
+      {
+        ...req.body,
+        maintenance_request_id: request.id,
+        category: req.body.category || `Maintenance - ${request.category}`,
+        description: req.body.description || `${request.request_number || "Maintenance"}: ${request.title}`
+      },
+      { auditReason: `Maintenance expense for ${request.request_number || `request ${request.id}`}` }
+    );
+
+    await recordAuditEvent(client, {
+      req,
+      action: "maintenance_request.expense_attached",
+      entityType: "maintenance_request",
+      entityId: request.id,
+      beforeData: request,
+      afterData: { request_id: request.id, expense },
+      reason: req.body.notes || req.body.description || null
+    });
+
+    const updatedRequest = await getMaintenanceRequest(client, request.id);
+    await client.query("COMMIT");
+    res.status(201).json({ request: updatedRequest, expense });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = {
+  createMaintenanceExpense,
   createMaintenanceRequest,
   listMaintenanceAssignees,
   listMaintenanceRequests,

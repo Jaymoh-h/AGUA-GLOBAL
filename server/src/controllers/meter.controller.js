@@ -3,6 +3,7 @@ const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { getOrCreateBillingPeriod } = require("../services/billingPeriod.service");
 const { assertBillingPeriodEditableById, normalizeCorrectionReason } = require("../services/billingPeriodGuard.service");
+const { assertNotFutureDate } = require("../services/dateGuard.service");
 const { ensureActiveMeter, getMeterHistory, getPreviousReadingForMeter } = require("../services/meter.service");
 const { recalculateBillForReading } = require("./reading.controller");
 const { recordAuditEvent } = require("../services/audit.service");
@@ -160,6 +161,10 @@ const replaceMeter = asyncHandler(async (req, res) => {
   if (!customer_id || old_final_reading === undefined || !new_meter_number || event_date === undefined) {
     throw new ApiError(400, "Customer, old final reading, new meter number, and replacement date are required.");
   }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(event_date || ""))) {
+    throw new ApiError(400, "Replacement date must use YYYY-MM-DD.");
+  }
+  const futureOverrideReason = assertNotFutureDate(event_date, req, "Replacement date");
 
   const oldFinalReading = Number(old_final_reading);
   const newInitialReading = Number(new_initial_reading || 0);
@@ -288,7 +293,7 @@ const replaceMeter = asyncHandler(async (req, res) => {
       entityId: oldMeterResult.rows[0].id,
       beforeData: oldMeter,
       afterData: oldMeterResult.rows[0],
-      reason
+      reason: reason || futureOverrideReason
     });
 
     const newMeterResult = await client.query(
@@ -358,7 +363,7 @@ const replaceMeter = asyncHandler(async (req, res) => {
       entityType: "meter_event",
       entityId: eventResult.rows[0].id,
       afterData: eventResult.rows[0],
-      reason
+      reason: reason || correctionReason || futureOverrideReason
     });
 
     await client.query("COMMIT");
@@ -391,6 +396,7 @@ const updateMeterEvent = asyncHandler(async (req, res) => {
   if (!eventDate || !/^\d{4}-\d{2}-\d{2}$/.test(String(eventDate))) {
     throw new ApiError(400, "Event date must use YYYY-MM-DD.");
   }
+  const futureOverrideReason = assertNotFutureDate(eventDate, req, "Event date");
   if (!Number.isFinite(oldFinalReading) || oldFinalReading < 0) {
     throw new ApiError(400, "Old final reading must be zero or greater.");
   }
@@ -481,7 +487,7 @@ const updateMeterEvent = asyncHandler(async (req, res) => {
       entityId: before.id,
       beforeData: before,
       afterData: updatedEvent.rows[0],
-      reason: correctionReason
+      reason: correctionReason || futureOverrideReason
     });
 
     await client.query("COMMIT");

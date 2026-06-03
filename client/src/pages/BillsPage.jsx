@@ -2,6 +2,7 @@ import { CheckCircle2, Mail, MessageSquare, Printer, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
 import { EmptyTableRow } from "../components/EmptyState";
+import FocusNotice from "../components/FocusNotice";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
@@ -22,7 +23,7 @@ const nonZeroChargeRows = (bill) =>
     ["Adjustment", bill?.adjustment_amount]
   ].filter(([label, amount]) => label === "Usage subtotal" || Number(amount || 0) !== 0);
 
-function BillsPage({ user }) {
+function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [bills, setBills] = useState([]);
   const [status, setStatus] = useState("");
   const [selectedBill, setSelectedBill] = useState(null);
@@ -35,6 +36,12 @@ function BillsPage({ user }) {
   useEffect(() => {
     load().catch((err) => setMessage(err.message));
   }, [status]);
+
+  useEffect(() => {
+    if (navigationIntent?.page === "bills" && navigationIntent.focus === "held_bills") {
+      setStatus("");
+    }
+  }, [navigationIntent]);
 
   const markPaid = async (id) => {
     const bill = bills.find((row) => row.id === id);
@@ -89,8 +96,17 @@ function BillsPage({ user }) {
       setMessage(err.message);
     }
   };
-  const billTable = useTableControls(bills, {
-    searchFields: ["customer_name", "acc_number", "billing_period_name", "billing_month", "bill_number", "status"]
+  const focusKey = navigationIntent?.page === "bills" ? navigationIntent.focus : "";
+  const today = new Date().toISOString().slice(0, 10);
+  const focusedBills = bills.filter((bill) => {
+    if (focusKey === "held_bills") return bill.bill_pay_status === "held";
+    if (focusKey === "overdue_bills") {
+      return bill.bill_pay_status === "payable" && bill.status !== "paid" && bill.due_date?.slice(0, 10) < today;
+    }
+    return true;
+  });
+  const billTable = useTableControls(focusedBills, {
+    searchFields: ["customer_name", "acc_number", "billing_period_name", "billing_month", "bill_number", "status", "bill_pay_status", "payability_reason"]
   });
   const exportBills = () => {
     downloadCsvRows(
@@ -130,6 +146,20 @@ function BillsPage({ user }) {
       </header>
 
       {message ? <p className="form-note">{message}</p> : null}
+      {focusKey === "held_bills" ? (
+        <FocusNotice
+          title="Held bills"
+          detail="Showing bills generated but not yet payable. Clear focus to return to the full bill register."
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
+      {focusKey === "overdue_bills" ? (
+        <FocusNotice
+          title="Overdue receivables"
+          detail="Showing payable unpaid bills past due date. Use this list to follow up customers or open a bill for printing and delivery."
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
       <div className="panel">
         <div className="panel-heading">
           <h3>Bill Register</h3>

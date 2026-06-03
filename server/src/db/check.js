@@ -5,7 +5,6 @@ const { Pool } = require("pg");
 const expectedUsers = [
   ["admin@agua.local", "Admin@123"],
   ["reader@agua.local", "Reader@123"],
-  ["accountant@agua.local", "Accountant@123"],
   ["jane@agua.local", "Customer@123"]
 ];
 
@@ -50,6 +49,9 @@ const run = async () => {
       const matches = await bcrypt.compare(password, user.password_hash);
       console.log(`${email}: role=${user.role}, active=${user.is_active}, password_ok=${matches}`);
     }
+
+    const activeAccountants = userResult.rows.filter((row) => row.role === "accountant" && row.is_active);
+    console.log(`Active accountant users found: ${activeAccountants.length}`);
   } finally {
     client.release();
     await pool.end();

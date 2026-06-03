@@ -111,6 +111,10 @@ function PortalPage({ view = "overview" }) {
   const [requestForm, setRequestForm] = useState(blankRequest);
   const [selectedBill, setSelectedBill] = useState(null);
   const [selectedReceipt, setSelectedReceipt] = useState(null);
+  const [statement, setStatement] = useState(null);
+  const [statementFilters, setStatementFilters] = useState({ start_date: "", end_date: "" });
+  const [printTarget, setPrintTarget] = useState("");
+  const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -132,13 +136,35 @@ function PortalPage({ view = "overview" }) {
     requests: "Requests"
   };
 
-  const load = async () => {
-    setData(await api.portal.dashboard());
+  const load = async (customerId = selectedCustomerId) => {
+    const nextData = await api.portal.dashboard(customerId);
+    setData(nextData);
+    setSelectedCustomerId(String(nextData.activeCustomerId || nextData.customer?.id || ""));
   };
 
   useEffect(() => {
     load().catch((err) => setMessage(err.message));
   }, []);
+
+  useEffect(() => {
+    const clearPrintTarget = () => setPrintTarget("");
+    window.addEventListener("afterprint", clearPrintTarget);
+    return () => window.removeEventListener("afterprint", clearPrintTarget);
+  }, []);
+
+  const switchAccount = async (customerId) => {
+    setMessage("");
+    setSelectedBill(null);
+    setSelectedReceipt(null);
+    setStatement(null);
+    setPrintTarget("");
+    setSelectedCustomerId(customerId);
+    try {
+      await load(customerId);
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
 
   const setRequestField = (field, value) => {
     setRequestForm((current) => ({ ...current, [field]: value }));
@@ -153,7 +179,7 @@ function PortalPage({ view = "overview" }) {
     }
     setSaving(true);
     try {
-      await api.portal.createServiceRequest(requestForm);
+      await api.portal.createServiceRequest({ ...requestForm, customer_id: selectedCustomerId || data.customer.id });
       setRequestForm(blankRequest);
       await load();
       setMessage("Service request submitted.");
@@ -168,7 +194,8 @@ function PortalPage({ view = "overview" }) {
     setMessage("");
     try {
       setSelectedBill(null);
-      setSelectedReceipt(await api.portal.getPayment(paymentId));
+      setStatement(null);
+      setSelectedReceipt(await api.portal.getPayment(paymentId, selectedCustomerId || data.customer.id));
     } catch (err) {
       setMessage(err.message);
     }
@@ -176,19 +203,50 @@ function PortalPage({ view = "overview" }) {
 
   const openBill = (bill) => {
     setSelectedReceipt(null);
+    setStatement(null);
     setSelectedBill(bill);
   };
 
-  const printDocument = () => {
+  const printDocument = (target = "") => {
+    setPrintTarget(target);
     setTimeout(() => window.print(), 50);
+  };
+
+  const fetchStatement = async () => {
+    const params = Object.fromEntries(
+      Object.entries(statementFilters).filter(([, value]) => String(value || "").trim())
+    );
+    const nextStatement = await api.customers.statement(selectedCustomerId || data.customer.id, params);
+    setStatement(nextStatement);
+    return nextStatement;
+  };
+
+  const previewStatement = async () => {
+    setMessage("");
+    try {
+      await fetchStatement();
+      setMessage("Statement loaded.");
+    } catch (err) {
+      setMessage(err.message);
+    }
   };
 
   const downloadStatement = async () => {
     setMessage("");
     try {
-      const statement = await api.customers.statement(data.customer.id);
-      downloadTextPdf(`${data.customer.acc_number}-statement.pdf`, buildStatementPdfPages(statement));
+      const nextStatement = statement || (await fetchStatement());
+      downloadTextPdf(`${data.customer.acc_number}-statement.pdf`, buildStatementPdfPages(nextStatement));
       setMessage("Statement PDF downloaded.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const printStatement = async () => {
+    setMessage("");
+    try {
+      await fetchStatement();
+      printDocument("statement");
     } catch (err) {
       setMessage(err.message);
     }
@@ -208,18 +266,21 @@ function PortalPage({ view = "overview" }) {
             {data.customer.acc_number} | {data.customer.zone_name}
           </p>
         </div>
+        {data.portalAccounts?.length > 1 ? (
+          <label className="portal-account-switcher screen-only">
+            Account
+            <select value={selectedCustomerId || data.customer.id} onChange={(event) => switchAccount(event.target.value)}>
+              {data.portalAccounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.acc_number} - {account.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </header>
 
       {message ? <p className="form-note">{message}</p> : null}
-
-      {view === "overview" ? (
-        <div className="row-actions screen-only">
-          <button type="button" onClick={downloadStatement}>
-            <Download size={16} />
-            Statement PDF
-          </button>
-        </div>
-      ) : null}
 
       {view === "overview" ? (
         <>
@@ -275,6 +336,142 @@ function PortalPage({ view = "overview" }) {
                 <strong>{money(data.summary.credit_balance)}</strong>
               </div>
             </div>
+          </div>
+
+          <div className={`panel portal-statement-panel ${printTarget === "statement" ? "active-print-surface" : ""}`}>
+            <div className="panel-heading">
+              <h3>Statement</h3>
+              <FileText size={18} />
+            </div>
+            <div className="statement-filter screen-only">
+              <label>
+                From
+                <input
+                  value={statementFilters.start_date}
+                  onChange={(event) => {
+                    setStatement(null);
+                    setStatementFilters((current) => ({ ...current, start_date: event.target.value }));
+                  }}
+                  type="date"
+                />
+              </label>
+              <label>
+                To
+                <input
+                  value={statementFilters.end_date}
+                  onChange={(event) => {
+                    setStatement(null);
+                    setStatementFilters((current) => ({ ...current, end_date: event.target.value }));
+                  }}
+                  type="date"
+                />
+              </label>
+              <button type="button" onClick={previewStatement}>
+                Preview
+              </button>
+            </div>
+            <div className="row-actions screen-only">
+              <button type="button" onClick={downloadStatement}>
+                <Download size={16} />
+                Statement PDF
+              </button>
+              <button type="button" onClick={printStatement}>
+                <Printer size={16} />
+                Print statement
+              </button>
+            </div>
+            {statement ? (
+              <>
+                <div className="receipt-header">
+                  {data.business?.logo_url ? (
+                    <img className="receipt-logo" src={assetUrl(data.business.logo_url)} alt="Business logo" />
+                  ) : (
+                    <div className="receipt-logo-mark">{data.business?.business_name?.slice(0, 2) || "AG"}</div>
+                  )}
+                  <div>
+                    <h3>{data.business?.business_name || "Water Billing"}</h3>
+                    {data.business?.legal_name ? <p>{data.business.legal_name}</p> : null}
+                    <p>{[data.business?.phone, data.business?.email].filter(Boolean).join(" | ")}</p>
+                    {data.business?.tax_pin ? <p>PIN: {data.business.tax_pin}</p> : null}
+                  </div>
+                </div>
+                <div className="receipt-title">
+                  <div>
+                    <span>Statement</span>
+                    <strong>{statement.customer.acc_number}</strong>
+                  </div>
+                  <div>
+                    <span>Period</span>
+                    <strong>
+                      {statement.period.lifetime
+                        ? "Lifetime"
+                        : `${statement.period.start_date || "Start"} to ${statement.period.end_date || "End"}`}
+                    </strong>
+                  </div>
+                </div>
+                <div className="receipt-info-grid">
+                  <div>
+                    <span>Customer</span>
+                    <strong>{statement.customer.name}</strong>
+                  </div>
+                  <div>
+                    <span>Zone</span>
+                    <strong>{statement.customer.zone_name}</strong>
+                  </div>
+                  <div>
+                    <span>Opening balance</span>
+                    <strong>{money(statement.opening_balance)}</strong>
+                  </div>
+                  <div>
+                    <span>{accountPositionLabel(statement.totals.closing_balance)}</span>
+                    <strong>{moneyAbs(statement.totals.closing_balance)}</strong>
+                  </div>
+                </div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Reference</th>
+                        <th>Description</th>
+                        <th>Debit</th>
+                        <th>Credit</th>
+                        <th>Balance</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {statement.transactions.length ? (
+                        statement.transactions.map((row, index) => (
+                          <tr key={`${row.transaction_type}-${row.id}-${index}`}>
+                            <td>{date(row.transaction_date)}</td>
+                            <td>{row.reference}</td>
+                            <td>{row.description}</td>
+                            <td>{money(row.debit)}</td>
+                            <td>{money(row.credit)}</td>
+                            <td>{money(row.running_balance)}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <EmptyTableRow colSpan={6} title="No statement activity" detail="No bills or payments were found for this period." />
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="receipt-total">
+                  <span>Total debits</span>
+                  <strong>{money(statement.totals.debit)}</strong>
+                </div>
+                <div className="receipt-total muted-total">
+                  <span>Total credits</span>
+                  <strong>{money(statement.totals.credit)}</strong>
+                </div>
+              </>
+            ) : (
+              <div className="empty-state">
+                <strong>Statement not loaded</strong>
+                <span>Preview or print to generate the current account statement.</span>
+              </div>
+            )}
           </div>
         </>
       ) : null}
@@ -499,9 +696,9 @@ function PortalPage({ view = "overview" }) {
       {selectedBill ? (
         <div className="panel print-surface receipt-print">
           <div className="receipt-actions screen-only">
-            <button type="button" onClick={printDocument}>
+            <button type="button" onClick={() => printDocument()}>
               <Printer size={17} />
-              Print bill
+              Print / PDF
             </button>
             <button type="button" onClick={() => setSelectedBill(null)} title="Close bill">
               <X size={17} />
@@ -620,9 +817,9 @@ function PortalPage({ view = "overview" }) {
       {selectedReceipt ? (
         <div className="panel print-surface receipt-print">
           <div className="receipt-actions screen-only">
-            <button type="button" onClick={printDocument}>
+            <button type="button" onClick={() => printDocument()}>
               <Printer size={17} />
-              Print receipt
+              Print / PDF
             </button>
             <button type="button" onClick={() => setSelectedReceipt(null)} title="Close receipt">
               <X size={17} />

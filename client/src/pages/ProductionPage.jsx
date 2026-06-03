@@ -1,14 +1,26 @@
-import { Edit2, FileUp, Gauge, PlugZap, RotateCcw, Save, X } from "lucide-react";
+import { Edit2, FileUp, Gauge, PlugZap, Printer, RotateCcw, Save, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
+import FocusNotice from "../components/FocusNotice";
 import TableControls, { useTableControls } from "../components/TableControls";
 import ToastMessage, { toastTypeFromMessage } from "../components/ToastMessage";
-import { api } from "../services/api";
+import { api, assetUrl } from "../services/api";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
+const number = (value) => Number(value || 0).toLocaleString();
+const dateOnly = (value) => value?.slice(0, 10) || "";
+const dateTime = (value) => (value ? new Date(value).toLocaleString() : "");
 const meterTypeLabels = {
   customer_source: "Customer source",
   shared_source: "Shared source"
+};
+const electricityCostSourceLabel = (week) => {
+  if (!week) return "";
+  if (week.electricity_cost_source === "period_topups") return "This period's top-ups";
+  if (week.electricity_cost_source === "last_topup") {
+    return `Last top-up${week.electricity_cost_source_date ? ` on ${week.electricity_cost_source_date.slice(0, 10)}` : ""}`;
+  }
+  return "No top-up cost available";
 };
 const addDays = (dateValue, days) => {
   if (!dateValue) return new Date().toISOString().slice(0, 10);
@@ -23,7 +35,7 @@ const nextWeeklyReadingDate = (weeks) => {
   return latest?.reading_date ? addDays(latest.reading_date, 7) : new Date().toISOString().slice(0, 10);
 };
 
-function ProductionPage({ user }) {
+function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [meters, setMeters] = useState([]);
   const [rates, setRates] = useState([]);
   const [zones, setZones] = useState([]);
@@ -32,6 +44,7 @@ function ProductionPage({ user }) {
   const [topups, setTopups] = useState([]);
   const [weeks, setWeeks] = useState([]);
   const [report, setReport] = useState({ weeks: [] });
+  const [businessSettings, setBusinessSettings] = useState(null);
   const [message, setMessage] = useState("");
   const [meterForm, setMeterForm] = useState({
     meter_type: "shared_source",
@@ -42,6 +55,14 @@ function ProductionPage({ user }) {
     meter_id: "",
     rate_id: "",
     notes: ""
+  });
+  const [replacementForm, setReplacementForm] = useState({
+    production_meter_id: "",
+    event_date: new Date().toISOString().slice(0, 10),
+    old_final_reading: "",
+    new_meter_number: "",
+    new_initial_reading: "0",
+    reason: ""
   });
   const [topupForm, setTopupForm] = useState({
     topup_date: new Date().toISOString().slice(0, 10),
@@ -63,18 +84,23 @@ function ProductionPage({ user }) {
     from: "",
     to: new Date().toISOString().slice(0, 10)
   });
+  const [printGeneratedAt, setPrintGeneratedAt] = useState("");
+  const [printMode, setPrintMode] = useState("detail");
 
   const canConfigure = ["admin", "accountant"].includes(user?.role);
+  const focusKey = navigationIntent?.page === "production" ? navigationIntent.focus : "";
+  const hasProductionFocus = focusKey === "production_gap";
 
   const load = async () => {
-    const [meterRows, rateRows, zoneRows, customerRows, topupRows, weekRows, reportRows] = await Promise.all([
+    const [meterRows, rateRows, zoneRows, customerRows, topupRows, weekRows, reportRows, settingsRows] = await Promise.all([
       api.production.meters(),
       api.rates.list(),
       api.zones.list(),
       api.customers.list(),
       api.production.topups(),
       api.production.weeklyReadings(),
-      api.production.report(reportFilters)
+      api.production.report(reportFilters),
+      api.businessSettings.get().catch(() => null)
     ]);
     setMeters(meterRows);
     setRates(rateRows);
@@ -83,6 +109,7 @@ function ProductionPage({ user }) {
     setTopups(topupRows);
     setWeeks(weekRows);
     setReport(reportRows);
+    setBusinessSettings(settingsRows);
   };
 
   useEffect(() => {
@@ -131,6 +158,7 @@ function ProductionPage({ user }) {
   }, [meterForm.customer_id]);
 
   const setMeterField = (field, value) => setMeterForm((current) => ({ ...current, [field]: value }));
+  const setReplacementField = (field, value) => setReplacementForm((current) => ({ ...current, [field]: value }));
   const setTopupField = (field, value) => setTopupForm((current) => ({ ...current, [field]: value }));
   const setWeeklyField = (field, value) => {
     if (field === "reading_date") setWeeklyDateChanged(true);
@@ -147,7 +175,27 @@ function ProductionPage({ user }) {
     searchFields: ["reading_date", "meter_count", "total_consumption", "total_revenue"]
   });
 
-  const latestReport = useMemo(() => report.weeks?.[0] || null, [report]);
+  const reportTotals = useMemo(() => {
+    const rows = report.weeks || [];
+    const electricityCost = rows.reduce((sum, row) => sum + Number(row.electricity_cost_used || 0), 0);
+    const revenue = rows.reduce((sum, row) => sum + Number(row.total_revenue || 0), 0);
+    const consumption = rows.reduce((sum, row) => sum + Number(row.total_consumption || 0), 0);
+    const electricityUsed = rows.reduce((sum, row) => sum + Number(row.electricity_used || 0), 0);
+    return {
+      weekCount: rows.length,
+      meterRowCount: rows.reduce((sum, row) => sum + Number(row.rows?.length || 0), 0),
+      consumption,
+      revenue,
+      electricityUsed,
+      electricityCost,
+      costOfProductionRatio: revenue > 0 ? electricityCost / revenue : 0,
+      costPerWaterUnit: consumption > 0 ? electricityCost / consumption : 0,
+      electricityCostPerUnit: electricityUsed > 0 ? electricityCost / electricityUsed : 0
+    };
+  }, [report]);
+  const reportPeriodLabel = `${report.from?.slice(0, 10) || reportFilters.from || "Beginning"} to ${
+    report.to?.slice(0, 10) || reportFilters.to || "Today"
+  }`;
 
   const submitMeter = async (event) => {
     event.preventDefault();
@@ -172,6 +220,42 @@ function ProductionPage({ user }) {
       });
       await load();
       setMessage("Production meter registered.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const prefillReplacement = (meter) => {
+    setReplacementForm((current) => ({
+      ...current,
+      production_meter_id: String(meter.id),
+      new_meter_number: "",
+      reason: `Replacement for ${meter.meter_number}`
+    }));
+  };
+
+  const submitReplacement = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    try {
+      if (!replacementForm.production_meter_id) throw new Error("Select the source meter being replaced.");
+      await api.production.replaceMeter(replacementForm.production_meter_id, {
+        event_date: replacementForm.event_date,
+        old_final_reading: Number(replacementForm.old_final_reading),
+        new_meter_number: replacementForm.new_meter_number.trim(),
+        new_initial_reading: Number(replacementForm.new_initial_reading || 0),
+        reason: replacementForm.reason
+      });
+      setReplacementForm({
+        production_meter_id: "",
+        event_date: new Date().toISOString().slice(0, 10),
+        old_final_reading: "",
+        new_meter_number: "",
+        new_initial_reading: "0",
+        reason: ""
+      });
+      await load();
+      setMessage("Source meter replacement recorded.");
     } catch (err) {
       setMessage(err.message);
     }
@@ -246,10 +330,22 @@ function ProductionPage({ user }) {
   const refreshReport = async () => {
     setMessage("");
     try {
-      setReport(await api.production.report(reportFilters));
+      const nextReport = await api.production.report(reportFilters);
+      setReport(nextReport);
+      return nextReport;
     } catch (err) {
       setMessage(err.message);
+      return null;
     }
+  };
+
+  const printProductionReport = async (mode = "detail") => {
+    if (!report.weeks?.length) return;
+    const nextReport = await refreshReport();
+    if (!nextReport?.weeks?.length) return;
+    setPrintMode(mode);
+    setPrintGeneratedAt(new Date().toISOString());
+    window.setTimeout(() => window.print(), 80);
   };
 
   const cancelWeeklyEdit = () => {
@@ -330,9 +426,18 @@ function ProductionPage({ user }) {
         </div>
       </header>
 
+      {focusKey === "production_gap" ? (
+        <FocusNotice
+          title="Production reading gap"
+          detail="Use the weekly reading form to capture the latest active source meter readings."
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
+
       <ToastMessage message={message} type={toastTypeFromMessage(message)} onClose={() => setMessage("")} />
 
       <section className="workspace-grid production-workspace">
+        {!hasProductionFocus ? (
         <div className="page-stack production-setup-stack">
           {canConfigure ? (
             <form className="panel form-grid production-meter-form" onSubmit={submitMeter}>
@@ -410,6 +515,79 @@ function ProductionPage({ user }) {
           ) : null}
 
           {canConfigure ? (
+            <form className="panel form-grid production-meter-form" onSubmit={submitReplacement}>
+              <div className="panel-heading">
+                <h3>Replace Source Meter</h3>
+                <RotateCcw size={18} />
+              </div>
+              <label>
+                Existing source meter
+                <select
+                  value={replacementForm.production_meter_id}
+                  onChange={(event) => setReplacementField("production_meter_id", event.target.value)}
+                  required
+                >
+                  <option value="">Select active meter</option>
+                  {meters
+                    .filter((meter) => meter.status === "active")
+                    .map((meter) => (
+                      <option key={meter.id} value={meter.id}>
+                        {meter.meter_number} - {meter.customer_name || meter.name || meterTypeLabels[meter.meter_type]}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label>
+                Replacement date
+                <input
+                  value={replacementForm.event_date}
+                  onChange={(event) => setReplacementField("event_date", event.target.value)}
+                  type="date"
+                  required
+                />
+              </label>
+              <label>
+                Old final reading
+                <input
+                  value={replacementForm.old_final_reading}
+                  onChange={(event) => setReplacementField("old_final_reading", event.target.value)}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  required
+                />
+              </label>
+              <label>
+                New meter number
+                <input
+                  value={replacementForm.new_meter_number}
+                  onChange={(event) => setReplacementField("new_meter_number", event.target.value)}
+                  required
+                />
+              </label>
+              <label>
+                New initial reading
+                <input
+                  value={replacementForm.new_initial_reading}
+                  onChange={(event) => setReplacementField("new_initial_reading", event.target.value)}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  required
+                />
+              </label>
+              <label>
+                Reason
+                <textarea value={replacementForm.reason} onChange={(event) => setReplacementField("reason", event.target.value)} rows="2" />
+              </label>
+              <button className="primary-button" type="submit">
+                <RotateCcw size={17} />
+                Record replacement
+              </button>
+            </form>
+          ) : null}
+
+          {canConfigure ? (
             <form className="panel form-grid production-topup-form" onSubmit={submitTopup}>
               <div className="panel-heading">
                 <h3>Electricity Top-Up</h3>
@@ -442,6 +620,7 @@ function ProductionPage({ user }) {
             </form>
           ) : null}
         </div>
+        ) : null}
 
         <div className="page-stack wide-panel production-primary-stack">
           <form className="panel production-weekly-form" onSubmit={submitWeekly}>
@@ -546,10 +725,17 @@ function ProductionPage({ user }) {
             </button>
           </form>
 
+          {!hasProductionFocus ? (
           <div className="panel production-report-panel">
             <div className="panel-heading">
               <h3>Production Report</h3>
-              <PlugZap size={18} />
+              <div className="row-actions">
+                <button type="button" onClick={() => printProductionReport("detail")} disabled={!report.weeks?.length}>
+                  <Printer size={16} />
+                  Print
+                </button>
+                <PlugZap size={18} />
+              </div>
             </div>
             <div className="table-toolbar">
               <label>
@@ -562,27 +748,32 @@ function ProductionPage({ user }) {
               </label>
               <button type="button" onClick={refreshReport}>Refresh</button>
             </div>
-            {latestReport ? (
+            {report.weeks?.length ? (
               <div className="reading-context">
                 <div>
                   <span>Total consumption</span>
-                  <strong>{Number(latestReport.total_consumption || 0).toLocaleString()}</strong>
+                  <strong>{number(reportTotals.consumption)}</strong>
                 </div>
                 <div>
                   <span>Total revenue</span>
-                  <strong>{money(latestReport.total_revenue)}</strong>
+                  <strong>{money(reportTotals.revenue)}</strong>
                 </div>
                 <div>
                   <span>Electricity used</span>
-                  <strong>{Number(latestReport.electricity_used || 0).toLocaleString()} kWh</strong>
+                  <strong>{number(reportTotals.electricityUsed)} kWh</strong>
                 </div>
                 <div>
-                  <span>Electricity cost used</span>
-                  <strong>{money(latestReport.electricity_cost_used)}</strong>
+                  <span>Electricity cost</span>
+                  <strong>{money(reportTotals.electricityCost)}</strong>
+                </div>
+                <div>
+                  <span>Average cost basis</span>
+                  <strong>{money(reportTotals.electricityCostPerUnit)} / kWh</strong>
+                  <small>{reportTotals.weekCount} week(s), {reportTotals.meterRowCount} meter row(s)</small>
                 </div>
                 <div>
                   <span>Cost of production</span>
-                  <strong>{(Number(latestReport.cost_of_production_ratio || 0) * 100).toFixed(2)}%</strong>
+                  <strong>{(Number(reportTotals.costOfProductionRatio || 0) * 100).toFixed(2)}%</strong>
                 </div>
               </div>
             ) : null}
@@ -617,8 +808,20 @@ function ProductionPage({ user }) {
                 </tbody>
               </table>
             </div>
+            <div className="report-print-actions screen-only">
+              <button type="button" onClick={() => printProductionReport("detail")} disabled={!report.weeks?.length}>
+                <Printer size={16} />
+                Print full report
+              </button>
+              <button type="button" onClick={() => printProductionReport("summary")} disabled={!report.weeks?.length}>
+                <Printer size={16} />
+                Print weekly summary
+              </button>
+            </div>
           </div>
+          ) : null}
 
+          {!hasProductionFocus ? (
           <div className="panel production-meter-list">
             <div className="panel-heading">
               <h3>Production Meters</h3>
@@ -633,6 +836,7 @@ function ProductionPage({ user }) {
                     <th>Zone</th>
                     <th>Tariff</th>
                     <th>Status</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -647,16 +851,28 @@ function ProductionPage({ user }) {
                         <td>{meter.zone_name || "-"}</td>
                         <td>{meter.rate_name || "-"}</td>
                         <td><span className={`status status-${meter.status}`}>{meter.status}</span></td>
+                        <td>
+                          {canConfigure && meter.status === "active" ? (
+                            <button type="button" onClick={() => prefillReplacement(meter)}>
+                              <RotateCcw size={14} />
+                              Replace
+                            </button>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
                       </tr>
                     ))
                   ) : (
-                    <EmptyTableRow colSpan={5} title="No production meters" detail="Register source meters to start monitoring." />
+                    <EmptyTableRow colSpan={6} title="No production meters" detail="Register source meters to start monitoring." />
                   )}
                 </tbody>
               </table>
             </div>
           </div>
+          ) : null}
 
+          {!hasProductionFocus ? (
           <div className="panel production-topup-list">
             <div className="panel-heading">
               <h3>Electricity Top-Ups</h3>
@@ -696,7 +912,9 @@ function ProductionPage({ user }) {
               </table>
             </div>
           </div>
+          ) : null}
 
+          {!hasProductionFocus ? (
           <div className="panel production-weekly-history">
             <div className="panel-heading">
               <h3>Weekly History</h3>
@@ -749,6 +967,120 @@ function ProductionPage({ user }) {
               </table>
             </div>
           </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="panel print-surface report-print active-print-surface production-report-print">
+        <div className="report-print-header">
+          {businessSettings?.logo_url ? (
+            <img className="receipt-logo" src={assetUrl(businessSettings.logo_url)} alt="Business logo" />
+          ) : (
+            <div className="receipt-logo-mark">{businessSettings?.business_name?.slice(0, 2) || "AG"}</div>
+          )}
+          <div>
+            <h3>{businessSettings?.business_name || "Water Billing"}</h3>
+            {businessSettings?.legal_name ? <p>{businessSettings.legal_name}</p> : null}
+            {businessSettings?.physical_address ? <p>{businessSettings.physical_address}</p> : null}
+            <p>{[businessSettings?.phone, businessSettings?.email].filter(Boolean).join(" | ")}</p>
+            {businessSettings?.tax_pin ? <p>PIN: {businessSettings.tax_pin}</p> : null}
+          </div>
+          <div className="report-print-meta">
+            <span>Report</span>
+            <strong>{printMode === "summary" ? "Production Weekly Summary" : "Production Report"}</strong>
+            <small>{reportPeriodLabel}</small>
+            <small>{printGeneratedAt ? `Generated ${dateTime(printGeneratedAt)}` : ""}</small>
+          </div>
+        </div>
+
+        <div className="reading-context">
+          <div>
+            <span>Total consumption</span>
+            <strong>{number(reportTotals.consumption)}</strong>
+          </div>
+          <div>
+            <span>Total revenue</span>
+            <strong>{money(reportTotals.revenue)}</strong>
+          </div>
+          <div>
+            <span>Electricity used</span>
+            <strong>{number(reportTotals.electricityUsed)} kWh</strong>
+          </div>
+          <div>
+            <span>Electricity cost</span>
+            <strong>{money(reportTotals.electricityCost)}</strong>
+          </div>
+          <div>
+            <span>Production cost</span>
+            <strong>{(Number(reportTotals.costOfProductionRatio || 0) * 100).toFixed(2)}%</strong>
+          </div>
+          <div>
+            <span>Cost / water unit</span>
+            <strong>{money(reportTotals.costPerWaterUnit)}</strong>
+          </div>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Week</th>
+                <th>kWh Used</th>
+                <th>Electricity Cost</th>
+                <th>Cost basis</th>
+                <th>Meter</th>
+                <th>Consumption</th>
+                <th>Revenue</th>
+              </tr>
+            </thead>
+            <tbody>
+              {report.weeks?.length ? (
+                report.weeks.flatMap((week) => {
+                  const summaryRow = (
+                    <tr className="production-week-summary" key={`print-week-${week.id}`}>
+                      <td>{dateOnly(week.reading_date)}</td>
+                      <td>{number(week.electricity_used)} kWh</td>
+                      <td>{money(week.electricity_cost_used)}</td>
+                      <td>
+                        {money(week.electricity_cost_per_unit)} / kWh
+                        <small>{electricityCostSourceLabel(week)}</small>
+                      </td>
+                      <td>Week total</td>
+                      <td>{number(week.total_consumption)}</td>
+                      <td>{money(week.total_revenue)}</td>
+                    </tr>
+                  );
+                  if (printMode === "summary") return [summaryRow];
+                  return [
+                    summaryRow,
+                    ...week.rows.map((row) => (
+                      <tr key={`print-${week.id}-${row.id}`}>
+                        <td>{dateOnly(week.reading_date)}</td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td>
+                          {row.meter_number}
+                          <small>{row.customer_name || row.meter_name || meterTypeLabels[row.meter_type]}</small>
+                        </td>
+                        <td>{number(row.consumption)}</td>
+                        <td>{money(row.revenue_amount)}</td>
+                      </tr>
+                    ))
+                  ];
+                })
+              ) : (
+                <EmptyTableRow colSpan={7} title="No production report data" detail="Save weekly readings to generate monitoring results." />
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="report-print-footer">
+          {businessSettings?.report_footer_note ? <p>{businessSettings.report_footer_note}</p> : null}
+          <small>
+            {businessSettings?.business_name || "Water Billing"}{" "}
+            {printMode === "summary" ? "production weekly summary" : "production report"} | {reportPeriodLabel}
+          </small>
         </div>
       </section>
     </section>

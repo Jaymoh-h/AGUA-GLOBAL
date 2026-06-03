@@ -1,11 +1,10 @@
 const express = require("express");
 const { getDashboard } = require("../controllers/dashboard.controller");
-const { authenticate } = require("../middleware/auth");
+const { authenticate, authorize } = require("../middleware/auth");
 
 const router = express.Router();
 
 router.use(authenticate);
-router.get("/", getDashboard);
+router.get("/", authorize("admin", "accountant", "meter_reader"), getDashboard);
 
 module.exports = router;
-

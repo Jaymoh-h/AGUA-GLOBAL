@@ -36,6 +36,7 @@
     "db:migrate:document-delivery": "node src/db/runSqlFile.js database/migrations/028_document_delivery_logs.sql",
     "db:migrate:customer-contact-preferences": "node src/db/runSqlFile.js database/migrations/029_customer_contact_preferences.sql",
     "db:migrate:production-topup-expenses": "node src/db/runSqlFile.js database/migrations/030_production_topup_expenses.sql",
+    "db:migrate:communications": "node src/db/runSqlFile.js database/migrations/031_communication_campaigns.sql",
     "payment:check": "node src/db/paymentCheck.js",
     "db:seed": "node src/db/seed.js"
   },

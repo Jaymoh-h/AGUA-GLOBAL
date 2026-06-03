@@ -8,6 +8,7 @@ const {
 } = require("../services/billingPeriodGuard.service");
 const { recordAuditEvent } = require("../services/audit.service");
 const { applyCustomerCreditToBill } = require("../services/credit.service");
+const { assertNotFutureDate } = require("../services/dateGuard.service");
 const { calculateTariffCharge, getTariffWithBlocks } = require("../services/tariff.service");
 const {
   assertMeterBelongsToCustomer,
@@ -235,6 +236,7 @@ const createReadingWithBill = async (
   { source = "field", auditReason = null, correctionReason = null } = {}
 ) => {
   const { customer_id, meter_id, reading_value, reading_date, notes, fallback_reason } = payload;
+  const futureOverrideReason = assertNotFutureDate(reading_date, req, "Reading date");
 
   const customerResult = await client.query(
     `SELECT c.*, r.amount AS rate
@@ -306,7 +308,7 @@ const createReadingWithBill = async (
     entityType: "meter_reading",
     entityId: reading.id,
     afterData: reading,
-    reason: periodReason || auditReason
+    reason: periodReason || auditReason || futureOverrideReason
   });
 
   let bill = null;
@@ -582,6 +584,84 @@ const listReadings = asyncHandler(async (req, res) => {
     params
   );
   res.json(rows);
+});
+
+const addMonthsUtc = (dateValue, months) => {
+  const dateOnly = dateValue instanceof Date ? dateValue.toISOString().slice(0, 10) : String(dateValue).slice(0, 10);
+  const date = new Date(`${dateOnly}T00:00:00.000Z`);
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1)).toISOString().slice(0, 10);
+};
+
+const listEligibleReadingCustomers = asyncHandler(async (req, res) => {
+  const periodSeed = req.query.period_start || req.query.reading_date || new Date().toISOString().slice(0, 10);
+  const period = getMonthlyPeriodDates(periodSeed);
+  const { rows } = await pool.query(
+    `SELECT c.id,
+            c.name,
+            c.acc_number,
+            c.status,
+            c.location,
+            z.name AS zone_name,
+            COALESCE(balance.balance_due, 0) AS balance_due,
+            meter_counts.active_meter_count,
+            latest.latest_reading_date,
+            latest.latest_reading_value
+     FROM customers c
+     LEFT JOIN zones z ON z.id = c.zone_id
+     JOIN LATERAL (
+       SELECT COUNT(*)::integer AS active_meter_count
+       FROM meters m
+       WHERE m.customer_id = c.id
+         AND m.status = 'active'
+         AND m.meter_role IN ('client_billing', 'source_backup')
+     ) meter_counts ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT mr.reading_date AS latest_reading_date,
+              mr.reading_value AS latest_reading_value
+       FROM meter_readings mr
+       JOIN meters m ON m.id = mr.meter_id
+       WHERE mr.customer_id = c.id
+         AND m.meter_role IN ('client_billing', 'source_backup')
+       ORDER BY mr.reading_date DESC, mr.id DESC
+       LIMIT 1
+     ) latest ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT
+         COALESCE((
+           SELECT SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount))
+           FROM bills b
+           WHERE b.customer_id = c.id AND b.status <> 'paid' AND b.bill_pay_status = 'payable'
+         ), 0) -
+         COALESCE((
+           SELECT SUM(p.unallocated_amount)
+           FROM payments p
+           WHERE p.customer_id = c.id AND p.status = 'posted'
+         ), 0) AS balance_due
+     ) balance ON TRUE
+     WHERE c.status = 'active'
+       AND meter_counts.active_meter_count > 0
+       AND NOT EXISTS (
+         SELECT 1
+         FROM meter_readings mr
+         JOIN meters m ON m.id = mr.meter_id
+         WHERE mr.customer_id = c.id
+           AND m.meter_role IN ('client_billing', 'source_backup')
+           AND mr.reading_date >= $1::date
+           AND mr.reading_date <= $2::date
+       )
+     ORDER BY z.name ASC, c.acc_number ASC`,
+    [period.periodStart, period.periodEnd]
+  );
+
+  res.json({
+    period,
+    rows: rows.map((row) => ({
+      ...row,
+      suggested_reading_date: row.latest_reading_date
+        ? getMonthlyPeriodDates(addMonthsUtc(row.latest_reading_date, 1)).periodEnd
+        : period.periodEnd
+    }))
+  });
 });
 
 const getReadingContext = asyncHandler(async (req, res) => {
@@ -1060,6 +1140,7 @@ const updateReading = asyncHandler(async (req, res) => {
   if (!customer_id || reading_value === undefined || !reading_date) {
     throw new ApiError(400, "Customer, reading value, and reading date are required.");
   }
+  const futureOverrideReason = assertNotFutureDate(reading_date, req, "Reading date");
 
   const client = await pool.connect();
   try {
@@ -1152,7 +1233,7 @@ const updateReading = asyncHandler(async (req, res) => {
       entityId: updatedResult.rows[0].id,
       beforeData: existing,
       afterData: updatedResult.rows[0],
-      reason: correctionReason || null
+      reason: correctionReason || futureOverrideReason
     });
 
     const bill = await recalculateBillForReading(client, updatedResult.rows[0].id, {
@@ -1235,6 +1316,7 @@ const updateReading = asyncHandler(async (req, res) => {
 module.exports = {
   commitReadingImport,
   getReadingContext,
+  listEligibleReadingCustomers,
   listReadings,
   createReading,
   previewReadingImport,

@@ -2,6 +2,7 @@ import { Download, Edit3, Eye, FileUp, Gauge, Replace, Save, Send } from "lucide
 import { useEffect, useMemo, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
 import { EmptyTableRow } from "../components/EmptyState";
+import FocusNotice from "../components/FocusNotice";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
@@ -13,10 +14,13 @@ const meterRoleLabels = {
   shared_source_monitoring: "Shared source monitoring"
 };
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
+const today = () => new Date().toISOString().slice(0, 10);
 
-function ReadingsPage({ user }) {
+function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [customers, setCustomers] = useState([]);
   const [readings, setReadings] = useState([]);
+  const [readingEligibility, setReadingEligibility] = useState(null);
+  const [eligibleReadingCustomers, setEligibleReadingCustomers] = useState([]);
   const [meterEvents, setMeterEvents] = useState([]);
   const [sourceRequests, setSourceRequests] = useState([]);
   const [form, setForm] = useState({
@@ -24,7 +28,7 @@ function ReadingsPage({ user }) {
     meter_id: "",
     reading_value: "",
     previous_reading_value: "",
-    reading_date: new Date().toISOString().slice(0, 10),
+    reading_date: today(),
     fallback_reason: "",
     correction_reason: ""
   });
@@ -32,7 +36,7 @@ function ReadingsPage({ user }) {
     customer_id: "",
     meter_number: "",
     meter_role: "source_backup",
-    installed_at: new Date().toISOString().slice(0, 10),
+    installed_at: today(),
     initial_reading: "0",
     notes: ""
   });
@@ -41,7 +45,7 @@ function ReadingsPage({ user }) {
     old_final_reading: "",
     new_meter_number: "",
     new_initial_reading: "0",
-    event_date: new Date().toISOString().slice(0, 10),
+    event_date: today(),
     reason: ""
   });
   const [replacementContext, setReplacementContext] = useState(null);
@@ -65,14 +69,17 @@ function ReadingsPage({ user }) {
   const [message, setMessage] = useState("");
 
   const load = async () => {
-    const [customerRows, readingRows, eventRows, sourceRows] = await Promise.all([
+    const [customerRows, readingRows, eligibility, eventRows, sourceRows] = await Promise.all([
       api.customers.list(),
       api.readings.list(),
+      api.readings.eligibleCustomers(form.reading_date),
       api.meters.events(),
       ["admin", "accountant"].includes(user?.role) ? api.billing.sourceBillingRequests.list() : Promise.resolve([])
     ]);
     setCustomers(customerRows);
     setReadings(readingRows);
+    setReadingEligibility(eligibility);
+    setEligibleReadingCustomers(eligibility.rows || []);
     setMeterEvents(eventRows);
     setSourceRequests(sourceRows);
   };
@@ -81,7 +88,42 @@ function ReadingsPage({ user }) {
     load().catch((err) => setMessage(err.message));
   }, []);
 
+  useEffect(() => {
+    let ignore = false;
+    api.readings
+      .eligibleCustomers(form.reading_date)
+      .then((eligibility) => {
+        if (!ignore) {
+          setReadingEligibility(eligibility);
+          setEligibleReadingCustomers(eligibility.rows || []);
+          if (!editingId && !form.customer_id && eligibility.period?.periodEnd && form.reading_date !== eligibility.period.periodEnd) {
+            setForm((current) =>
+              current.customer_id || current.reading_date === eligibility.period.periodEnd
+                ? current
+                : { ...current, reading_date: eligibility.period.periodEnd }
+            );
+          }
+        }
+      })
+      .catch((err) => {
+        if (!ignore) setMessage(err.message);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [form.reading_date, form.customer_id, editingId]);
+
   const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  const selectReadingCustomer = (customerId) => {
+    const eligible = eligibleReadingCustomers.find((customer) => Number(customer.id) === Number(customerId));
+    setForm((current) => ({
+      ...current,
+      customer_id: customerId,
+      meter_id: "",
+      fallback_reason: "",
+      reading_date: eligible?.suggested_reading_date || current.reading_date
+    }));
+  };
   const setMeterField = (field, value) => setMeterForm((current) => ({ ...current, [field]: value }));
   const setReplacementField = (field, value) =>
     setReplacementForm((current) => ({ ...current, [field]: value }));
@@ -179,7 +221,7 @@ function ReadingsPage({ user }) {
         meter_id: "",
         reading_value: "",
         previous_reading_value: "",
-        reading_date: new Date().toISOString().slice(0, 10),
+        reading_date: readingEligibility?.period?.periodEnd || today(),
         fallback_reason: "",
         correction_reason: ""
       });
@@ -207,7 +249,7 @@ function ReadingsPage({ user }) {
       meter_id: reading.meter_id || "",
       reading_value: reading.reading_value || "",
       previous_reading_value: reading.previous_reading_id ? "" : reading.previous_reading_value ?? "",
-      reading_date: reading.reading_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
+      reading_date: reading.reading_date?.slice(0, 10) || today(),
       fallback_reason: "",
       correction_reason: ""
     });
@@ -221,7 +263,7 @@ function ReadingsPage({ user }) {
       meter_id: "",
       reading_value: "",
       previous_reading_value: "",
-      reading_date: new Date().toISOString().slice(0, 10),
+      reading_date: readingEligibility?.period?.periodEnd || today(),
       fallback_reason: "",
       correction_reason: ""
     });
@@ -243,7 +285,7 @@ function ReadingsPage({ user }) {
         customer_id: "",
         meter_number: "",
         meter_role: "source_backup",
-        installed_at: new Date().toISOString().slice(0, 10),
+        installed_at: today(),
         initial_reading: "0",
         notes: ""
       });
@@ -326,7 +368,7 @@ function ReadingsPage({ user }) {
         old_final_reading: "",
         new_meter_number: "",
         new_initial_reading: "0",
-        event_date: new Date().toISOString().slice(0, 10),
+        event_date: today(),
         reason: ""
       });
       setReplacementContext(null);
@@ -340,7 +382,7 @@ function ReadingsPage({ user }) {
   const editMeterEvent = (event) => {
     setEditingEventId(event.id);
     setEventForm({
-      event_date: event.event_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
+      event_date: event.event_date?.slice(0, 10) || today(),
       old_final_reading: event.old_final_reading ?? "",
       new_initial_reading: event.new_initial_reading ?? "",
       reason: event.reason || "",
@@ -417,6 +459,19 @@ function ReadingsPage({ user }) {
       setImporting(false);
     }
   };
+  const focusKey = navigationIntent?.page === "readings" ? navigationIntent.focus : "";
+  const hasReadingFocus = ["missing_readings", "pending_source_billing"].includes(focusKey);
+  const showReadingEntryStack = !hasReadingFocus || focusKey === "missing_readings";
+  const showReadingForm = !hasReadingFocus || focusKey === "missing_readings";
+  const showReadingSetupTools = !hasReadingFocus;
+  const showSourceReview = !hasReadingFocus || focusKey === "pending_source_billing";
+  const showReadingRegisters = !hasReadingFocus;
+  const selectedCustomer = customers.find((customer) => Number(customer.id) === Number(form.customer_id));
+  const readingCustomerOptions = editingId
+    ? customers
+    : selectedCustomer && !eligibleReadingCustomers.some((customer) => Number(customer.id) === Number(selectedCustomer.id))
+      ? [selectedCustomer, ...eligibleReadingCustomers]
+      : eligibleReadingCustomers;
   const filteredReadings = readings.filter((reading) => {
     const dateValue = reading.reading_date?.slice(0, 10) || "";
     const customerMatch = !customerFilter || Number(reading.customer_id) === Number(customerFilter);
@@ -439,7 +494,10 @@ function ReadingsPage({ user }) {
   const meterEventTable = useTableControls(meterEvents, {
     searchFields: ["customer_name", "acc_number", "event_date", "old_meter_number", "new_meter_number", "reason"]
   });
-  const sourceRequestTable = useTableControls(sourceRequests, {
+  const focusedSourceRequests = focusKey === "pending_source_billing"
+    ? sourceRequests.filter((request) => request.status === "pending")
+    : sourceRequests;
+  const sourceRequestTable = useTableControls(focusedSourceRequests, {
     searchFields: ["customer_name", "acc_number", "meter_number", "status", "reason", "bill_number", "requested_by_name"]
   });
   const exportReadings = () => {
@@ -457,6 +515,10 @@ function ReadingsPage({ user }) {
       readingTable.filteredRows
     );
   };
+  const prepareReadingForCustomer = (customerId) => {
+    selectReadingCustomer(String(customerId));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   return (
     <section className="page-stack">
@@ -467,8 +529,25 @@ function ReadingsPage({ user }) {
         </div>
       </header>
 
+      {focusKey === "missing_readings" ? (
+        <FocusNotice
+          title="Missing period readings"
+          detail={`Showing active metered customers without a reading for ${readingEligibility?.period?.name || "the selected period"}.`}
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
+      {focusKey === "pending_source_billing" ? (
+        <FocusNotice
+          title="Source billing reviews"
+          detail="Showing pending source-side billing records awaiting review."
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
+
       <section className="workspace-grid">
+        {showReadingEntryStack ? (
         <div className="page-stack">
+          {showReadingForm ? (
           <form className="panel form-grid" onSubmit={submit}>
             <div className="panel-heading">
               <h3>{editingId ? "Edit Reading" : "Submit Reading"}</h3>
@@ -477,23 +556,22 @@ function ReadingsPage({ user }) {
               Customer
               <select
                 value={form.customer_id}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    customer_id: event.target.value,
-                    meter_id: "",
-                    fallback_reason: ""
-                  }))
-                }
+                onChange={(event) => selectReadingCustomer(event.target.value)}
                 required
               >
-                <option value="">Select customer</option>
-                {customers.map((customer) => (
+                <option value="">
+                  {editingId ? "Select customer" : `Select missing customer (${readingEligibility?.period?.name || "period"})`}
+                </option>
+                {readingCustomerOptions.map((customer) => (
                   <option key={customer.id} value={customer.id}>
                     {customer.acc_number} - {customer.name}
+                    {customer.suggested_reading_date ? ` | ${customer.suggested_reading_date}` : ""}
                   </option>
                 ))}
               </select>
+              {!editingId && !readingCustomerOptions.length ? (
+                <small>No active metered customers are missing readings for this period.</small>
+              ) : null}
             </label>
             {readingContext ? (
               <div className="reading-context">
@@ -557,6 +635,11 @@ function ReadingsPage({ user }) {
             <label>
               Reading date
               <input value={form.reading_date} onChange={(event) => setField("reading_date", event.target.value)} type="date" required />
+              <small>
+                {readingEligibility?.period?.name
+                  ? `Period closes ${readingEligibility.period.periodEnd}`
+                  : "Select any date in the billing month; the form uses the month-end reading day."}
+              </small>
             </label>
             {readingContext?.activeMeter?.meter_role === "source_backup" ? (
               <label>
@@ -594,8 +677,9 @@ function ReadingsPage({ user }) {
             ) : null}
             {editingId ? <AuditPanel entityType="meter_reading" entityId={editingId} title="Reading Audit" /> : null}
           </form>
+          ) : null}
 
-          {["admin", "accountant"].includes(user?.role) ? (
+          {showReadingSetupTools && ["admin", "accountant"].includes(user?.role) ? (
           <form className="panel form-grid" onSubmit={submitMeter}>
             <div className="panel-heading">
               <h3>Register Meter</h3>
@@ -648,6 +732,7 @@ function ReadingsPage({ user }) {
           </form>
           ) : null}
 
+          {showReadingSetupTools ? (
           <form className="panel form-grid" onSubmit={submitReplacement}>
             <div className="panel-heading">
               <h3>Replace Meter</h3>
@@ -742,7 +827,9 @@ function ReadingsPage({ user }) {
               Record replacement
             </button>
           </form>
+          ) : null}
 
+          {showReadingSetupTools ? (
           <div className="panel form-grid">
             <div className="panel-heading">
               <h3>Import Readings CSV</h3>
@@ -807,10 +894,66 @@ function ReadingsPage({ user }) {
               Import valid rows
             </button>
           </div>
+          ) : null}
         </div>
+        ) : null}
 
         <div className="page-stack wide-panel">
-          {importPreview ? (
+          {focusKey === "missing_readings" ? (
+            <div className="panel">
+              <div className="panel-heading">
+                <h3>{readingEligibility?.period?.name || "Period"} Reading Gaps</h3>
+                <Gauge size={18} />
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Customer</th>
+                      <th>Account</th>
+                      <th>Zone</th>
+                      <th>Suggested Date</th>
+                      <th>Latest Reading</th>
+                      <th>Balance</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {eligibleReadingCustomers.length ? (
+                      eligibleReadingCustomers.map((customer) => (
+                        <tr key={customer.id}>
+                          <td>{customer.name}</td>
+                          <td>{customer.acc_number}</td>
+                          <td>{customer.zone_name || customer.location || "-"}</td>
+                          <td>{customer.suggested_reading_date || readingEligibility?.period?.periodEnd || "-"}</td>
+                          <td>
+                            {customer.latest_reading_value === null || customer.latest_reading_value === undefined
+                              ? "Baseline"
+                              : Number(customer.latest_reading_value).toLocaleString()}
+                            <small>{customer.latest_reading_date?.slice(0, 10) || "No earlier reading"}</small>
+                          </td>
+                          <td>{money(customer.balance_due)}</td>
+                          <td>
+                            <button type="button" onClick={() => prepareReadingForCustomer(customer.id)}>
+                              Select
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <EmptyTableRow
+                        colSpan={7}
+                        title="No reading gaps"
+                        detail="All active metered customers have a reading for this period."
+                      />
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+
+          {showReadingRegisters && importPreview ? (
             <div className="panel">
               <div className="panel-heading">
                 <h3>CSV Preview</h3>
@@ -858,7 +1001,7 @@ function ReadingsPage({ user }) {
             </div>
           ) : null}
 
-          {["admin", "accountant"].includes(user?.role) ? (
+          {showSourceReview && ["admin", "accountant"].includes(user?.role) ? (
           <div className="panel">
             <div className="panel-heading">
               <h3>Source Billing Review</h3>
@@ -956,6 +1099,7 @@ function ReadingsPage({ user }) {
           </div>
           ) : null}
 
+          {showReadingRegisters ? (
           <div className="panel">
             <div className="panel-heading">
               <h3>Recent Readings</h3>
@@ -1038,7 +1182,9 @@ function ReadingsPage({ user }) {
               </table>
             </div>
           </div>
+          ) : null}
 
+          {showReadingRegisters ? (
           <div className="panel">
             <div className="panel-heading">
               <h3>Meter Events</h3>
@@ -1121,6 +1267,7 @@ function ReadingsPage({ user }) {
               </table>
             </div>
           </div>
+          ) : null}
         </div>
       </section>
     </section>

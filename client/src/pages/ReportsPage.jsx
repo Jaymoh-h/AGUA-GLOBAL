@@ -2,6 +2,7 @@ import { Download, FileSpreadsheet, Printer, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import { EmptyTableRow } from "../components/EmptyState";
+import FocusNotice from "../components/FocusNotice";
 import StatCard from "../components/StatCard";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
@@ -11,6 +12,7 @@ const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const number = (value) => Number(value || 0).toLocaleString();
 const date = (value) => value?.slice(0, 10) || "-";
 const label = (value) => String(value || "-").replaceAll("_", " ");
+const percent = (value) => `${(Number(value || 0) * 100).toFixed(2)}%`;
 
 const localDateInput = (dateValue = new Date()) => {
   const year = dateValue.getFullYear();
@@ -45,6 +47,7 @@ const managementReportTitles = {
 
 const accountantReportTitles = {
   all: "Accountant Report",
+  profitLoss: "Profit And Loss",
   billingStatus: "Billing By Status",
   collectionsChannel: "Collections By Channel",
   billingZone: "Billing By Zone",
@@ -57,7 +60,25 @@ const accountantReportTitles = {
   expenseRegister: "Expense Register"
 };
 
-function ReportsPage({ user }) {
+const dataQualityRecordColumns = {
+  duplicate_open_payable_bills: [
+    ["Account", (row) => row.acc_number],
+    ["Customer", (row) => row.customer_name],
+    ["Period", (row) => row.billing_period],
+    ["Bills", (row) => number(row.bill_count)],
+    ["Balance", (row) => money(row.balance_amount)],
+    ["Affected Bills", (row) => row.affected_bills]
+  ],
+  future_dated_operational_records: [
+    ["Record", (row) => label(row.record_type)],
+    ["ID", (row) => row.id],
+    ["Date", (row) => date(row.record_date)],
+    ["Owner/Ref", (row) => row.owner || "-"],
+    ["Notes", (row) => row.notes || "-"]
+  ]
+};
+
+function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [data, setData] = useState(null);
   const [accountantData, setAccountantData] = useState(null);
   const [businessSettings, setBusinessSettings] = useState(null);
@@ -70,6 +91,7 @@ function ReportsPage({ user }) {
   const [backupMessage, setBackupMessage] = useState("");
   const [backupLoading, setBackupLoading] = useState(false);
   const [dataQuality, setDataQuality] = useState([]);
+  const [selectedQualityKey, setSelectedQualityKey] = useState("");
 
   useEffect(() => {
     api.reports.summary().then(setData).catch((err) => setMessage(err.message));
@@ -141,63 +163,10 @@ function ReportsPage({ user }) {
     setBackupMessage("");
     setBackupLoading(true);
     try {
-      const [
-        customers,
-        readings,
-        bills,
-        payments,
-        expenses,
-        rates,
-        zones,
-        billingPeriods,
-        billingSettings,
-        businessSettingsRows,
-        maintenanceRequests,
-        users,
-        adjustments,
-        auditEvents
-      ] = await Promise.all([
-        api.customers.list(),
-        api.readings.list(),
-        api.bills.list(),
-        api.payments.list(),
-        api.expenses.list(),
-        api.rates.list(),
-        api.zones.list(),
-        api.billing.periods.list(),
-        api.billing.settings.get(),
-        api.businessSettings.get(),
-        api.maintenance.list(),
-        api.users.list(),
-        api.adjustments.list(),
-        api.auditEvents.list()
-      ]);
-
-      downloadJson(`agua-backup-${localDateInput()}.json`, {
-        exported_at: new Date().toISOString(),
-        exported_by: {
-          id: user?.id,
-          name: user?.name,
-          email: user?.email
-        },
-        datasets: {
-          customers,
-          readings,
-          bills,
-          payments,
-          expenses,
-          rates,
-          zones,
-          billing_periods: billingPeriods,
-          billing_settings: billingSettings,
-          business_settings: businessSettingsRows,
-          maintenance_requests: maintenanceRequests,
-          users,
-          adjustments,
-          audit_events: auditEvents
-        }
-      });
-      setBackupMessage("Backup downloaded.");
+      const backup = await api.reports.backup();
+      const datasetCount = Object.keys(backup.dataset_counts || {}).length;
+      downloadJson(`agua-operational-backup-${localDateInput()}.json`, backup);
+      setBackupMessage(`Backup downloaded with ${number(datasetCount)} datasets.`);
     } catch (err) {
       setBackupMessage(err.message);
     } finally {
@@ -216,6 +185,24 @@ function ReportsPage({ user }) {
   const billingRegisterTable = useTableControls(accountantData?.billingRegister || [], {
     searchFields: ["bill_number", "billing_period_name", "billing_month", "customer_name", "acc_number", "zone_name", "balance_amount"]
   });
+  const focusKey = navigationIntent?.page === "reports" ? navigationIntent.focus : "";
+  const dataQualityFocusKeys = ["duplicate_open_payable_bills", "future_dated_operational_records"];
+  const hasDataQualityFocus = dataQualityFocusKeys.includes(focusKey);
+  const visibleDataQuality = hasDataQualityFocus
+    ? dataQuality.filter((check) => check.key === focusKey)
+    : dataQuality;
+  const focusedQualityLabel = visibleDataQuality[0]?.label || navigationIntent?.label || "Data quality finding";
+  useEffect(() => {
+    if (hasDataQualityFocus) {
+      setSelectedQualityKey(focusKey);
+    }
+  }, [focusKey, hasDataQualityFocus]);
+  const selectedQuality =
+    dataQuality.find((check) => check.key === selectedQualityKey) ||
+    visibleDataQuality.find((check) => Number(check.count || 0) > 0 && check.records?.length) ||
+    null;
+  const selectedQualityRecords = selectedQuality?.records || [];
+  const selectedQualityColumns = dataQualityRecordColumns[selectedQuality?.key] || [];
   const receiptRegisterTable = useTableControls(accountantData?.receiptRegister || [], {
     searchFields: ["receipt_number", "payment_date", "customer_name", "acc_number", "payment_channel", "external_reference", "recorded_by_name"]
   });
@@ -239,6 +226,93 @@ function ReportsPage({ user }) {
   const receivablesAgingRows = printAllRows ? receivablesAgingTable.filteredRows : receivablesAgingTable.visibleRows;
   const depositRegisterRows = printAllRows ? depositRegisterTable.filteredRows : depositRegisterTable.visibleRows;
   const expenseRegisterRows = printAllRows ? expenseRegisterTable.filteredRows : expenseRegisterTable.visibleRows;
+  const profitAndLoss = accountantData?.profitAndLoss || {};
+  const cashProfit = profitAndLoss.cash || { revenue_lines: [], expense_lines: [], notes: [], totals: {} };
+  const accrualProfit = profitAndLoss.accrual || { revenue_lines: [], expense_lines: [], notes: [], totals: {} };
+  const renderProfitStatement = (statement, title) => (
+    <div className="panel profit-loss-statement">
+      <div className="panel-heading compact-heading">
+        <h3>{title}</h3>
+      </div>
+      <div className="reading-context">
+        <div>
+          <span>Revenue</span>
+          <strong>{money(statement.totals?.revenue)}</strong>
+        </div>
+        <div>
+          <span>Expenses</span>
+          <strong>{money(statement.totals?.expenses)}</strong>
+        </div>
+        <div>
+          <span>Net profit</span>
+          <strong>{money(statement.totals?.net_profit)}</strong>
+        </div>
+        <div>
+          <span>Margin</span>
+          <strong>{percent(statement.totals?.margin)}</strong>
+        </div>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Line</th>
+              <th>Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="muted-total">
+              <td colSpan="2">Revenue</td>
+            </tr>
+            {statement.revenue_lines?.map((row) => (
+              <tr key={`revenue-${title}-${row.label}`}>
+                <td>
+                  {row.label}
+                  {row.detail ? <small>{row.detail}</small> : null}
+                </td>
+                <td>{money(row.amount)}</td>
+              </tr>
+            ))}
+            <tr className="muted-total">
+              <td colSpan="2">Expenses</td>
+            </tr>
+            {statement.expense_lines?.length ? (
+              statement.expense_lines.map((row) => (
+                <tr key={`expense-${title}-${row.label}`}>
+                  <td>
+                    {row.label}
+                    {row.detail ? <small>{row.detail}</small> : null}
+                  </td>
+                  <td>{money(row.amount)}</td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td>No expenses recorded</td>
+                <td>{money(0)}</td>
+              </tr>
+            )}
+            {statement.notes?.length ? (
+              <>
+                <tr className="muted-total">
+                  <td colSpan="2">Notes</td>
+                </tr>
+                {statement.notes.map((row) => (
+                  <tr key={`note-${title}-${row.label}`}>
+                    <td>
+                      {row.label}
+                      {row.detail ? <small>{row.detail}</small> : null}
+                    </td>
+                    <td>{money(row.amount)}</td>
+                  </tr>
+                ))}
+              </>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 
   if (message) return <p className="form-error">{message}</p>;
   if (!data || !totals) return <p className="muted">Loading reports...</p>;
@@ -264,8 +338,17 @@ function ReportsPage({ user }) {
               {backupLoading ? "Preparing..." : "Download backup"}
             </button>
           </div>
+          <p className="muted">Server-generated operational export. Password hashes and reset tokens are excluded.</p>
           {backupMessage ? <p className="form-note">{backupMessage}</p> : null}
         </div>
+      ) : null}
+
+      {hasDataQualityFocus ? (
+        <FocusNotice
+          title={focusedQualityLabel}
+          detail="Showing the data-quality check that needs review. Clear focus to return to all report checks."
+          onClear={onClearNavigationIntent}
+        />
       ) : null}
 
       <div className="panel screen-only">
@@ -280,20 +363,30 @@ function ReportsPage({ user }) {
                 <th>Severity</th>
                 <th>Count</th>
                 <th>Detail</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              {dataQuality.map((check) => (
-                <tr key={check.key}>
+              {visibleDataQuality.map((check) => (
+                <tr className={selectedQuality?.key === check.key ? "selected-row" : ""} key={check.key}>
                   <td>{check.label}</td>
                   <td>{label(check.severity)}</td>
                   <td>{number(check.count)}</td>
                   <td>{check.detail}</td>
+                  <td>
+                    {check.records?.length ? (
+                      <button type="button" onClick={() => setSelectedQualityKey(check.key)}>
+                        Review
+                      </button>
+                    ) : (
+                      <span className="muted">-</span>
+                    )}
+                  </td>
                 </tr>
               ))}
-              {!dataQuality.length ? (
+              {!visibleDataQuality.length ? (
                 <tr>
-                  <td colSpan="4" className="muted">
+                  <td colSpan="5" className="muted">
                     No checks available.
                   </td>
                 </tr>
@@ -301,6 +394,46 @@ function ReportsPage({ user }) {
             </tbody>
           </table>
         </div>
+        {selectedQuality && selectedQualityColumns.length ? (
+          <div className="quality-detail-panel">
+            <div className="panel-heading compact-heading">
+              <div>
+                <h3>{selectedQuality.label}</h3>
+                <small>
+                  Showing up to {number(selectedQualityRecords.length)} affected records for review.
+                </small>
+              </div>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    {selectedQualityColumns.map(([column]) => (
+                      <th key={column}>{column}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedQualityRecords.length ? (
+                    selectedQualityRecords.map((row, index) => (
+                      <tr key={`${selectedQuality.key}-${row.id || index}-${index}`}>
+                        {selectedQualityColumns.map(([column, value]) => (
+                          <td key={column}>{value(row) || "-"}</td>
+                        ))}
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={selectedQualityColumns.length} className="muted">
+                        No affected records returned for this check.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className={`print-surface report-print report-print-management report-print-${printTarget} ${printScope === "management" ? "active-print-surface" : ""}`}>
@@ -756,9 +889,24 @@ function ReportsPage({ user }) {
               <StatCard label="Period collected" value={money(accountantTotals.collected)} detail="Posted receipts" />
               <StatCard label="Period balance" value={money(accountantTotals.outstanding)} detail="Bill balances" />
               <StatCard label="Period expenses" value={money(accountantTotals.expenses)} detail="Operating costs" />
+              <StatCard label="Cash net profit" value={money(cashProfit.totals?.net_profit)} detail={`Margin ${percent(cashProfit.totals?.margin)}`} />
+              <StatCard label="Accrual net profit" value={money(accrualProfit.totals?.net_profit)} detail={`Margin ${percent(accrualProfit.totals?.margin)}`} />
             </div>
 
             <section className="report-grid">
+              <div className="full-span report-section report-section-profitLoss">
+                <div className="panel-heading">
+                  <h3>Profit And Loss</h3>
+                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "profitLoss")} title="Print profit and loss">
+                    <Printer size={17} />
+                  </button>
+                </div>
+                <div className="profit-loss-grid">
+                  {renderProfitStatement(cashProfit, "Cash Basis")}
+                  {renderProfitStatement(accrualProfit, "Accrual Basis")}
+                </div>
+              </div>
+
               <div className="panel report-section report-section-billingStatus">
                 <div className="panel-heading">
                   <h3>Billing By Status</h3>

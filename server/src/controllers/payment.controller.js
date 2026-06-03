@@ -3,6 +3,7 @@ const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
 const { createReceiptNumber } = require("../services/billingPeriod.service");
+const { assertNotFutureDate } = require("../services/dateGuard.service");
 const {
   buildReceiptEmail,
   buildReceiptSms,
@@ -255,6 +256,7 @@ const createPaymentWithAllocations = async (
   if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
     throw new ApiError(400, "Payment amount must be greater than zero.");
   }
+  const futureOverrideReason = assertNotFutureDate(payment_date, req, "Payment date");
 
   const customer = await findCustomer(client, customerIdentifier, customer_id);
   if (!customer) {
@@ -322,7 +324,7 @@ const createPaymentWithAllocations = async (
       allocations,
       unallocatedAmount
     },
-    reason: auditReason
+    reason: auditReason || futureOverrideReason
   });
 
   return {
@@ -1109,6 +1111,7 @@ const updatePayment = asyncHandler(async (req, res) => {
   if (paymentAmount !== undefined && (!Number.isFinite(paymentAmount) || paymentAmount <= 0)) {
     throw new ApiError(400, "Payment amount must be greater than zero.");
   }
+  const futureOverrideReason = assertNotFutureDate(payment_date, req, "Payment date");
 
   const client = await pool.connect();
   try {
@@ -1200,7 +1203,8 @@ const updatePayment = asyncHandler(async (req, res) => {
       afterData: {
         payment: updatedPayment.rows[0],
         allocations
-      }
+      },
+      reason: futureOverrideReason
     });
 
     await client.query("COMMIT");

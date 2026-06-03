@@ -2,6 +2,7 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
+const { assertNotFutureDate } = require("../services/dateGuard.service");
 
 const paymentChannels = ["cash", "bank", "mpesa_paybill", "manual_adjustment"];
 
@@ -112,15 +113,16 @@ const createExpenseRecord = async (client, req, payload, { auditReason = null } 
     throw new ApiError(400, "Expense date, category, description, and amount are required.");
   }
   if (!isDateOnly(payload.expense_date)) throw new ApiError(400, "Expense date must use YYYY-MM-DD.");
+  const futureOverrideReason = assertNotFutureDate(payload.expense_date, req, "Expense date");
   if (!Number.isFinite(amount) || amount <= 0) throw new ApiError(400, "Amount must be greater than zero.");
   if (!channel) throw new ApiError(400, "Payment channel is invalid.");
 
   const { rows } = await client.query(
     `INSERT INTO expenses (
       expense_date, category, vendor, description, amount, payment_channel,
-      reference, receipt_number, notes, recorded_by
+      reference, receipt_number, maintenance_request_id, notes, recorded_by
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     RETURNING *`,
     [
       payload.expense_date,
@@ -131,6 +133,7 @@ const createExpenseRecord = async (client, req, payload, { auditReason = null } 
       channel,
       payload.reference || null,
       payload.receipt_number || null,
+      payload.maintenance_request_id || null,
       payload.notes || null,
       req.user.id
     ]
@@ -142,7 +145,7 @@ const createExpenseRecord = async (client, req, payload, { auditReason = null } 
     entityType: "expense",
     entityId: rows[0].id,
     afterData: rows[0],
-    reason: auditReason
+    reason: auditReason || futureOverrideReason
   });
 
   return rows[0];
@@ -150,9 +153,13 @@ const createExpenseRecord = async (client, req, payload, { auditReason = null } 
 
 const listExpenses = asyncHandler(async (_req, res) => {
   const { rows } = await pool.query(
-    `SELECT e.*, u.name AS recorded_by_name
+    `SELECT e.*,
+            u.name AS recorded_by_name,
+            mr.request_number AS maintenance_request_number,
+            mr.title AS maintenance_request_title
      FROM expenses e
      LEFT JOIN users u ON u.id = e.recorded_by
+     LEFT JOIN maintenance_requests mr ON mr.id = e.maintenance_request_id
      ORDER BY e.expense_date DESC, e.created_at DESC
      LIMIT 300`
   );

@@ -2,6 +2,7 @@ const express = require("express");
 const {
   applyPenaltyApplications,
   createBillingPeriod,
+  getBillingPeriodReadiness,
   getBillingSettings,
   listPenaltyApplications,
   listBillingPeriods,
@@ -20,6 +21,7 @@ const router = express.Router();
 router.use(authenticate);
 router.get("/periods", authorize("admin", "accountant"), listBillingPeriods);
 router.post("/periods", authorize("admin", "accountant"), createBillingPeriod);
+router.get("/periods/:id/readiness", authorize("admin", "accountant"), getBillingPeriodReadiness);
 router.patch("/periods/:id/status", authorize("admin", "accountant"), updateBillingPeriodStatus);
 router.get("/settings", authorize("admin", "accountant"), getBillingSettings);
 router.put("/settings", authorize("admin", "accountant"), updateBillingSettings);

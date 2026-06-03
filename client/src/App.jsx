@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import Layout, { pageAccess as access } from "./components/Layout";
 import LoginPage from "./pages/LoginPage";
 import PasswordChangePage from "./pages/PasswordChangePage";
-import { api } from "./services/api";
+import { api, setFutureDateOverrideHandler } from "./services/api";
 
 const AuditTrailPage = lazy(() => import("./pages/AuditTrailPage"));
 const BillsPage = lazy(() => import("./pages/BillsPage"));
@@ -42,8 +42,10 @@ const IDLE_LOGOUT_MS = 30 * 60 * 1000;
 function App() {
   const [user, setUser] = useState(getSavedUser);
   const [currentPage, setCurrentPage] = useState(() => (getSavedUser()?.role === "customer" ? "portal" : "dashboard"));
+  const [navigationIntent, setNavigationIntent] = useState(null);
   const [appName, setAppName] = useState("Water Billing");
   const [sessionMessage, setSessionMessage] = useState("");
+  const [futureDateOverride, setFutureDateOverride] = useState(null);
 
   const allowedPages = useMemo(() => {
     if (!user) return [];
@@ -75,6 +77,22 @@ function App() {
   }, [appName]);
 
   useEffect(() => {
+    const cleanup = setFutureDateOverrideHandler(
+      ({ message }) =>
+        new Promise((resolve) => {
+          setFutureDateOverride({ message, resolve });
+        })
+    );
+    return cleanup;
+  }, []);
+
+  const closeFutureDateOverride = (reason = "") => {
+    const resolve = futureDateOverride?.resolve;
+    setFutureDateOverride(null);
+    if (resolve) resolve(reason);
+  };
+
+  useEffect(() => {
     if (!user) return undefined;
 
     let timeoutId;
@@ -104,6 +122,19 @@ function App() {
     }
   };
 
+  const handleNavigate = (target) => {
+    if (typeof target === "string") {
+      setNavigationIntent(null);
+      setCurrentPage(target);
+      return;
+    }
+    if (!target?.page) return;
+    setNavigationIntent(target);
+    setCurrentPage(target.page);
+  };
+
+  const clearNavigationIntent = () => setNavigationIntent(null);
+
   const handleLogout = (message = "") => {
     localStorage.removeItem("agua_token");
     localStorage.removeItem("agua_user");
@@ -128,29 +159,29 @@ function App() {
 
   const pages = {
     portal: <PortalPage user={user} view="overview" />,
-    dashboard: <DashboardPage user={user} />,
+    dashboard: <DashboardPage user={user} onNavigate={handleNavigate} />,
     customers: <CustomersPage user={user} />,
-    readings: <ReadingsPage user={user} />,
-    bills: user.role === "customer" ? <PortalPage user={user} view="bills" /> : <BillsPage user={user} />,
+    readings: <ReadingsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
+    bills: user.role === "customer" ? <PortalPage user={user} view="bills" /> : <BillsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
     receipts: <PortalPage user={user} view="receipts" />,
     requests: <PortalPage user={user} view="requests" />,
-    billing: <BillingSetupPage user={user} />,
+    billing: <BillingSetupPage user={user} onNavigate={handleNavigate} />,
     business: <BusinessSettingsPage user={user} />,
-    communications: <CommunicationsPage user={user} />,
+    communications: <CommunicationsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
     audit: <AuditTrailPage user={user} />,
-    payments: <PaymentsPage user={user} />,
+    payments: <PaymentsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
     expenses: <ExpensesPage user={user} />,
-    payroll: <PayrollPage user={user} />,
-    maintenance: <MaintenancePage user={user} />,
-    production: <ProductionPage user={user} />,
-    reports: <ReportsPage user={user} />,
+    payroll: <PayrollPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
+    maintenance: <MaintenancePage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
+    production: <ProductionPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
+    reports: <ReportsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
     rates: <RatesPage user={user} />,
     zones: <ZonesPage user={user} />,
     users: <UsersPage user={user} />
   };
 
   return (
-    <Layout appName={appName} user={user} currentPage={currentPage} onNavigate={setCurrentPage} onLogout={handleLogout}>
+    <Layout appName={appName} user={user} currentPage={currentPage} onNavigate={handleNavigate} onLogout={handleLogout}>
       <Suspense
         fallback={
           <div className="panel">
@@ -160,7 +191,62 @@ function App() {
       >
         {pages[currentPage] || pages.dashboard}
       </Suspense>
+      {futureDateOverride ? (
+        <FutureDateOverrideDialog
+          message={futureDateOverride.message}
+          onCancel={() => closeFutureDateOverride("")}
+          onSubmit={closeFutureDateOverride}
+        />
+      ) : null}
     </Layout>
+  );
+}
+
+function FutureDateOverrideDialog({ message, onCancel, onSubmit }) {
+  const [reason, setReason] = useState("");
+  const trimmedReason = reason.trim();
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onCancel}>
+      <form
+        className="modal-panel override-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="future-date-override-title"
+        onClick={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (trimmedReason) onSubmit(trimmedReason);
+        }}
+      >
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Admin Override</p>
+            <h3 id="future-date-override-title">Future-dated record</h3>
+          </div>
+        </div>
+        <p className="muted">{message}</p>
+        <label>
+          Override reason
+          <textarea
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            rows="4"
+            autoFocus
+            placeholder="Explain why this future-dated record is valid."
+            required
+          />
+        </label>
+        <div className="row-actions">
+          <button className="primary-button" type="submit" disabled={!trimmedReason}>
+            Continue
+          </button>
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 

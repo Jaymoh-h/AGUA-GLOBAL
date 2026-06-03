@@ -1,4 +1,4 @@
-import { CalendarPlus, Eye, ReceiptText, Save } from "lucide-react";
+import { ArrowRight, CalendarPlus, Eye, ReceiptText, RefreshCw, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import StatusBadge from "../components/StatusBadge";
@@ -7,10 +7,24 @@ import { api } from "../services/api";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 
-function BillingSetupPage() {
+const readinessStatus = (readiness) => {
+  if (!readiness) return "review";
+  if (!readiness.summary?.ready_to_close) return "critical";
+  return Number(readiness.summary?.warnings || 0) > 0 ? "review" : "ready";
+};
+
+const checkStatus = (check) => {
+  if (check.passed) return "ready";
+  return check.level === "block" ? "critical" : "review";
+};
+
+function BillingSetupPage({ onNavigate }) {
   const [periods, setPeriods] = useState([]);
   const [penaltyApplications, setPenaltyApplications] = useState([]);
   const [settings, setSettings] = useState(null);
+  const [readiness, setReadiness] = useState(null);
+  const [readinessPeriodId, setReadinessPeriodId] = useState("");
+  const [readinessBusy, setReadinessBusy] = useState(false);
   const [periodStart, setPeriodStart] = useState(new Date().toISOString().slice(0, 7) + "-01");
   const [penaltyDate, setPenaltyDate] = useState(new Date().toISOString().slice(0, 10));
   const [penaltyPreview, setPenaltyPreview] = useState(null);
@@ -32,8 +46,30 @@ function BillingSetupPage() {
     load().catch((err) => setMessage(err.message));
   }, []);
 
+  useEffect(() => {
+    if (!periods.length || readinessPeriodId) return;
+    loadReadiness(periods[0].id, { silent: true }).catch((err) => setMessage(err.message));
+  }, [periods, readinessPeriodId]);
+
   const updateSettingsField = (field, value) => {
     setSettings((current) => ({ ...current, [field]: value }));
+  };
+
+  const loadReadiness = async (periodId, options = {}) => {
+    if (!periodId) return null;
+    if (!options.silent) setMessage("");
+    setReadinessBusy(true);
+    try {
+      const result = await api.billing.periods.readiness(periodId);
+      setReadiness(result);
+      setReadinessPeriodId(periodId);
+      return result;
+    } catch (err) {
+      if (!options.silent) setMessage(err.message);
+      throw err;
+    } finally {
+      setReadinessBusy(false);
+    }
   };
 
   const saveSettings = async (event) => {
@@ -75,6 +111,16 @@ function BillingSetupPage() {
   const updateStatus = async (period, status) => {
     setMessage("");
     try {
+      if (["closed", "locked"].includes(status)) {
+        const result = readinessPeriodId === period.id && readiness ? readiness : await loadReadiness(period.id, { silent: true });
+        const blockers = Number(result?.summary?.blockers || 0);
+        if (blockers > 0) {
+          const proceed = window.confirm(
+            `${period.name} has ${blockers} month-end blocker(s). Continue changing the period status to ${status}?`
+          );
+          if (!proceed) return;
+        }
+      }
       const restrictedCurrent = ["closed", "locked"].includes(period.status);
       const correctionReason = restrictedCurrent
         ? window.prompt(`Reason required to change a ${period.status} period:`)
@@ -82,9 +128,17 @@ function BillingSetupPage() {
       if (restrictedCurrent && !correctionReason) return;
       await api.billing.periods.updateStatus(period.id, status, correctionReason || "");
       await load();
+      if (readinessPeriodId === period.id) {
+        await loadReadiness(period.id, { silent: true });
+      }
     } catch (err) {
       setMessage(err.message);
     }
+  };
+
+  const openReadinessTarget = (check) => {
+    if (!check.page || !onNavigate) return;
+    onNavigate({ page: check.page, focus: check.focus, label: check.label });
   };
 
   const previewPenalties = async () => {
@@ -164,6 +218,10 @@ function BillingSetupPage() {
       setMessage(err.message);
     }
   };
+
+  const currentReadinessStatus = readinessStatus(readiness);
+  const readinessChecks = readiness?.checks || [];
+  const selectedPeriod = periods.find((period) => period.id === readinessPeriodId) || readiness?.period || periods[0];
 
   return (
     <section className="page-stack">
@@ -376,12 +434,18 @@ function BillingSetupPage() {
                         <StatusBadge status={period.status} />
                       </td>
                       <td>
-                        <select value={period.status} onChange={(event) => updateStatus(period, event.target.value)}>
-                          <option value="draft">Draft</option>
-                          <option value="open">Open</option>
-                          <option value="closed">Closed</option>
-                          <option value="locked">Locked</option>
-                        </select>
+                        <div className="row-actions">
+                          <select value={period.status} onChange={(event) => updateStatus(period, event.target.value)}>
+                            <option value="draft">Draft</option>
+                            <option value="open">Open</option>
+                            <option value="closed">Closed</option>
+                            <option value="locked">Locked</option>
+                          </select>
+                          <button type="button" onClick={() => loadReadiness(period.id)} disabled={readinessBusy}>
+                            <RefreshCw size={16} />
+                            Readiness
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -390,6 +454,83 @@ function BillingSetupPage() {
                 )}
               </tbody>
             </table>
+          </div>
+
+          <div className="readiness-panel">
+            <div className="panel-heading">
+              <div>
+                <h3>Month-End Close Readiness</h3>
+                <small>{selectedPeriod ? selectedPeriod.name : "Select a billing period"}</small>
+              </div>
+              {readiness ? (
+                <div className="row-actions">
+                  <StatusBadge status={currentReadinessStatus} />
+                  <button type="button" onClick={() => loadReadiness(readiness.period.id)} disabled={readinessBusy}>
+                    <RefreshCw size={16} />
+                    Refresh
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            {readiness ? (
+              <>
+                <div className="reading-context">
+                  <div>
+                    <span>Blockers</span>
+                    <strong>{Number(readiness.summary?.blockers || 0).toLocaleString()}</strong>
+                  </div>
+                  <div>
+                    <span>Warnings</span>
+                    <strong>{Number(readiness.summary?.warnings || 0).toLocaleString()}</strong>
+                  </div>
+                  <div>
+                    <span>Active metered</span>
+                    <strong>{Number(readiness.summary?.active_metered_customers || 0).toLocaleString()}</strong>
+                  </div>
+                  <div>
+                    <span>Payable bills</span>
+                    <strong>{Number(readiness.summary?.bill_count || 0).toLocaleString()}</strong>
+                  </div>
+                  <div>
+                    <span>Billed</span>
+                    <strong>{money(readiness.summary?.billed_amount)}</strong>
+                  </div>
+                  <div>
+                    <span>Open balance</span>
+                    <strong>{money(readiness.summary?.balance_amount)}</strong>
+                  </div>
+                </div>
+                <div className="readiness-list">
+                  {readinessChecks.map((check) => {
+                    const status = checkStatus(check);
+                    return (
+                      <div className="readiness-check" key={check.key}>
+                        <div>
+                          <StatusBadge status={status} />
+                          <strong>{check.label}</strong>
+                          <small>{check.detail}</small>
+                        </div>
+                        <div className="readiness-check-meta">
+                          <span>{Number(check.count || 0).toLocaleString()}</span>
+                          {check.amount !== null ? <small>{money(check.amount)}</small> : null}
+                          {!check.passed && check.page ? (
+                            <button type="button" onClick={() => openReadinessTarget(check)}>
+                              <ArrowRight size={16} />
+                              Open
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            ) : (
+              <div className="empty-state">
+                <strong>No readiness run yet</strong>
+                <span>Choose a billing period and run readiness before closing or locking it.</span>
+              </div>
+            )}
           </div>
         </div>
       </section>

@@ -43,5 +43,19 @@ module.exports = {
       from: process.env.TWILIO_FROM || process.env.TWILIO_PHONE_NUMBER,
       messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID
     }
+  },
+  whatsapp: {
+    provider: process.env.WHATSAPP_PROVIDER || "none",
+    defaultCountryCode: process.env.WHATSAPP_DEFAULT_COUNTRY_CODE || process.env.SMS_DEFAULT_COUNTRY_CODE || "254",
+    twilio: {
+      accountSid: process.env.WHATSAPP_TWILIO_ACCOUNT_SID || process.env.TWILIO_ACCOUNT_SID,
+      authToken: process.env.WHATSAPP_TWILIO_AUTH_TOKEN || process.env.TWILIO_AUTH_TOKEN,
+      from: process.env.TWILIO_WHATSAPP_FROM || process.env.WHATSAPP_TWILIO_FROM
+    },
+    meta: {
+      phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
+      accessToken: process.env.WHATSAPP_ACCESS_TOKEN,
+      apiVersion: process.env.WHATSAPP_API_VERSION || "v20.0"
+    }
   }
 };

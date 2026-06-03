@@ -5,6 +5,8 @@ const { recordAuditEvent } = require("../services/audit.service");
 const { createPaymentWithAllocations } = require("./payment.controller");
 const { createExpenseRecord } = require("./expense.controller");
 const { createBillNumber } = require("../services/billingPeriod.service");
+const { assertNoFutureDates, assertNotFutureDate } = require("../services/dateGuard.service");
+const { assertPortalCustomerAccess, getPortalCustomerIds } = require("../services/portalAccount.service");
 
 const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
 
@@ -427,8 +429,9 @@ const prepareOpeningBalanceImport = async (csvText, client) => {
 const listCustomers = asyncHandler(async (req, res) => {
   const search = req.query.search || "";
   const params = [`%${search}%`];
+  const customerScopeIds = req.user.role === "customer" ? await getPortalCustomerIds(pool, req.user) : [];
   const customerScope =
-    req.user.role === "customer" ? `AND c.id = $${params.push(req.user.customer_id || 0)}` : "";
+    req.user.role === "customer" ? `AND c.id = ANY($${params.push(customerScopeIds)}::int[])` : "";
   const { rows } = await pool.query(
     `SELECT c.*,
       r.name AS rate_name,
@@ -465,13 +468,16 @@ const listCustomers = asyncHandler(async (req, res) => {
 });
 
 const getCustomer = asyncHandler(async (req, res) => {
+  if (req.user.role === "customer") {
+    await assertPortalCustomerAccess(pool, req.user, req.params.id);
+  }
   const { rows } = await pool.query(
     `SELECT c.*, r.name AS rate_name, r.amount AS rate_amount, z.name AS zone_name
      FROM customers c
      JOIN rates r ON r.id = c.rate_id
      JOIN zones z ON z.id = c.zone_id
-     WHERE c.id = $1 AND ($2::text <> 'customer' OR c.id = $3)`,
-    [req.params.id, req.user.role, req.user.customer_id || 0]
+     WHERE c.id = $1`,
+    [req.params.id]
   );
   if (!rows[0]) {
     throw new ApiError(404, "Customer not found.");
@@ -504,8 +510,8 @@ const getCustomerStatement = asyncHandler(async (req, res) => {
   if (!customer) {
     throw new ApiError(404, "Customer not found.");
   }
-  if (req.user.role === "customer" && Number(customer.id) !== Number(req.user.customer_id || 0)) {
-    throw new ApiError(403, "You do not have permission to view this statement.");
+  if (req.user.role === "customer") {
+    await assertPortalCustomerAccess(pool, req.user, customer.id);
   }
 
   const openingResult = hasStart
@@ -667,6 +673,13 @@ const commitCustomerImport = asyncHandler(async (req, res) => {
 
     const inserted = [];
     for (const row of preview.rows) {
+      const futureOverrideReason = assertNoFutureDates(
+        [
+          { value: row.deposit_paid ? row.deposit_paid_at : null, label: `Deposit paid date on row ${row.rowNumber}` },
+          { value: row.opening_balance_amount !== 0 ? row.opening_balance_date : null, label: `Opening balance date on row ${row.rowNumber}` }
+        ],
+        req
+      );
       const result = await client.query(
         `INSERT INTO customers (
            name, phone, email, location, acc_number, rate, rate_id, zone_id,
@@ -713,7 +726,8 @@ const commitCustomerImport = asyncHandler(async (req, res) => {
         action: "customer.imported",
         entityType: "customer",
         entityId: customer.id,
-        afterData: customer
+        afterData: customer,
+        reason: futureOverrideReason || null
       });
       if (migrationBill) {
         await recordAuditEvent(client, {
@@ -721,7 +735,8 @@ const commitCustomerImport = asyncHandler(async (req, res) => {
           action: "bill.migration_balance_created",
           entityType: "bill",
           entityId: migrationBill.id,
-          afterData: migrationBill
+          afterData: migrationBill,
+          reason: futureOverrideReason || null
         });
       }
     }
@@ -763,6 +778,11 @@ const commitOpeningBalanceImport = asyncHandler(async (req, res) => {
       }
 
       const openingBalance = normalizeOpeningBalance(row.opening_balance_amount, row.opening_balance_date);
+      const futureOverrideReason = assertNotFutureDate(
+        openingBalance.balanceDate,
+        req,
+        `Opening balance date on row ${row.rowNumber}`
+      );
       const afterResult = await client.query(
         `UPDATE customers
          SET opening_balance_amount = $1,
@@ -788,7 +808,7 @@ const commitOpeningBalanceImport = asyncHandler(async (req, res) => {
         entityId: after.id,
         beforeData: before,
         afterData: after,
-        reason: `Opening balance overwrite import row ${row.rowNumber}`
+        reason: futureOverrideReason || `Opening balance overwrite import row ${row.rowNumber}`
       });
       if (migrationBill) {
         await recordAuditEvent(client, {
@@ -797,7 +817,7 @@ const commitOpeningBalanceImport = asyncHandler(async (req, res) => {
           entityType: "bill",
           entityId: migrationBill.id,
           afterData: migrationBill,
-          reason: `Opening balance overwrite import row ${row.rowNumber}`
+          reason: futureOverrideReason || `Opening balance overwrite import row ${row.rowNumber}`
         });
       }
     }
@@ -837,6 +857,14 @@ const createCustomer = asyncHandler(async (req, res) => {
   const openingBalance = normalizeOpeningBalance(opening_balance_amount, opening_balance_date);
   const nextEmail = normalizeEmail(email);
   const nextDeliveryChannel = normalizeDeliveryChannel(preferred_delivery_channel);
+  const nextDepositPaidAt = deposit_paid ? deposit_paid_at || new Date().toISOString().slice(0, 10) : null;
+  const futureOverrideReason = assertNoFutureDates(
+    [
+      { value: nextDepositPaidAt, label: "Deposit paid date" },
+      { value: openingBalance.balanceDate, label: "Opening balance date" }
+    ],
+    req
+  );
 
   const client = await pool.connect();
   try {
@@ -862,7 +890,7 @@ const createCustomer = asyncHandler(async (req, res) => {
         zone_id,
         Number(deposit_amount) || 0,
         Boolean(deposit_paid),
-        deposit_paid ? deposit_paid_at || new Date().toISOString().slice(0, 10) : null,
+        nextDepositPaidAt,
         openingBalance.balanceAmount,
         openingBalance.balanceDate,
         nextDeliveryChannel,
@@ -885,7 +913,8 @@ const createCustomer = asyncHandler(async (req, res) => {
       action: "customer.created",
       entityType: "customer",
       entityId: rows[0].id,
-      afterData: rows[0]
+      afterData: rows[0],
+      reason: futureOverrideReason || null
     });
     if (migrationBill) {
       await recordAuditEvent(client, {
@@ -893,7 +922,8 @@ const createCustomer = asyncHandler(async (req, res) => {
         action: "bill.migration_balance_created",
         entityType: "bill",
         entityId: migrationBill.id,
-        afterData: migrationBill
+        afterData: migrationBill,
+        reason: futureOverrideReason || null
       });
     }
     await client.query("COMMIT");
@@ -1005,6 +1035,13 @@ const updateCustomer = asyncHandler(async (req, res) => {
       await client.query("COMMIT");
       return res.json({ ...before, unchanged: true });
     }
+    const futureOverrideReason = assertNoFutureDates(
+      [
+        { value: changedFields.includes("deposit_paid_at") ? nextValues.deposit_paid_at : null, label: "Deposit paid date" },
+        { value: changedFields.includes("opening_balance_date") ? nextValues.opening_balance_date : null, label: "Opening balance date" }
+      ],
+      req
+    );
     const setClauses = changedFields.map((field, index) => `${field} = $${index + 1}`);
     const updateValues = changedFields.map((field) => nextValues[field]);
     const { rows } = await client.query(
@@ -1033,7 +1070,8 @@ const updateCustomer = asyncHandler(async (req, res) => {
       entityType: "customer",
       entityId: rows[0].id,
       beforeData: Object.fromEntries(changedFields.map((field) => [field, before[field]])),
-      afterData: Object.fromEntries(changedFields.map((field) => [field, rows[0][field]]))
+      afterData: Object.fromEntries(changedFields.map((field) => [field, rows[0][field]])),
+      reason: futureOverrideReason || null
     });
     if (migrationBill) {
       await recordAuditEvent(client, {
@@ -1041,7 +1079,8 @@ const updateCustomer = asyncHandler(async (req, res) => {
         action: "bill.migration_balance_updated",
         entityType: "bill",
         entityId: migrationBill.id,
-        afterData: migrationBill
+        afterData: migrationBill,
+        reason: futureOverrideReason || null
       });
     }
     await client.query("COMMIT");
@@ -1093,6 +1132,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
   if (!isDateOnly(settlement_date)) {
     throw new ApiError(400, "Settlement date must use YYYY-MM-DD format.");
   }
+  const futureOverrideReason = assertNotFutureDate(settlement_date, req, "Settlement date");
   if (!["refund", "transfer", "forfeit"].includes(deposit_remainder_action)) {
     throw new ApiError(400, "Deposit remainder action must be refund, transfer, or forfeit.");
   }
@@ -1116,7 +1156,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
       entityType: "bill",
       entityId: closureBill.id,
       afterData: closureBill,
-      reason: notes || "Final bill generated before account closure"
+      reason: notes || futureOverrideReason || "Final bill generated before account closure"
     });
 
     const openingDebt = Math.max(await getCustomerBalanceDue(client, before.id), 0);
@@ -1265,7 +1305,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
         deposit_transfer: depositTransfer?.payment || null,
         deposit_transactions: depositTransactions
       },
-      reason: notes || "Account closed"
+      reason: notes || futureOverrideReason || "Account closed"
     });
 
     await client.query("COMMIT");

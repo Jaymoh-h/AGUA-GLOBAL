@@ -2,6 +2,7 @@ import { CircleDollarSign, Download, Eye, FileUp, Mail, MessageSquare, Printer, 
 import { useEffect, useMemo, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
 import { EmptyTableRow } from "../components/EmptyState";
+import FocusNotice from "../components/FocusNotice";
 import TableControls, { useTableControls } from "../components/TableControls";
 import ToastMessage, { toastTypeFromMessage } from "../components/ToastMessage";
 import { api, assetUrl } from "../services/api";
@@ -536,7 +537,7 @@ const bankConfidenceLabel = (score) => {
   return "Manual";
 };
 
-function PaymentsPage({ user }) {
+function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [payments, setPayments] = useState([]);
   const [suspenseItems, setSuspenseItems] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -1101,6 +1102,7 @@ function PaymentsPage({ user }) {
     }
   };
 
+  const focusKey = navigationIntent?.page === "payments" ? navigationIntent.focus : "";
   const filteredPayments = payments.filter((payment) => {
     const dateValue = payment.payment_date?.slice(0, 10) || "";
     const channelMatch = !channelFilter || (payment.payment_channel || payment.method) === channelFilter;
@@ -1108,7 +1110,24 @@ function PaymentsPage({ user }) {
     const toMatch = !dateToFilter || dateValue <= dateToFilter;
     return channelMatch && fromMatch && toMatch;
   });
-  const paymentTable = useTableControls(filteredPayments, {
+  const focusedPayments = focusKey === "customer_credits"
+    ? filteredPayments.filter((payment) => Number(payment.unallocated_amount || 0) > 0 && payment.status === "posted")
+    : filteredPayments;
+  const focusedSuspenseItems = focusKey === "suspense_payments"
+    ? suspenseItems.filter((item) => item.status === "held")
+    : suspenseItems;
+  const focusedAdjustments = focusKey === "pending_adjustments"
+    ? adjustments.filter((adjustment) => adjustment.status === "pending")
+    : adjustments;
+  const hasPaymentFocus = ["suspense_payments", "customer_credits", "pending_adjustments"].includes(focusKey);
+  const showEntryTools = !hasPaymentFocus || focusKey === "pending_adjustments";
+  const showPaymentEntry = !hasPaymentFocus;
+  const showAdjustmentEntry = !hasPaymentFocus || focusKey === "pending_adjustments";
+  const showBankTools = !hasPaymentFocus;
+  const showPaymentHistory = !hasPaymentFocus || focusKey === "customer_credits";
+  const showSuspenseRegister = !hasPaymentFocus || focusKey === "suspense_payments";
+  const showAdjustmentRegister = !hasPaymentFocus || focusKey === "pending_adjustments";
+  const paymentTable = useTableControls(focusedPayments, {
     searchFields: [
       "customer_name",
       "acc_number",
@@ -1122,7 +1141,7 @@ function PaymentsPage({ user }) {
       "bill_numbers"
     ]
   });
-  const adjustmentTable = useTableControls(adjustments, {
+  const adjustmentTable = useTableControls(focusedAdjustments, {
     searchFields: [
       "customer_name",
       "acc_number",
@@ -1135,7 +1154,7 @@ function PaymentsPage({ user }) {
       "reviewed_by_name"
     ]
   });
-  const suspenseTable = useTableControls(suspenseItems, {
+  const suspenseTable = useTableControls(focusedSuspenseItems, {
     searchFields: [
       "receipt_number",
       "customer_name",
@@ -1174,8 +1193,32 @@ function PaymentsPage({ user }) {
         </div>
       </header>
 
+      {focusKey === "suspense_payments" ? (
+        <FocusNotice
+          title="Suspense payments"
+          detail="Showing held suspense items awaiting reapplication or discard."
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
+      {focusKey === "customer_credits" ? (
+        <FocusNotice
+          title="Customer credits"
+          detail="Showing posted payments with unallocated credit balances."
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
+      {focusKey === "pending_adjustments" ? (
+        <FocusNotice
+          title="Pending adjustments"
+          detail="Showing manual credit/debit requests awaiting review."
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
+
       <section className="workspace-grid payments-workspace-grid">
+        {showEntryTools ? (
         <div className="page-stack payments-entry-grid">
+          {showPaymentEntry ? (
           <form className="panel form-grid" onSubmit={submit}>
             <div className="panel-heading">
               <h3>{editingId ? "Edit Payment" : "Record Payment"}</h3>
@@ -1248,7 +1291,9 @@ function PaymentsPage({ user }) {
               </button>
             ) : null}
           </form>
+          ) : null}
 
+          {showAdjustmentEntry ? (
           <form className="panel form-grid" onSubmit={submitAdjustment}>
             <div className="panel-heading">
               <div>
@@ -1312,7 +1357,10 @@ function PaymentsPage({ user }) {
               Submit for approval
             </button>
           </form>
+          ) : null}
 
+          {showBankTools ? (
+          <>
           <div className="panel form-grid bank-trainer-panel">
             <div className="panel-heading">
               <div>
@@ -1614,10 +1662,13 @@ function PaymentsPage({ user }) {
               Import valid rows
             </button>
           </div>
+          </>
+          ) : null}
         </div>
+        ) : null}
 
         <div className="page-stack wide-panel">
-          {importPreview ? (
+          {!hasPaymentFocus && importPreview ? (
             <div className="panel">
               <div className="panel-heading">
                 <h3>CSV Preview</h3>
@@ -1822,6 +1873,7 @@ function PaymentsPage({ user }) {
             </div>
           ) : null}
 
+          {showPaymentHistory ? (
           <div className="panel">
             <div className="panel-heading">
               <h3>Payment History</h3>
@@ -1918,7 +1970,9 @@ function PaymentsPage({ user }) {
               </table>
             </div>
           </div>
+          ) : null}
 
+          {showSuspenseRegister ? (
           <div className="panel">
             <div className="panel-heading">
               <h3>Suspense Register</h3>
@@ -1988,7 +2042,9 @@ function PaymentsPage({ user }) {
               </table>
             </div>
           </div>
+          ) : null}
 
+          {showAdjustmentRegister ? (
           <div className="panel">
             <div className="panel-heading">
               <h3>Adjustment Approvals</h3>
@@ -2053,6 +2109,7 @@ function PaymentsPage({ user }) {
               </table>
             </div>
           </div>
+          ) : null}
         </div>
       </section>
     </section>

@@ -1,4 +1,4 @@
-import { Edit3, RotateCcw, Save, UserPlus } from "lucide-react";
+import { Edit3, Link2, RotateCcw, Save, UserPlus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
@@ -10,6 +10,7 @@ const blank = {
   phone: "",
   role: "meter_reader",
   customer_id: "",
+  linked_customer_ids: [],
   password: "",
   is_active: true
 };
@@ -18,6 +19,8 @@ const formatDateTime = (value) => {
   if (!value) return "Never";
   return new Date(value).toLocaleString();
 };
+
+const customerLabel = (customer) => `${customer.acc_number} - ${customer.name}`;
 
 function UsersPage({ user: currentUser }) {
   const [users, setUsers] = useState([]);
@@ -46,8 +49,26 @@ function UsersPage({ user: currentUser }) {
     setForm((current) => ({
       ...current,
       [field]: value,
-      ...(field === "role" && value !== "customer" ? { customer_id: "" } : {})
+      ...(field === "role" && value !== "customer" ? { customer_id: "", linked_customer_ids: [] } : {}),
+      ...(field === "customer_id" && value
+        ? { linked_customer_ids: [...new Set([...current.linked_customer_ids, Number(value)])] }
+        : {})
     }));
+  };
+
+  const toggleLinkedCustomer = (customerId) => {
+    const id = Number(customerId);
+    setForm((current) => {
+      const linked = current.linked_customer_ids.includes(id)
+        ? current.linked_customer_ids.filter((linkedId) => linkedId !== id)
+        : [...current.linked_customer_ids, id];
+      const nextPrimary = linked.includes(Number(current.customer_id)) ? current.customer_id : linked[0] || "";
+      return {
+        ...current,
+        linked_customer_ids: linked,
+        customer_id: nextPrimary
+      };
+    });
   };
 
   const edit = (account) => {
@@ -58,6 +79,7 @@ function UsersPage({ user: currentUser }) {
       phone: account.phone || "",
       role: account.role || "meter_reader",
       customer_id: account.customer_id || "",
+      linked_customer_ids: (account.linked_customers || []).map((customer) => Number(customer.id)),
       password: "",
       is_active: Boolean(account.is_active)
     });
@@ -76,7 +98,9 @@ function UsersPage({ user: currentUser }) {
     try {
       const payload = {
         ...form,
-        customer_id: form.role === "customer" && form.customer_id ? Number(form.customer_id) : null
+        customer_id: form.role === "customer" && form.customer_id ? Number(form.customer_id) : null,
+        linked_customer_ids:
+          form.role === "customer" ? [...new Set([Number(form.customer_id), ...form.linked_customer_ids].filter(Boolean))] : []
       };
       if (!payload.password) {
         delete payload.password;
@@ -168,11 +192,39 @@ function UsersPage({ user: currentUser }) {
                 <option value="">Select customer</option>
                 {customers.map((customer) => (
                   <option key={customer.id} value={customer.id}>
-                    {customer.acc_number} - {customer.name}
+                    {customerLabel(customer)}
                   </option>
                 ))}
               </select>
             </label>
+          ) : null}
+          {form.role === "customer" ? (
+            <div className="linked-account-picker">
+              <div className="panel-heading compact-heading">
+                <h4>Portal Accounts</h4>
+                <Link2 size={16} />
+              </div>
+              <div className="linked-account-list">
+                {customers.map((customer) => {
+                  const checked = form.linked_customer_ids.includes(Number(customer.id));
+                  const primary = Number(form.customer_id) === Number(customer.id);
+                  return (
+                    <label key={customer.id} className="linked-account-option">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleLinkedCustomer(customer.id)}
+                      />
+                      <span>
+                        <strong>{customer.acc_number}</strong>
+                        <small>{customer.name}</small>
+                      </span>
+                      {primary ? <em>Primary</em> : null}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
           ) : null}
           <label>
             {editingId ? "Reset temporary password" : "Temporary password"}
@@ -233,6 +285,12 @@ function UsersPage({ user: currentUser }) {
                       <td>
                         <strong>{account.customer_acc_number || "-"}</strong>
                         <small>{account.customer_name || ""}</small>
+                        {account.role === "customer" ? (
+                          <small>
+                            {(account.linked_customers || []).length} linked account
+                            {(account.linked_customers || []).length === 1 ? "" : "s"}
+                          </small>
+                        ) : null}
                       </td>
                       <td>
                         <span className={`status ${account.must_change_password ? "status-high" : "status-valid"}`}>

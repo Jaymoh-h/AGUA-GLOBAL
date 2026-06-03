@@ -18,6 +18,7 @@ DROP TABLE IF EXISTS audit_events CASCADE;
 DROP TABLE IF EXISTS billing_settings CASCADE;
 DROP TABLE IF EXISTS business_settings CASCADE;
 DROP TABLE IF EXISTS billing_periods CASCADE;
+DROP TABLE IF EXISTS portal_user_customers CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS customers CASCADE;
 DROP TABLE IF EXISTS zones CASCADE;
@@ -123,6 +124,23 @@ CREATE INDEX idx_password_reset_tokens_user_active
   ON password_reset_tokens(user_id, expires_at DESC)
   WHERE used_at IS NULL;
 
+CREATE TABLE portal_user_customers (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  is_primary BOOLEAN NOT NULL DEFAULT FALSE,
+  linked_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, customer_id)
+);
+
+CREATE UNIQUE INDEX idx_portal_user_customers_primary
+  ON portal_user_customers(user_id)
+  WHERE is_primary = TRUE;
+
+CREATE INDEX idx_portal_user_customers_customer
+  ON portal_user_customers(customer_id);
+
 CREATE TABLE document_delivery_logs (
   id SERIAL PRIMARY KEY,
   document_type VARCHAR(30) NOT NULL CHECK (document_type IN ('bill', 'receipt')),
@@ -147,6 +165,7 @@ CREATE INDEX idx_document_delivery_logs_customer
 
 CREATE TABLE communication_campaigns (
   id SERIAL PRIMARY KEY,
+  campaign_name VARCHAR(160) NOT NULL DEFAULT 'Invoice alert',
   alert_type VARCHAR(40) NOT NULL DEFAULT 'invoice_alert'
     CHECK (alert_type IN ('invoice_alert')),
   medium VARCHAR(30) NOT NULL
@@ -184,6 +203,34 @@ CREATE INDEX idx_communication_campaign_recipients_campaign
 
 CREATE INDEX idx_communication_campaign_recipients_customer
   ON communication_campaign_recipients(customer_id, created_at DESC);
+
+CREATE TABLE communication_templates (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(160) NOT NULL,
+  alert_type VARCHAR(40) NOT NULL DEFAULT 'invoice_alert'
+    CHECK (alert_type IN ('invoice_alert')),
+  medium VARCHAR(30) NOT NULL
+    CHECK (medium IN ('email', 'sms', 'whatsapp')),
+  body TEXT NOT NULL,
+  whatsapp_template_name VARCHAR(160),
+  whatsapp_template_language VARCHAR(20) NOT NULL DEFAULT 'en_US',
+  whatsapp_template_variables JSONB NOT NULL DEFAULT '[]'::jsonb,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_communication_templates_name_medium
+  ON communication_templates(LOWER(name), medium, alert_type);
+
+CREATE INDEX idx_communication_templates_medium
+  ON communication_templates(medium, alert_type, is_default DESC, name ASC);
+
+CREATE INDEX idx_communication_templates_whatsapp_name
+  ON communication_templates(whatsapp_template_name)
+  WHERE whatsapp_template_name IS NOT NULL;
 
 CREATE TABLE rate_versions (
   id SERIAL PRIMARY KEY,
@@ -478,6 +525,7 @@ CREATE TABLE expenses (
   payment_channel VARCHAR(30) NOT NULL DEFAULT 'cash' CHECK (payment_channel IN ('cash', 'bank', 'mpesa_paybill', 'manual_adjustment')),
   reference VARCHAR(120),
   receipt_number VARCHAR(80),
+  maintenance_request_id INTEGER REFERENCES maintenance_requests(id) ON DELETE SET NULL,
   notes TEXT,
   recorded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -552,7 +600,10 @@ CREATE TABLE production_source_meters (
   meter_number VARCHAR(80) NOT NULL UNIQUE,
   name VARCHAR(160),
   meter_type VARCHAR(30) NOT NULL DEFAULT 'shared_source' CHECK (meter_type IN ('customer_source', 'shared_source')),
-  status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+  installed_at DATE NOT NULL DEFAULT CURRENT_DATE,
+  removed_at DATE,
+  initial_reading NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (initial_reading >= 0),
+  status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'replaced', 'removed', 'faulty')),
   notes TEXT,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -561,6 +612,19 @@ CREATE TABLE production_source_meters (
     (meter_type = 'customer_source' AND customer_id IS NOT NULL)
     OR (meter_type = 'shared_source' AND rate_id IS NOT NULL)
   )
+);
+
+CREATE TABLE production_meter_events (
+  id SERIAL PRIMARY KEY,
+  old_production_meter_id INTEGER REFERENCES production_source_meters(id) ON DELETE SET NULL,
+  new_production_meter_id INTEGER REFERENCES production_source_meters(id) ON DELETE SET NULL,
+  event_type VARCHAR(30) NOT NULL DEFAULT 'replacement' CHECK (event_type IN ('replacement', 'removal', 'fault')),
+  event_date DATE NOT NULL,
+  old_final_reading NUMERIC(12, 2),
+  new_initial_reading NUMERIC(12, 2),
+  reason TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE production_electricity_topups (
@@ -633,6 +697,7 @@ CREATE INDEX idx_bills_customer_status ON bills(customer_id, status);
 CREATE INDEX idx_bills_billing_meter_id ON bills(billing_meter_id);
 CREATE INDEX idx_bills_customer_period_pay_status ON bills(customer_id, billing_period_id, bill_pay_status);
 CREATE INDEX idx_payments_customer_date ON payments(customer_id, payment_date DESC);
+CREATE INDEX idx_expenses_maintenance_request ON expenses(maintenance_request_id, expense_date DESC);
 CREATE INDEX idx_payments_receipt_number ON payments(receipt_number);
 CREATE INDEX idx_payment_allocations_payment_id ON payment_allocations(payment_id);
 CREATE INDEX idx_payment_allocations_bill_id ON payment_allocations(bill_id);
@@ -644,6 +709,8 @@ CREATE INDEX idx_bill_penalty_applications_application_month ON bill_penalty_app
 CREATE INDEX idx_bill_penalty_applications_waived_at ON bill_penalty_applications(waived_at);
 CREATE INDEX idx_source_billing_requests_status ON source_billing_requests(status, created_at DESC);
 CREATE INDEX idx_source_billing_requests_customer ON source_billing_requests(customer_id, created_at DESC);
+CREATE INDEX idx_production_meter_events_old ON production_meter_events(old_production_meter_id, event_date DESC);
+CREATE INDEX idx_production_meter_events_new ON production_meter_events(new_production_meter_id, event_date DESC);
 CREATE INDEX idx_expenses_date ON expenses(expense_date DESC);
 CREATE INDEX idx_expenses_category ON expenses(category);
 CREATE INDEX idx_expenses_recorded_by ON expenses(recorded_by);

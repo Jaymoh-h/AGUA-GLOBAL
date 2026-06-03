@@ -3,6 +3,7 @@ const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
 const { createBillNumber } = require("../services/billingPeriod.service");
+const { assertNotFutureDate } = require("../services/dateGuard.service");
 const { createPaymentWithAllocations } = require("./payment.controller");
 
 const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
@@ -89,6 +90,7 @@ const createAdjustment = asyncHandler(async (req, res) => {
   if (!isDateOnly(adjustment_date)) {
     throw new ApiError(400, "Adjustment date must use YYYY-MM-DD format.");
   }
+  const futureOverrideReason = assertNotFutureDate(adjustment_date, req, "Adjustment date");
   if (!String(reason || "").trim()) {
     throw new ApiError(400, "Reason is required for manual adjustments.");
   }
@@ -114,7 +116,7 @@ const createAdjustment = asyncHandler(async (req, res) => {
       entityType: "customer_adjustment",
       entityId: result.rows[0].id,
       afterData: result.rows[0],
-      reason: reason.trim()
+      reason: futureOverrideReason ? `${reason.trim()} | Future-date override: ${futureOverrideReason}` : reason.trim()
     });
 
     await client.query("COMMIT");

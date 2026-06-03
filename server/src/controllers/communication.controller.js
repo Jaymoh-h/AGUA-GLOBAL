@@ -2,8 +2,9 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
-const { sendDocumentEmail, sendDocumentSms } = require("../services/documentDelivery.service");
+const { sendDocumentEmail, sendDocumentSms, sendDocumentWhatsApp } = require("../services/documentDelivery.service");
 const { normalizePhoneNumber } = require("../services/sms.service");
+const { getWhatsAppStatus, normalizeWhatsAppNumber } = require("../services/whatsapp.service");
 
 const asNumber = (value) => Number(value || 0);
 const dateOnly = (value) => {
@@ -76,6 +77,66 @@ const defaultInvoiceTemplate = [
   "{{payment_information}}",
   "For enquiries contact customer care on {{business_phone}}."
 ].join("\n");
+
+const summarizeTemplate = (template) => {
+  const line = String(template || "")
+    .split(/\r?\n/)
+    .map((item) => item.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, "").replace(/[.,:;]+/g, " ").trim())
+    .find((item) => item.length >= 4);
+  return line || "Invoice alert";
+};
+
+const normalizeCampaignName = ({ campaignName, medium, template }) => {
+  const explicitName = String(campaignName || "").trim();
+  const fallback = `${summarizeTemplate(template)} - ${String(medium || "").toUpperCase()}`;
+  return (explicitName || fallback).slice(0, 160);
+};
+
+const normalizeWhatsAppTemplateVariables = (value) => {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item || "").trim()).filter(Boolean);
+};
+
+const normalizeWhatsAppTemplatePayload = (payload = {}) => {
+  const name = String(payload.name || "").trim();
+  if (!name) return null;
+  const language = String(payload.language || "en_US").trim().slice(0, 20) || "en_US";
+  return {
+    name: name.slice(0, 160),
+    language,
+    variables: normalizeWhatsAppTemplateVariables(payload.variables)
+  };
+};
+
+const buildWhatsAppTemplate = ({ row, business, templatePayload }) => {
+  if (!templatePayload?.name) return null;
+  const values = buildInvoiceTemplateValues({ row, business });
+  return {
+    name: templatePayload.name,
+    language: templatePayload.language || "en_US",
+    parameters: templatePayload.variables.map((key) => String(values[key] ?? ""))
+  };
+};
+
+const normalizeTemplatePayload = (payload = {}) => {
+  const name = String(payload.name || "").trim();
+  const medium = String(payload.medium || "").toLowerCase();
+  const body = String(payload.body || "").trim();
+  const whatsappTemplateName = String(payload.whatsapp_template_name || "").trim();
+  const whatsappTemplateLanguage = String(payload.whatsapp_template_language || "en_US").trim();
+  if (!name) throw new ApiError(400, "Template name is required.");
+  validateMedium(medium);
+  if (!body) throw new ApiError(400, "Template body is required.");
+  return {
+    name: name.slice(0, 160),
+    medium,
+    body,
+    whatsappTemplateName: medium === "whatsapp" && whatsappTemplateName ? whatsappTemplateName.slice(0, 160) : null,
+    whatsappTemplateLanguage: medium === "whatsapp" ? whatsappTemplateLanguage.slice(0, 20) || "en_US" : "en_US",
+    whatsappTemplateVariables: medium === "whatsapp" ? normalizeWhatsAppTemplateVariables(payload.whatsapp_template_variables) : [],
+    isDefault: payload.is_default === true
+  };
+};
 
 const getBusinessSettings = async (client) => {
   const businessResult = await client.query("SELECT * FROM business_settings WHERE id = 1");
@@ -155,6 +216,7 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
 
 const mapInvoicePreviewRow = ({ row, business }) => {
   const normalizedPhone = normalizePhoneNumber(row.phone);
+  const normalizedWhatsApp = normalizeWhatsAppNumber(row.phone);
   const hasInvoice = Boolean(row.bill_id);
   const totalOutstanding = Math.max(asNumber(row.gross_outstanding) - asNumber(row.credit_balance), 0);
   const contacts = {
@@ -169,9 +231,9 @@ const mapInvoicePreviewRow = ({ row, business }) => {
       ready: row.sms_delivery_enabled === true && Boolean(normalizedPhone)
     },
     whatsapp: {
-      value: normalizedPhone,
+      value: normalizedWhatsApp,
       enabled: row.whatsapp_delivery_enabled === true,
-      ready: row.whatsapp_delivery_enabled === true && Boolean(normalizedPhone)
+      ready: row.whatsapp_delivery_enabled === true && Boolean(normalizedWhatsApp)
     }
   };
   const issues = [];
@@ -221,6 +283,9 @@ const listInvoicePreview = asyncHandler(async (_req, res) => {
         till_number: business.till_number || "",
         default_currency: business.default_currency || "KES"
       },
+      channels: {
+        whatsapp: getWhatsAppStatus()
+      },
       default_template: defaultInvoiceTemplate,
       rows
     });
@@ -229,12 +294,133 @@ const listInvoicePreview = asyncHandler(async (_req, res) => {
   }
 });
 
+const listTemplates = asyncHandler(async (req, res) => {
+  const medium = String(req.query.medium || "").toLowerCase();
+  const params = [];
+  const clauses = ["alert_type = 'invoice_alert'"];
+  if (medium) {
+    validateMedium(medium);
+    params.push(medium);
+    clauses.push(`medium = $${params.length}`);
+  }
+
+  const { rows } = await pool.query(
+    `SELECT ct.*,
+            created_user.name AS created_by_name,
+            updated_user.name AS updated_by_name
+     FROM communication_templates ct
+     LEFT JOIN users created_user ON created_user.id = ct.created_by
+     LEFT JOIN users updated_user ON updated_user.id = ct.updated_by
+     WHERE ${clauses.join(" AND ")}
+     ORDER BY ct.medium ASC, ct.is_default DESC, ct.name ASC`,
+    params
+  );
+  res.json(rows);
+});
+
+const createTemplate = asyncHandler(async (req, res) => {
+  const payload = normalizeTemplatePayload(req.body);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    if (payload.isDefault) {
+      await client.query(
+        `UPDATE communication_templates
+         SET is_default = FALSE,
+             updated_by = $1,
+             updated_at = NOW()
+         WHERE alert_type = 'invoice_alert'
+           AND medium = $2`,
+        [req.user.id, payload.medium]
+      );
+    }
+    const { rows } = await client.query(
+      `INSERT INTO communication_templates (
+         name, alert_type, medium, body, whatsapp_template_name, whatsapp_template_language,
+         whatsapp_template_variables, is_default, created_by, updated_by
+       )
+       VALUES ($1::varchar, 'invoice_alert', $2::varchar, $3, $4::varchar, $5::varchar, $6::jsonb, $7, $8, $8)
+       RETURNING *`,
+      [
+        payload.name,
+        payload.medium,
+        payload.body,
+        payload.whatsappTemplateName,
+        payload.whatsappTemplateLanguage,
+        JSON.stringify(payload.whatsappTemplateVariables),
+        payload.isDefault,
+        req.user.id
+      ]
+    );
+    await client.query("COMMIT");
+    res.status(201).json(rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "23505") throw new ApiError(400, "A template with this name already exists for this medium.");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+const updateTemplate = asyncHandler(async (req, res) => {
+  const payload = normalizeTemplatePayload(req.body);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query("SELECT * FROM communication_templates WHERE id = $1 FOR UPDATE", [req.params.id]);
+    if (!beforeResult.rows[0]) throw new ApiError(404, "Communication template not found.");
+    if (payload.isDefault) {
+      await client.query(
+        `UPDATE communication_templates
+         SET is_default = FALSE,
+             updated_by = $1,
+             updated_at = NOW()
+         WHERE alert_type = 'invoice_alert'
+           AND medium = $2
+           AND id <> $3`,
+        [req.user.id, payload.medium, req.params.id]
+      );
+    }
+    const { rows } = await client.query(
+      `UPDATE communication_templates
+       SET name = $1::varchar,
+           medium = $2::varchar,
+           body = $3,
+           whatsapp_template_name = $4::varchar,
+           whatsapp_template_language = $5::varchar,
+           whatsapp_template_variables = $6::jsonb,
+           is_default = $7,
+           updated_by = $8,
+           updated_at = NOW()
+       WHERE id = $9
+       RETURNING *`,
+      [
+        payload.name,
+        payload.medium,
+        payload.body,
+        payload.whatsappTemplateName,
+        payload.whatsappTemplateLanguage,
+        JSON.stringify(payload.whatsappTemplateVariables),
+        payload.isDefault,
+        req.user.id,
+        req.params.id
+      ]
+    );
+    await client.query("COMMIT");
+    res.json(rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "23505") throw new ApiError(400, "A template with this name already exists for this medium.");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 const validateMedium = (medium) => {
   if (!["email", "sms", "whatsapp"].includes(medium)) {
     throw new ApiError(400, "Medium must be email, sms, or whatsapp.");
-  }
-  if (medium === "whatsapp") {
-    throw new ApiError(400, "WhatsApp sending is not configured yet. Use SMS or email for this slice.");
   }
 };
 
@@ -248,25 +434,42 @@ const sendInvoiceAlertForRow = async ({ client, req, business, row, medium, temp
   if (!contact.enabled) throw new ApiError(400, `${medium.toUpperCase()} delivery is disabled for this customer.`);
 
   const message = renderInvoiceMessage({ row, business, template });
+  const whatsappTemplate = buildWhatsAppTemplate({
+    row,
+    business,
+    templatePayload: normalizeWhatsAppTemplatePayload(req.body?.whatsapp_template)
+  });
   const subject = `${business.business_name || "Water Billing"} invoice ${row.bill_number || row.bill_id}`;
-  const result =
-    medium === "email"
-      ? await sendDocumentEmail(client, req, {
-          documentType: "bill",
-          documentId: row.bill_id,
-          customerId: row.customer_id,
-          recipient: contact.value,
-          subject,
-          text: message
-        })
-      : await sendDocumentSms(client, req, {
-          documentType: "bill",
-          documentId: row.bill_id,
-          customerId: row.customer_id,
-          recipient: contact.value,
-          subject,
-          message
-        });
+  let result;
+  if (medium === "email") {
+    result = await sendDocumentEmail(client, req, {
+      documentType: "bill",
+      documentId: row.bill_id,
+      customerId: row.customer_id,
+      recipient: contact.value,
+      subject,
+      text: message
+    });
+  } else if (medium === "whatsapp") {
+    result = await sendDocumentWhatsApp(client, req, {
+      documentType: "bill",
+      documentId: row.bill_id,
+      customerId: row.customer_id,
+      recipient: contact.value,
+      subject,
+      message,
+      whatsappTemplate
+    });
+  } else {
+    result = await sendDocumentSms(client, req, {
+      documentType: "bill",
+      documentId: row.bill_id,
+      customerId: row.customer_id,
+      recipient: contact.value,
+      subject,
+      message
+    });
+  }
 
   let auditError = null;
   try {
@@ -331,6 +534,11 @@ const sendBulkInvoiceAlerts = asyncHandler(async (req, res) => {
   const medium = String(req.body?.medium || "").toLowerCase();
   const template = String(req.body?.template || defaultInvoiceTemplate);
   validateMedium(medium);
+  const campaignName = normalizeCampaignName({
+    campaignName: req.body?.campaign_name,
+    medium,
+    template
+  });
 
   const uniqueIds = [...new Set((req.body?.customer_ids || []).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))];
   if (!uniqueIds.length) throw new ApiError(400, "Select at least one customer to send.");
@@ -341,11 +549,11 @@ const sendBulkInvoiceAlerts = asyncHandler(async (req, res) => {
     const business = await getBusinessSettings(client);
     const campaignResult = await client.query(
       `INSERT INTO communication_campaigns (
-         alert_type, medium, template, status, total_count, created_by
+         campaign_name, alert_type, medium, template, status, total_count, created_by
        )
-       VALUES ('invoice_alert', $1::varchar, $2, 'running', $3, $4)
+       VALUES ($1::varchar, 'invoice_alert', $2::varchar, $3, 'running', $4, $5)
        RETURNING *`,
-      [medium, template, uniqueIds.length, req.user.id]
+      [campaignName, medium, template, uniqueIds.length, req.user.id]
     );
     const campaign = campaignResult.rows[0];
     const results = [];
@@ -415,6 +623,7 @@ const sendBulkInvoiceAlerts = asyncHandler(async (req, res) => {
     );
     res.json({
       campaign_id: campaign.id,
+      campaign_name: campaign.campaign_name,
       campaign_status: campaignStatus,
       medium,
       total: results.length,
@@ -429,8 +638,59 @@ const sendBulkInvoiceAlerts = asyncHandler(async (req, res) => {
   }
 });
 
+const listCampaigns = asyncHandler(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT cc.*,
+            u.name AS created_by_name
+     FROM communication_campaigns cc
+     LEFT JOIN users u ON u.id = cc.created_by
+     ORDER BY cc.created_at DESC
+     LIMIT 100`
+  );
+  res.json(rows);
+});
+
+const getCampaign = asyncHandler(async (req, res) => {
+  const campaignResult = await pool.query(
+    `SELECT cc.*,
+            u.name AS created_by_name
+     FROM communication_campaigns cc
+     LEFT JOIN users u ON u.id = cc.created_by
+     WHERE cc.id = $1`,
+    [req.params.id]
+  );
+  const campaign = campaignResult.rows[0];
+  if (!campaign) throw new ApiError(404, "Communication campaign not found.");
+
+  const recipientResult = await pool.query(
+    `SELECT ccr.*,
+            c.name AS customer_name,
+            c.acc_number,
+            b.bill_number,
+            ddl.provider_message_id,
+            ddl.sent_at
+     FROM communication_campaign_recipients ccr
+     LEFT JOIN customers c ON c.id = ccr.customer_id
+     LEFT JOIN bills b ON b.id = ccr.bill_id
+     LEFT JOIN document_delivery_logs ddl ON ddl.id = ccr.delivery_log_id
+     WHERE ccr.campaign_id = $1
+     ORDER BY ccr.created_at ASC, ccr.id ASC`,
+    [campaign.id]
+  );
+
+  res.json({
+    campaign,
+    recipients: recipientResult.rows
+  });
+});
+
 module.exports = {
   listInvoicePreview,
+  listTemplates,
+  createTemplate,
+  updateTemplate,
   sendInvoiceAlert,
-  sendBulkInvoiceAlerts
+  sendBulkInvoiceAlerts,
+  listCampaigns,
+  getCampaign
 };

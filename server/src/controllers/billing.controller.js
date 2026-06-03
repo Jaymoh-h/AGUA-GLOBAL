@@ -4,6 +4,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const { createBillNumber, getMonthlyPeriodDates } = require("../services/billingPeriod.service");
 const { recordAuditEvent } = require("../services/audit.service");
 const { applyCustomerCreditToBill } = require("../services/credit.service");
+const { assertNotFutureDate } = require("../services/dateGuard.service");
 const {
   assertBillEditable,
   assertBillingPeriodEditable,
@@ -103,6 +104,330 @@ const listBillingPeriods = asyncHandler(async (_req, res) => {
      ORDER BY bp.period_start DESC`
   );
   res.json(rows);
+});
+
+const toNumber = (value) => Number(value || 0);
+
+const readinessCheck = ({ key, label, level, count, detail, page, focus, amount = null }) => ({
+  key,
+  label,
+  level,
+  count: toNumber(count),
+  amount: amount === null || amount === undefined ? null : toNumber(amount),
+  detail,
+  page,
+  focus,
+  passed: toNumber(count) === 0
+});
+
+const getBillingPeriodReadiness = asyncHandler(async (req, res) => {
+  const periodResult = await pool.query("SELECT * FROM billing_periods WHERE id = $1", [req.params.id]);
+  const period = periodResult.rows[0];
+  if (!period) {
+    throw new ApiError(404, "Billing period not found.");
+  }
+
+  const periodIdParams = [period.id];
+  const periodDateParams = [period.period_start, period.period_end];
+  const [
+    activeMeteredCustomers,
+    missingReadings,
+    readingsWithoutBills,
+    pendingSourceBilling,
+    heldBills,
+    periodBalances,
+    customerCredits,
+    suspensePayments,
+    pendingAdjustments,
+    deliveryExceptions,
+    urgentMaintenance,
+    overdueMaintenance,
+    payrollAttention,
+    productionGap
+  ] = await Promise.all([
+    pool.query(
+      `SELECT COUNT(*) AS count
+       FROM customers c
+       WHERE c.status = 'active'
+         AND EXISTS (
+           SELECT 1 FROM meters m
+           WHERE m.customer_id = c.id AND m.status = 'active'
+         )`
+    ),
+    pool.query(
+      `SELECT COUNT(*) AS count
+       FROM customers c
+       WHERE c.status = 'active'
+         AND EXISTS (
+           SELECT 1 FROM meters m
+           WHERE m.customer_id = c.id AND m.status = 'active'
+         )
+         AND NOT EXISTS (
+           SELECT 1
+           FROM meter_readings mr
+           WHERE mr.customer_id = c.id
+             AND mr.reading_date >= $1::date
+             AND mr.reading_date <= $2::date
+         )`,
+      periodDateParams
+    ),
+    pool.query(
+      `SELECT COUNT(*) AS count
+       FROM meter_readings mr
+       LEFT JOIN bills b ON b.current_reading_id = mr.id
+       WHERE mr.billing_period_id = $1
+         AND mr.previous_reading_id IS NOT NULL
+         AND b.id IS NULL`,
+      periodIdParams
+    ),
+    pool.query(
+      `SELECT COUNT(*) AS count
+       FROM source_billing_requests
+       WHERE billing_period_id = $1
+         AND status = 'pending'`,
+      periodIdParams
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) AS count,
+         COALESCE(SUM(COALESCE(NULLIF(balance_amount, 0), amount - paid_amount)), 0) AS amount
+       FROM bills
+       WHERE billing_period_id = $1
+         AND bill_pay_status = 'held'`,
+      periodIdParams
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE bill_pay_status = 'payable') AS bill_count,
+         COALESCE(SUM(COALESCE(NULLIF(total_amount, 0), amount)) FILTER (WHERE bill_pay_status = 'payable'), 0) AS billed_amount,
+         COALESCE(SUM(COALESCE(NULLIF(balance_amount, 0), amount - paid_amount)) FILTER (WHERE bill_pay_status = 'payable' AND status <> 'paid'), 0) AS balance_amount,
+         COUNT(*) FILTER (WHERE bill_pay_status = 'payable' AND status <> 'paid') AS unpaid_count
+       FROM bills
+       WHERE billing_period_id = $1`,
+      periodIdParams
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) AS count,
+         COALESCE(SUM(unallocated_amount), 0) AS amount
+       FROM payments
+       WHERE status = 'posted'
+         AND unallocated_amount > 0`
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) AS count,
+         COALESCE(SUM(amount), 0) AS amount
+       FROM payment_suspense_items
+       WHERE status = 'held'`
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) AS count,
+         COALESCE(SUM(amount), 0) AS amount
+       FROM customer_adjustments
+       WHERE status = 'pending'
+         AND adjustment_date >= $1::date
+         AND adjustment_date <= $2::date`,
+      periodDateParams
+    ),
+    pool.query(
+      `SELECT COUNT(*) AS count
+       FROM document_delivery_logs ddl
+       JOIN bills b ON b.id = ddl.document_id AND ddl.document_type = 'bill'
+       WHERE b.billing_period_id = $1
+         AND ddl.status IN ('failed', 'skipped')`,
+      periodIdParams
+    ),
+    pool.query(
+      `SELECT COUNT(*) AS count
+       FROM maintenance_requests
+       WHERE status IN ('open', 'in_progress')
+         AND priority = 'urgent'`
+    ),
+    pool.query(
+      `SELECT COUNT(*) AS count
+       FROM maintenance_requests
+       WHERE status IN ('open', 'in_progress')
+         AND target_date < CURRENT_DATE`
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) AS count,
+         COALESCE(SUM(total_net), 0) AS amount
+       FROM payroll_runs
+       WHERE status IN ('pending_approval', 'approved')
+         AND period_start <= $2::date
+         AND period_end >= $1::date`,
+      periodDateParams
+    ),
+    pool.query(
+      `SELECT CASE
+         WHEN EXISTS (SELECT 1 FROM production_source_meters WHERE status = 'active')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM production_weekly_readings
+            WHERE reading_date >= $1::date
+              AND reading_date <= $2::date
+          )
+         THEN 1 ELSE 0 END AS count`,
+      periodDateParams
+    )
+  ]);
+
+  const activeCustomerCount = toNumber(activeMeteredCustomers.rows[0]?.count);
+  const billingTotals = periodBalances.rows[0] || {};
+  const checks = [
+    readinessCheck({
+      key: "no_period_bills",
+      label: "No payable bills generated",
+      level: "block",
+      count: activeCustomerCount > 0 && toNumber(billingTotals.bill_count) === 0 ? activeCustomerCount : 0,
+      detail: "A billing period with active metered customers should have payable bills before it is closed.",
+      page: "readings",
+      focus: "missing_readings"
+    }),
+    readinessCheck({
+      key: "missing_readings",
+      label: "Missing period readings",
+      level: "block",
+      count: missingReadings.rows[0]?.count,
+      detail: "Active metered customers should have a reading before the period is closed.",
+      page: "readings",
+      focus: "missing_readings"
+    }),
+    readinessCheck({
+      key: "readings_without_bills",
+      label: "Readings without bills",
+      level: "block",
+      count: readingsWithoutBills.rows[0]?.count,
+      detail: "Readings with previous readings should normally have generated bills.",
+      page: "readings",
+      focus: "missing_readings"
+    }),
+    readinessCheck({
+      key: "pending_source_billing",
+      label: "Pending source billing reviews",
+      level: "block",
+      count: pendingSourceBilling.rows[0]?.count,
+      detail: "Source-side bills need approval or rejection before close.",
+      page: "readings",
+      focus: "pending_source_billing"
+    }),
+    readinessCheck({
+      key: "held_bills",
+      label: "Held bills",
+      level: "block",
+      count: heldBills.rows[0]?.count,
+      amount: heldBills.rows[0]?.amount,
+      detail: "Held bills are generated but not payable, so balances are not final.",
+      page: "bills",
+      focus: "held_bills"
+    }),
+    readinessCheck({
+      key: "suspense_payments",
+      label: "Held suspense payments",
+      level: "block",
+      count: suspensePayments.rows[0]?.count,
+      amount: suspensePayments.rows[0]?.amount,
+      detail: "Held suspense should be reapplied or discarded before final close reporting.",
+      page: "payments",
+      focus: "suspense_payments"
+    }),
+    readinessCheck({
+      key: "pending_adjustments",
+      label: "Pending adjustments",
+      level: "block",
+      count: pendingAdjustments.rows[0]?.count,
+      amount: pendingAdjustments.rows[0]?.amount,
+      detail: "Pending credits or debits can change customer balances.",
+      page: "payments",
+      focus: "pending_adjustments"
+    }),
+    readinessCheck({
+      key: "customer_credits",
+      label: "Customer credit balances",
+      level: "warn",
+      count: customerCredits.rows[0]?.count,
+      amount: customerCredits.rows[0]?.amount,
+      detail: "Customer credits are valid, but finance should know what will auto-apply to later bills.",
+      page: "payments",
+      focus: "customer_credits"
+    }),
+    readinessCheck({
+      key: "delivery_exceptions",
+      label: "Bill delivery exceptions",
+      level: "warn",
+      count: deliveryExceptions.rows[0]?.count,
+      detail: "Failed or skipped bill messages do not stop close, but customers may not have received bills.",
+      page: "communications",
+      focus: "document_delivery"
+    }),
+    readinessCheck({
+      key: "unpaid_period_bills",
+      label: "Unpaid period bills",
+      level: "warn",
+      count: billingTotals.unpaid_count,
+      amount: billingTotals.balance_amount,
+      detail: "Outstanding bills are expected in normal operations, but should be reviewed for collection planning.",
+      page: "bills",
+      focus: "overdue_bills"
+    }),
+    readinessCheck({
+      key: "urgent_maintenance",
+      label: "Urgent maintenance",
+      level: "warn",
+      count: urgentMaintenance.rows[0]?.count,
+      detail: "Urgent service issues should be visible before month-end reporting.",
+      page: "maintenance",
+      focus: "urgent_maintenance"
+    }),
+    readinessCheck({
+      key: "overdue_maintenance",
+      label: "Overdue maintenance",
+      level: "warn",
+      count: overdueMaintenance.rows[0]?.count,
+      detail: "Overdue work should be reviewed before operational close.",
+      page: "maintenance",
+      focus: "overdue_maintenance"
+    }),
+    readinessCheck({
+      key: "payroll_attention",
+      label: "Payroll awaiting action",
+      level: "warn",
+      count: payrollAttention.rows[0]?.count,
+      amount: payrollAttention.rows[0]?.amount,
+      detail: "Payroll awaiting approval or payment may affect accountant reports.",
+      page: "payroll",
+      focus: "payroll_attention"
+    }),
+    readinessCheck({
+      key: "production_gap",
+      label: "Production reading gap",
+      level: "warn",
+      count: productionGap.rows[0]?.count,
+      detail: "Production monitoring has no weekly reading inside this period.",
+      page: "production",
+      focus: "production_gap"
+    })
+  ];
+
+  const blockers = checks.filter((check) => check.level === "block" && !check.passed);
+  const warnings = checks.filter((check) => check.level === "warn" && !check.passed);
+
+  res.json({
+    period,
+    summary: {
+      active_metered_customers: activeCustomerCount,
+      bill_count: toNumber(billingTotals.bill_count),
+      billed_amount: toNumber(billingTotals.billed_amount),
+      balance_amount: toNumber(billingTotals.balance_amount),
+      blockers: blockers.length,
+      warnings: warnings.length,
+      ready_to_close: blockers.length === 0
+    },
+    checks
+  });
 });
 
 const createBillingPeriod = asyncHandler(async (req, res) => {
@@ -599,7 +924,9 @@ const reviewSourceBillingRequest = asyncHandler(async (req, res) => {
 
 const applyPenaltyApplications = asyncHandler(async (req, res) => {
   const applicationDate = resolveApplicationDate(req.body.application_date);
+  const futureOverrideReason = assertNotFutureDate(applicationDate, req, "Penalty application date");
   const reason = req.body.reason || `Penalty application for ${applicationDate.slice(0, 7)}`;
+  const auditReason = futureOverrideReason ? `${reason} | Future-date override: ${futureOverrideReason}` : reason;
   const client = await pool.connect();
 
   try {
@@ -671,7 +998,7 @@ const applyPenaltyApplications = asyncHandler(async (req, res) => {
           bill: updated,
           penalty_application: insertResult.rows[0]
         },
-        reason
+        reason: auditReason
       });
 
       applied.push({
@@ -695,7 +1022,7 @@ const applyPenaltyApplications = asyncHandler(async (req, res) => {
         applied_bills: applied.length,
         total_penalties: applied.reduce((sum, row) => sum + Number(row.penalty_amount || 0), 0)
       },
-      reason
+      reason: auditReason
     });
 
     await client.query("COMMIT");
@@ -927,6 +1254,7 @@ const reapplyPenaltyApplication = asyncHandler(async (req, res) => {
 module.exports = {
   applyPenaltyApplications,
   createBillingPeriod,
+  getBillingPeriodReadiness,
   getBillingSettings,
   listPenaltyApplications,
   listBillingPeriods,

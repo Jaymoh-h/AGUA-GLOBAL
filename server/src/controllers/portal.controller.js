@@ -2,15 +2,10 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
+const { resolvePortalCustomer } = require("../services/portalAccount.service");
 
 const categories = ["leak", "meter_fault", "no_water", "low_pressure", "water_quality", "connection", "billing_support", "other"];
 const priorities = ["low", "normal", "high", "urgent"];
-
-const requireCustomerId = (req) => {
-  const customerId = Number(req.user.customer_id || 0);
-  if (!customerId) throw new ApiError(403, "This portal account is not linked to a customer profile.");
-  return customerId;
-};
 
 const dateOnlyOrNull = (value) => {
   if (!value) return null;
@@ -19,7 +14,7 @@ const dateOnlyOrNull = (value) => {
 };
 
 const getPortalDashboard = asyncHandler(async (req, res) => {
-  const customerId = requireCustomerId(req);
+  const { customerId, accounts } = await resolvePortalCustomer(pool, req);
 
   const customerResult = await pool.query(
     `SELECT c.*, r.name AS rate_name, r.amount AS rate_amount, z.name AS zone_name
@@ -106,6 +101,8 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
 
   res.json({
     business: businessResult.rows[0] || null,
+    portalAccounts: accounts,
+    activeCustomerId: customerId,
     customer,
     summary: {
       ...balanceResult.rows[0],
@@ -119,7 +116,7 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
 });
 
 const getPortalPayment = asyncHandler(async (req, res) => {
-  const customerId = requireCustomerId(req);
+  const { customerId } = await resolvePortalCustomer(pool, req);
   const paymentResult = await pool.query(
     `SELECT p.*,
             c.name AS customer_name,
@@ -159,7 +156,7 @@ const getPortalPayment = asyncHandler(async (req, res) => {
 });
 
 const createPortalServiceRequest = asyncHandler(async (req, res) => {
-  const customerId = requireCustomerId(req);
+  const { customerId } = await resolvePortalCustomer(pool, req);
   const title = String(req.body.title || "").trim();
   const description = String(req.body.description || "").trim();
   const category = req.body.category || "other";

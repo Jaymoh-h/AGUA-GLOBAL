@@ -3,20 +3,46 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
+const { clearPortalLinks, ensurePrimaryPortalLink, replacePortalLinks } = require("../services/portalAccount.service");
 const { validatePassword } = require("../utils/passwordPolicy");
 
 const roles = ["admin", "meter_reader", "accountant", "customer"];
 
-const publicColumns = `
-  u.id, u.customer_id, u.name, u.email, u.phone, u.role, u.is_active,
-  u.must_change_password, u.password_changed_at, u.last_login_at, u.created_at,
+const publicColumns = (alias = "u") => `
+  ${alias}.id, ${alias}.customer_id, ${alias}.name, ${alias}.email, ${alias}.phone, ${alias}.role, ${alias}.is_active,
+  ${alias}.must_change_password, ${alias}.password_changed_at, ${alias}.last_login_at, ${alias}.created_at,
   c.acc_number AS customer_acc_number,
-  c.name AS customer_name
+  c.name AS customer_name,
+  COALESCE((
+    SELECT json_agg(
+      json_build_object(
+        'id', pc.id,
+        'acc_number', pc.acc_number,
+        'name', pc.name,
+        'status', pc.status,
+        'is_primary', puc.is_primary
+      )
+      ORDER BY puc.is_primary DESC, pc.acc_number ASC
+    )
+    FROM portal_user_customers puc
+    JOIN customers pc ON pc.id = puc.customer_id
+    WHERE puc.user_id = ${alias}.id
+  ), '[]'::json) AS linked_customers
 `;
 
 const normalizeCustomerId = (role, customerId) => {
   if (role !== "customer") return null;
   return customerId ? Number(customerId) : null;
+};
+
+const normalizeLinkedCustomerIds = (role, customerId, linkedCustomerIds) => {
+  if (role !== "customer") return [];
+  const ids = Array.isArray(linkedCustomerIds)
+    ? linkedCustomerIds.map((id) => Number(id)).filter(Boolean)
+    : [];
+  const primaryId = normalizeCustomerId(role, customerId);
+  if (primaryId && !ids.includes(primaryId)) ids.unshift(primaryId);
+  return ids;
 };
 
 const countActiveAdminsExcluding = async (client, userId) => {
@@ -29,7 +55,7 @@ const countActiveAdminsExcluding = async (client, userId) => {
 
 const listUsers = asyncHandler(async (_req, res) => {
   const { rows } = await pool.query(
-    `SELECT ${publicColumns}
+    `SELECT ${publicColumns("u")}
      FROM users u
      LEFT JOIN customers c ON c.id = u.customer_id
      ORDER BY u.created_at DESC`
@@ -38,7 +64,7 @@ const listUsers = asyncHandler(async (_req, res) => {
 });
 
 const createUser = asyncHandler(async (req, res) => {
-  const { name, email, phone, role, password, customer_id, is_active = true } = req.body;
+  const { name, email, phone, role, password, customer_id, linked_customer_ids, is_active = true } = req.body;
 
   if (!name || !email || !role || !password) {
     throw new ApiError(400, "Name, email, role, and password are required.");
@@ -52,7 +78,8 @@ const createUser = asyncHandler(async (req, res) => {
     throw new ApiError(400, passwordError);
   }
 
-  const nextCustomerId = normalizeCustomerId(role, customer_id);
+  const linkedCustomerIds = normalizeLinkedCustomerIds(role, customer_id, linked_customer_ids);
+  const nextCustomerId = normalizeCustomerId(role, customer_id || linkedCustomerIds[0]);
   if (role === "customer" && !nextCustomerId) {
     throw new ApiError(400, "Customer portal users must be linked to a customer account.");
   }
@@ -70,21 +97,31 @@ const createUser = asyncHandler(async (req, res) => {
          VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)
          RETURNING *
        )
-       SELECT ${publicColumns.replaceAll("u.", "inserted.")}
+       SELECT ${publicColumns("inserted")}
        FROM inserted
        LEFT JOIN customers c ON c.id = inserted.customer_id`,
       [name, email.toLowerCase(), phone || null, role, nextCustomerId, passwordHash, Boolean(is_active)]
+    );
+    if (role === "customer") {
+      await replacePortalLinks(client, rows[0].id, linkedCustomerIds, nextCustomerId, req.user.id);
+    }
+    const userResult = await client.query(
+      `SELECT ${publicColumns("u")}
+       FROM users u
+       LEFT JOIN customers c ON c.id = u.customer_id
+       WHERE u.id = $1`,
+      [rows[0].id]
     );
 
     await recordAuditEvent(client, {
       req,
       action: "user.created",
       entityType: "user",
-      entityId: rows[0].id,
-      afterData: rows[0]
+      entityId: userResult.rows[0].id,
+      afterData: userResult.rows[0]
     });
     await client.query("COMMIT");
-    res.status(201).json(rows[0]);
+    res.status(201).json(userResult.rows[0]);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -94,7 +131,7 @@ const createUser = asyncHandler(async (req, res) => {
 });
 
 const updateUser = asyncHandler(async (req, res) => {
-  const { name, email, phone, role, is_active, customer_id, password } = req.body;
+  const { name, email, phone, role, is_active, customer_id, linked_customer_ids, password } = req.body;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -123,8 +160,16 @@ const updateUser = asyncHandler(async (req, res) => {
       }
     }
 
+    const shouldReplaceLinks = Array.isArray(linked_customer_ids) || customer_id !== undefined || role !== undefined;
+    const linkedCustomerIds = normalizeLinkedCustomerIds(
+      nextRole,
+      customer_id === undefined ? before.customer_id : customer_id,
+      linked_customer_ids
+    );
     const nextCustomerId =
-      customer_id === undefined ? normalizeCustomerId(nextRole, before.customer_id) : normalizeCustomerId(nextRole, customer_id);
+      customer_id === undefined && !Array.isArray(linked_customer_ids)
+        ? normalizeCustomerId(nextRole, before.customer_id)
+        : normalizeCustomerId(nextRole, customer_id || linkedCustomerIds[0]);
     if (nextRole === "customer" && !nextCustomerId) {
       throw new ApiError(400, "Customer portal users must be linked to a customer account.");
     }
@@ -153,7 +198,7 @@ const updateUser = asyncHandler(async (req, res) => {
          WHERE id = $8
          RETURNING *
        )
-       SELECT ${publicColumns.replaceAll("u.", "updated.")}
+       SELECT ${publicColumns("updated")}
        FROM updated
        LEFT JOIN customers c ON c.id = updated.customer_id`,
       [
@@ -167,17 +212,32 @@ const updateUser = asyncHandler(async (req, res) => {
         req.params.id
       ]
     );
+    if (nextRole === "customer") {
+      if (shouldReplaceLinks) {
+        await replacePortalLinks(client, rows[0].id, linkedCustomerIds, nextCustomerId, req.user.id);
+        await ensurePrimaryPortalLink(client, rows[0].id, nextCustomerId, req.user.id);
+      }
+    } else {
+      await clearPortalLinks(client, rows[0].id);
+    }
+    const afterResult = await client.query(
+      `SELECT ${publicColumns("u")}
+       FROM users u
+       LEFT JOIN customers c ON c.id = u.customer_id
+       WHERE u.id = $1`,
+      [rows[0].id]
+    );
 
     await recordAuditEvent(client, {
       req,
       action: "user.updated",
       entityType: "user",
-      entityId: rows[0].id,
+      entityId: afterResult.rows[0].id,
       beforeData: before,
-      afterData: rows[0]
+      afterData: afterResult.rows[0]
     });
     await client.query("COMMIT");
-    res.json(rows[0]);
+    res.json(afterResult.rows[0]);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

@@ -2,8 +2,29 @@ const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 const ASSET_BASE = API_BASE.replace(/\/api\/?$/, "");
 
 const getToken = () => localStorage.getItem("agua_token");
+let futureDateOverrideHandler = null;
+
+export const setFutureDateOverrideHandler = (handler) => {
+  futureDateOverrideHandler = typeof handler === "function" ? handler : null;
+  return () => {
+    if (futureDateOverrideHandler === handler) {
+      futureDateOverrideHandler = null;
+    }
+  };
+};
+
+const shouldPromptForFutureDateOverride = (message, options) =>
+  typeof window !== "undefined" &&
+  typeof window.prompt === "function" &&
+  /Admin override reason is required/i.test(message || "") &&
+  options.body &&
+  typeof options.body === "object" &&
+  !Array.isArray(options.body) &&
+  !options.body.future_date_override_reason &&
+  !options.skipFutureDateOverridePrompt;
 
 const request = async (path, options = {}) => {
+  const { skipFutureDateOverridePrompt: _skipFutureDateOverridePrompt, ...fetchOptions } = options;
   const headers = {
     "Content-Type": "application/json",
     ...(options.headers || {})
@@ -15,7 +36,7 @@ const request = async (path, options = {}) => {
   }
 
   const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
+    ...fetchOptions,
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined
   });
@@ -26,7 +47,23 @@ const request = async (path, options = {}) => {
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.message || "Request failed.");
+    const message = data.message || "Request failed.";
+    if (shouldPromptForFutureDateOverride(message, options)) {
+      const reason = futureDateOverrideHandler
+        ? await futureDateOverrideHandler({ message, path })
+        : window.prompt("This date is later than today. Enter the admin override reason to continue:");
+      if (String(reason || "").trim()) {
+        return request(path, {
+          ...options,
+          body: {
+            ...options.body,
+            future_date_override_reason: String(reason).trim()
+          },
+          skipFutureDateOverridePrompt: true
+        });
+      }
+    }
+    throw new Error(message);
   }
 
   return data;
@@ -56,11 +93,12 @@ export const api = {
       const query = new URLSearchParams(params);
       return request(`/reports/accountant${query.toString() ? `?${query}` : ""}`);
     },
-    dataQuality: () => request("/reports/data-quality")
+    dataQuality: () => request("/reports/data-quality"),
+    backup: () => request("/reports/backup")
   },
   portal: {
-    dashboard: () => request("/portal/dashboard"),
-    getPayment: (id) => request(`/portal/payments/${id}`),
+    dashboard: (customerId = "") => request(`/portal/dashboard${customerId ? `?customer_id=${customerId}` : ""}`),
+    getPayment: (id, customerId = "") => request(`/portal/payments/${id}${customerId ? `?customer_id=${customerId}` : ""}`),
     createServiceRequest: (payload) => request("/portal/service-requests", { method: "POST", body: payload })
   },
   customers: {
@@ -94,6 +132,8 @@ export const api = {
   },
   readings: {
     list: () => request("/readings"),
+    eligibleCustomers: (periodStart = "") =>
+      request(`/readings/eligible-customers${periodStart ? `?period_start=${periodStart}` : ""}`),
     context: (customerId, readingDate, meterId = "") =>
       request(
         `/readings/context?customer_id=${customerId}&reading_date=${readingDate}${meterId ? `&meter_id=${meterId}` : ""}`
@@ -117,6 +157,7 @@ export const api = {
     periods: {
       list: () => request("/billing/periods"),
       create: (payload) => request("/billing/periods", { method: "POST", body: payload }),
+      readiness: (id) => request(`/billing/periods/${id}/readiness`),
       updateStatus: (id, status, correctionReason = "") =>
         request(`/billing/periods/${id}/status`, { method: "PATCH", body: { status, correction_reason: correctionReason } })
     },
@@ -167,6 +208,11 @@ export const api = {
   },
   communications: {
     invoicePreview: () => request("/communications/invoice-preview"),
+    templates: (medium = "") => request(`/communications/templates${medium ? `?medium=${medium}` : ""}`),
+    createTemplate: (payload) => request("/communications/templates", { method: "POST", body: payload }),
+    updateTemplate: (id, payload) => request(`/communications/templates/${id}`, { method: "PUT", body: payload }),
+    campaigns: () => request("/communications/campaigns"),
+    campaign: (id) => request(`/communications/campaigns/${id}`),
     sendInvoiceAlert: (customerId, payload) =>
       request(`/communications/invoice-alerts/${customerId}/send`, { method: "POST", body: payload }),
     bulkSendInvoiceAlerts: (payload) => request("/communications/invoice-alerts/bulk-send", { method: "POST", body: payload })
@@ -207,11 +253,13 @@ export const api = {
     assignees: () => request("/maintenance-requests/assignees"),
     create: (payload) => request("/maintenance-requests", { method: "POST", body: payload }),
     update: (id, payload) => request(`/maintenance-requests/${id}`, { method: "PUT", body: payload }),
+    addExpense: (id, payload) => request(`/maintenance-requests/${id}/expenses`, { method: "POST", body: payload }),
     resolve: (id, payload) => request(`/maintenance-requests/${id}/resolve`, { method: "PATCH", body: payload })
   },
   production: {
     meters: () => request("/production/meters"),
     createMeter: (payload) => request("/production/meters", { method: "POST", body: payload }),
+    replaceMeter: (id, payload) => request(`/production/meters/${id}/replace`, { method: "POST", body: payload }),
     topups: () => request("/production/electricity-topups"),
     createTopup: (payload) => request("/production/electricity-topups", { method: "POST", body: payload }),
     weeklyReadings: () => request("/production/weekly-readings"),
