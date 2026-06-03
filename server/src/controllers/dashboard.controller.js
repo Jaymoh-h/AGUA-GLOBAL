@@ -34,9 +34,9 @@ const getRoleAllowedItems = (role, items) =>
 
 const buildDashboardCharts = async () => {
   const billingTrend = await queryRows(
-    `WITH months AS (
+     `WITH months AS (
        SELECT generate_series(
-         date_trunc('month', CURRENT_DATE)::date - INTERVAL '5 months',
+         date_trunc('month', CURRENT_DATE)::date - INTERVAL '11 months',
          date_trunc('month', CURRENT_DATE)::date,
          INTERVAL '1 month'
        )::date AS month_start
@@ -135,7 +135,7 @@ const buildDashboardCharts = async () => {
            SELECT *
            FROM production_weekly_readings
            ORDER BY reading_date DESC
-           LIMIT 8
+           LIMIT 13
          )
          SELECT to_char(pwr.reading_date, 'DD Mon') AS label,
                 pwr.reading_date,

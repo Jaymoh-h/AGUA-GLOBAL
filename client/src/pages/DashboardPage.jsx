@@ -38,12 +38,39 @@ const formatCompact = (value) => {
   return number.toLocaleString();
 };
 
+const paddedChartMax = (dataMax) => {
+  const max = Number(dataMax || 0);
+  if (max <= 0) return 10;
+  const headroom = max * 0.15;
+  const roundedStep = 10 ** Math.max(0, Math.floor(Math.log10(max)) - 1);
+  return Math.ceil((max + headroom) / roundedStep) * roundedStep;
+};
+
 const moneyTooltip = (value, name) => [money(value), String(name || "").replace("_", " ")];
 const countTooltip = (value, name) => [Number(value || 0).toLocaleString(), String(name || "").replace("_", " ")];
+
+const useLargeDashboardCharts = () => {
+  const [isLarge, setIsLarge] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(min-width: 1200px)").matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const query = window.matchMedia("(min-width: 1200px)");
+    const update = () => setIsLarge(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  return isLarge;
+};
 
 function DashboardPage({ onNavigate }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const showLargeCharts = useLargeDashboardCharts();
 
   useEffect(() => {
     api.dashboard().then(setData).catch((err) => setError(err.message));
@@ -61,6 +88,8 @@ function DashboardPage({ onNavigate }) {
   const zoneConsumption = charts.zoneConsumption || [];
   const collectionsByChannel = charts.collectionsByChannel || [];
   const productionTrend = charts.productionTrend || [];
+  const visibleBillingTrend = billingTrend.slice(-(showLargeCharts ? 12 : 6));
+  const visibleProductionTrend = productionTrend.slice(-(showLargeCharts ? 13 : 8));
 
   return (
     <section className="page-stack">
@@ -85,16 +114,16 @@ function DashboardPage({ onNavigate }) {
           <div className="panel-heading">
             <div>
               <h3>Billing vs Collections</h3>
-              <small>Last six months</small>
+              <small>{showLargeCharts ? "Last 12 months" : "Last six months"}</small>
             </div>
           </div>
-          {billingTrend.length ? (
+          {visibleBillingTrend.length ? (
             <div className="dashboard-chart">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={billingTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <LineChart data={visibleBillingTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
-                  <YAxis tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
+                  <YAxis domain={[0, paddedChartMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
                   <Tooltip formatter={moneyTooltip} />
                   <Legend />
                   <Line type="monotone" dataKey="billed_amount" name="Billed" stroke="#0f766e" strokeWidth={2} dot={false} />
@@ -120,7 +149,7 @@ function DashboardPage({ onNavigate }) {
                 <BarChart data={receivablesAging} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
-                  <YAxis tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
+                  <YAxis domain={[0, paddedChartMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
                   <Tooltip formatter={moneyTooltip} />
                   <Bar dataKey="balance_amount" name="Balance" radius={[5, 5, 0, 0]} fill="#0f766e" />
                 </BarChart>
@@ -170,7 +199,7 @@ function DashboardPage({ onNavigate }) {
                 <BarChart data={zoneConsumption} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
-                  <YAxis tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
+                  <YAxis domain={[0, paddedChartMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
                   <Tooltip formatter={countTooltip} />
                   <Legend />
                   <Bar dataKey="units_used" name="Units" radius={[5, 5, 0, 0]} fill="#2563eb" />
@@ -212,16 +241,16 @@ function DashboardPage({ onNavigate }) {
           <div className="panel-heading">
             <div>
               <h3>Production Trend</h3>
-              <small>Latest 8 weeks</small>
+              <small>{showLargeCharts ? "Latest quarter year" : "Latest 8 weeks"}</small>
             </div>
           </div>
-          {productionTrend.length ? (
+          {visibleProductionTrend.length ? (
             <div className="dashboard-chart">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={productionTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <LineChart data={visibleProductionTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
-                  <YAxis tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
+                  <YAxis domain={[0, paddedChartMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
                   <Tooltip formatter={moneyTooltip} />
                   <Legend />
                   <Line type="monotone" dataKey="revenue_amount" name="Revenue" stroke="#0f766e" strokeWidth={2} dot={false} />
