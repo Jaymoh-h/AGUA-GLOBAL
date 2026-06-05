@@ -2246,6 +2246,8 @@ td {
   .active-print-surface.report-print-maintenanceAssignee .management-section-maintenanceAssignee,
   .active-print-surface.report-print-maintenanceRegister .management-section-maintenanceRegister,
   .active-print-surface.report-print-profitLoss .report-section-profitLoss,
+  .active-print-surface.report-print-cashProfitLoss .report-section-profitLoss,
+  .active-print-surface.report-print-accrualProfitLoss .report-section-profitLoss,
   .active-print-surface.report-print-billingStatus .report-section-billingStatus,
   .active-print-surface.report-print-collectionsChannel .report-section-collectionsChannel,
   .active-print-surface.report-print-billingZone .report-section-billingZone,
@@ -2257,6 +2259,11 @@ td {
   .active-print-surface.report-print-expensesCategory .report-section-expensesCategory,
   .active-print-surface.report-print-expenseRegister .report-section-expenseRegister {
     display: block;
+  }
+
+  .active-print-surface.report-print-cashProfitLoss .profit-loss-statement-accrual,
+  .active-print-surface.report-print-accrualProfitLoss .profit-loss-statement-cash {
+    display: none;
   }
 
   .report-print-header {

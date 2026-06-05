@@ -29,8 +29,8 @@ const buildInvoiceTemplateValues = ({ row, business }) => {
   const businessName = business.business_name || "Water Billing";
   const currency = business.default_currency || "KES";
   const total = asNumber(row.total_amount || row.amount);
-  const billBalance = asNumber(row.balance_amount);
   const outstanding = Math.max(asNumber(row.gross_outstanding) - asNumber(row.credit_balance), 0);
+  const priorOutstanding = Math.max(asNumber(row.prior_outstanding) - asNumber(row.credit_balance), 0);
   const invoicePeriod = row.billing_period_name || dateOnly(row.billing_month);
 
   return {
@@ -43,7 +43,7 @@ const buildInvoiceTemplateValues = ({ row, business }) => {
     units_consumed: formatNumber(row.units_used),
     amount: money(total, currency),
     amount_paid: money(row.paid_amount, currency),
-    arrears_after_payment: money(billBalance, currency),
+    arrears_after_payment: money(priorOutstanding, currency),
     total_outstanding: money(outstanding, currency),
     due_date: dateOnly(row.due_date),
     payment_information: buildPaymentInformation(business, row.acc_number),
@@ -173,6 +173,7 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
         latest_bill.due_date,
         latest_bill.status AS bill_status,
         COALESCE(customer_totals.gross_outstanding, 0) AS gross_outstanding,
+        COALESCE(prior_totals.prior_outstanding, 0) AS prior_outstanding,
         COALESCE(customer_credit.credit_balance, 0) AS credit_balance
      FROM customers c
      LEFT JOIN zones z ON z.id = c.zone_id
@@ -200,6 +201,18 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
        WHERE customer_id = c.id
          AND bill_pay_status = 'payable'
      ) customer_totals ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(SUM(balance_amount), 0) AS prior_outstanding
+       FROM bills b
+       WHERE b.customer_id = c.id
+         AND b.bill_pay_status = 'payable'
+         AND b.status <> 'paid'
+         AND latest_bill.id IS NOT NULL
+         AND (
+           b.billing_month < latest_bill.billing_month
+           OR (b.billing_month = latest_bill.billing_month AND b.id < latest_bill.id)
+         )
+     ) prior_totals ON TRUE
      LEFT JOIN LATERAL (
        SELECT COALESCE(SUM(unallocated_amount), 0) AS credit_balance
        FROM payments
@@ -259,7 +272,7 @@ const mapInvoicePreviewRow = ({ row, business }) => {
     units_used: row.units_used,
     amount: row.total_amount || row.amount,
     amount_paid: row.paid_amount,
-    arrears_after_payment: row.balance_amount,
+    arrears_after_payment: Math.max(asNumber(row.prior_outstanding) - asNumber(row.credit_balance), 0),
     total_outstanding: totalOutstanding,
     due_date: row.due_date,
     contacts,

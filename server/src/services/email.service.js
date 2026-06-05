@@ -14,7 +14,7 @@ const createTransporter = () =>
     }
   });
 
-const sendEmail = async ({ to, subject, text, html }) => {
+const sendEmail = async ({ to, subject, text, html, attachments = [] }) => {
   if (!hasSmtpConfig()) {
     console.log(`Email not sent because SMTP is not configured. To: ${to}; Subject: ${subject}`);
     return { skipped: true };
@@ -26,7 +26,8 @@ const sendEmail = async ({ to, subject, text, html }) => {
     to,
     subject,
     text,
-    html
+    html,
+    attachments
   });
   return { skipped: false, messageId: info.messageId };
 };

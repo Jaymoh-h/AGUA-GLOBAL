@@ -9,7 +9,12 @@ AGUA-GLOBAL/
   client/            React frontend
   server/            Express API
   server/database/   PostgreSQL schema and seed files
+  docs/              Architecture, workflows, SOPs, deployment, API, and schema docs
 ```
+
+## Documentation
+
+The project documentation suite lives in [`docs/`](docs/README.md). It includes architecture, roles and permissions, billing and meter-reading workflows, deployment notes, backup/recovery SOPs, environment variables, API endpoints, database diagrams, test checklists, user manual notes, and implementation records.
 
 ## What Is Included
 

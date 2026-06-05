@@ -5,6 +5,7 @@ const { recordAuditEvent } = require("../services/audit.service");
 const { assertBillEditable, normalizeCorrectionReason } = require("../services/billingPeriodGuard.service");
 const {
   buildBillEmail,
+  buildBillPdfAttachment,
   buildBillSms,
   getBusinessSettings,
   getCustomerEmailRecipient,
@@ -108,7 +109,8 @@ const sendBillEmail = asyncHandler(async (req, res) => {
       customerId: bill.customer_id,
       recipient: recipient.email,
       subject: email.subject,
-      text: email.text
+      text: email.text,
+      attachments: [buildBillPdfAttachment({ bill, business })]
     });
 
     let auditError = null;

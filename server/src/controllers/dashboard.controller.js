@@ -33,6 +33,16 @@ const getRoleAllowedItems = (role, items) =>
   items.filter((item) => !item.roles || item.roles.includes(role));
 
 const buildDashboardCharts = async () => {
+  const lastConcludedPeriod = await queryOne(
+    `SELECT id, name, period_start, period_end
+     FROM billing_periods
+     WHERE period_end < CURRENT_DATE
+     ORDER BY period_end DESC, id DESC
+     LIMIT 1`
+  );
+  const chartPeriodStart = lastConcludedPeriod.period_start || null;
+  const chartPeriodEnd = lastConcludedPeriod.period_end || null;
+
   const billingTrend = await queryRows(
      `WITH months AS (
        SELECT generate_series(
@@ -110,11 +120,14 @@ const buildDashboardCharts = async () => {
      JOIN customers c ON c.id = b.customer_id
      LEFT JOIN zones z ON z.id = c.zone_id
      WHERE b.bill_pay_status = 'payable'
-       AND b.billing_month >= date_trunc('month', CURRENT_DATE)::date
-       AND b.billing_month < (date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month')
+       AND (
+         ($1::date IS NOT NULL AND b.billing_month >= $1::date AND b.billing_month <= $2::date)
+         OR ($1::date IS NULL AND b.billing_month >= date_trunc('month', CURRENT_DATE)::date AND b.billing_month < (date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month'))
+       )
      GROUP BY COALESCE(z.name, c.location, 'Unassigned')
      ORDER BY COALESCE(SUM(b.units_used), 0) DESC
-     LIMIT 8`
+     LIMIT 8`,
+    [chartPeriodStart, chartPeriodEnd]
   );
 
   const collectionsByChannel = await queryRows(
@@ -123,10 +136,13 @@ const buildDashboardCharts = async () => {
             COALESCE(SUM(amount), 0) AS collected_amount
      FROM payments
      WHERE status = 'posted'
-       AND payment_date >= date_trunc('month', CURRENT_DATE)::date
-       AND payment_date < (date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month')
+       AND (
+         ($1::date IS NOT NULL AND payment_date >= $1::date AND payment_date <= $2::date)
+         OR ($1::date IS NULL AND payment_date >= date_trunc('month', CURRENT_DATE)::date AND payment_date < (date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month'))
+       )
      GROUP BY payment_channel
-     ORDER BY COALESCE(SUM(amount), 0) DESC`
+     ORDER BY COALESCE(SUM(amount), 0) DESC`,
+    [chartPeriodStart, chartPeriodEnd]
   );
 
   const productionTrend = (await getTableExists("production_weekly_readings"))
@@ -191,7 +207,16 @@ const buildDashboardCharts = async () => {
     maintenanceStatus,
     zoneConsumption,
     collectionsByChannel,
-    productionTrend: productionTrend.reverse()
+    productionTrend: productionTrend.reverse(),
+    periods: {
+      lastConcludedBillingPeriod: lastConcludedPeriod.period_start
+        ? {
+            name: lastConcludedPeriod.name,
+            period_start: lastConcludedPeriod.period_start,
+            period_end: lastConcludedPeriod.period_end
+          }
+        : null
+    }
   };
 };
 

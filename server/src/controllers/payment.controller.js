@@ -6,6 +6,7 @@ const { createReceiptNumber } = require("../services/billingPeriod.service");
 const { assertNotFutureDate } = require("../services/dateGuard.service");
 const {
   buildReceiptEmail,
+  buildReceiptPdfAttachment,
   buildReceiptSms,
   getBusinessSettings,
   getCustomerEmailRecipient,
@@ -482,7 +483,15 @@ const sendReceiptEmail = asyncHandler(async (req, res) => {
       customerId: payment.customer_id,
       recipient: recipient.email,
       subject: email.subject,
-      text: email.text
+      text: email.text,
+      attachments: [
+        buildReceiptPdfAttachment({
+          payment,
+          allocations: allocationsResult.rows,
+          customerBalance: balanceResult.rows[0]?.balance_due || 0,
+          business
+        })
+      ]
     });
 
     let auditError = null;

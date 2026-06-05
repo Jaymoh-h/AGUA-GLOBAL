@@ -48,6 +48,7 @@ const paddedChartMax = (dataMax) => {
 
 const moneyTooltip = (value, name) => [money(value), String(name || "").replace("_", " ")];
 const countTooltip = (value, name) => [Number(value || 0).toLocaleString(), String(name || "").replace("_", " ")];
+const date = (value) => value?.slice(0, 10) || "";
 
 const useLargeDashboardCharts = () => {
   const [isLarge, setIsLarge] = useState(() => {
@@ -88,6 +89,8 @@ function DashboardPage({ onNavigate }) {
   const zoneConsumption = charts.zoneConsumption || [];
   const collectionsByChannel = charts.collectionsByChannel || [];
   const productionTrend = charts.productionTrend || [];
+  const concludedPeriod = charts.periods?.lastConcludedBillingPeriod || null;
+  const concludedPeriodLabel = concludedPeriod?.name || [date(concludedPeriod?.period_start), date(concludedPeriod?.period_end)].filter(Boolean).join(" to ");
   const visibleBillingTrend = billingTrend.slice(-(showLargeCharts ? 12 : 6));
   const visibleProductionTrend = productionTrend.slice(-(showLargeCharts ? 13 : 8));
 
@@ -190,7 +193,7 @@ function DashboardPage({ onNavigate }) {
           <div className="panel-heading">
             <div>
               <h3>Consumption by Zone</h3>
-              <small>Current billing month</small>
+              <small>{concludedPeriodLabel ? `Last concluded period: ${concludedPeriodLabel}` : "Current billing month"}</small>
             </div>
           </div>
           {zoneConsumption.length ? (
@@ -215,7 +218,7 @@ function DashboardPage({ onNavigate }) {
           <div className="panel-heading">
             <div>
               <h3>Collections by Channel</h3>
-              <small>Current month receipts</small>
+              <small>{concludedPeriodLabel ? `Receipts in ${concludedPeriodLabel}` : "Current month receipts"}</small>
             </div>
           </div>
           {collectionsByChannel.length ? (

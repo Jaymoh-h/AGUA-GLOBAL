@@ -3,6 +3,7 @@ const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
 const { createExpenseRecord } = require("./expense.controller");
+const { assertNotFutureDate } = require("../services/dateGuard.service");
 
 const categories = ["leak", "meter_fault", "no_water", "low_pressure", "water_quality", "connection", "billing_support", "other"];
 const priorities = ["low", "normal", "high", "urgent"];
@@ -15,13 +16,23 @@ const nullableId = (value) => {
   return Number.isInteger(number) && number > 0 ? number : null;
 };
 
-const dateOnlyOrNull = (value) => {
+const dateOnlyOrNull = (value, label = "Target date") => {
   if (!value) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value))) {
-    throw new ApiError(400, "Target date must use YYYY-MM-DD.");
+    throw new ApiError(400, `${label} must use YYYY-MM-DD.`);
   }
   return value;
 };
+
+const buildRequestTitle = ({ category, customerName, zoneName, source }) =>
+  [
+    String(category || "other").replace(/_/g, " "),
+    customerName || zoneName || "General",
+    source ? `via ${String(source).replace(/_/g, " ")}` : ""
+  ]
+    .filter(Boolean)
+    .join(" - ")
+    .slice(0, 180);
 
 const requireOneOf = (value, allowed, label) => {
   if (!allowed.includes(value)) {
@@ -113,9 +124,6 @@ const listMaintenanceAssignees = asyncHandler(async (_req, res) => {
 });
 
 const createMaintenanceRequest = asyncHandler(async (req, res) => {
-  const title = String(req.body.title || "").trim();
-  if (!title) throw new ApiError(400, "Title is required.");
-
   const category = requireOneOf(req.body.category || "other", categories, "Category");
   const priority = requireOneOf(req.body.priority || "normal", priorities, "Priority");
   const source = requireOneOf(req.body.source || "internal", sources, "Source");
@@ -124,24 +132,38 @@ const createMaintenanceRequest = asyncHandler(async (req, res) => {
   const meterId = nullableId(req.body.meter_id);
   const assignedTo = nullableId(req.body.assigned_to);
   const targetDate = dateOnlyOrNull(req.body.target_date);
+  const reportedDate = dateOnlyOrNull(req.body.reported_date, "Reported date");
+  assertNotFutureDate(reportedDate, req, "Reported date");
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
     let zoneId = suppliedZoneId;
+    let customerName = "";
+    let zoneName = "";
     if (customerId && !zoneId) {
-      const customerResult = await client.query("SELECT zone_id FROM customers WHERE id = $1", [customerId]);
+      const customerResult = await client.query("SELECT name, zone_id FROM customers WHERE id = $1", [customerId]);
       if (!customerResult.rows[0]) throw new ApiError(400, "Selected customer does not exist.");
       zoneId = customerResult.rows[0].zone_id;
+      customerName = customerResult.rows[0].name;
+    } else if (customerId) {
+      const customerResult = await client.query("SELECT name FROM customers WHERE id = $1", [customerId]);
+      if (!customerResult.rows[0]) throw new ApiError(400, "Selected customer does not exist.");
+      customerName = customerResult.rows[0].name;
     }
+    if (zoneId && !customerName) {
+      const zoneResult = await client.query("SELECT name FROM zones WHERE id = $1", [zoneId]);
+      zoneName = zoneResult.rows[0]?.name || "";
+    }
+    const title = buildRequestTitle({ category, customerName, zoneName, source });
 
     const { rows } = await client.query(
       `INSERT INTO maintenance_requests (
         customer_id, zone_id, meter_id, title, category, priority, source,
-        target_date, assigned_to, description, created_by
+        reported_at, target_date, assigned_to, description, created_by
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::date, CURRENT_DATE), $9, $10, $11, $12)
       RETURNING *`,
       [
         customerId,
@@ -151,6 +173,7 @@ const createMaintenanceRequest = asyncHandler(async (req, res) => {
         category,
         priority,
         source,
+        reportedDate,
         targetDate,
         assignedTo,
         req.body.description || null,
@@ -199,6 +222,8 @@ const updateMaintenanceRequest = asyncHandler(async (req, res) => {
       if (!customerResult.rows[0]) throw new ApiError(400, "Selected customer does not exist.");
       zoneId = customerResult.rows[0].zone_id;
     }
+    const nextReportedDate = req.body.reported_date === undefined ? null : dateOnlyOrNull(req.body.reported_date, "Reported date");
+    assertNotFutureDate(nextReportedDate, req, "Reported date");
 
     const { rows } = await client.query(
       `UPDATE maintenance_requests
@@ -210,11 +235,12 @@ const updateMaintenanceRequest = asyncHandler(async (req, res) => {
            priority = $6,
            status = $7,
            source = $8,
-           target_date = $9,
-           assigned_to = $10,
-           description = $11,
+           reported_at = COALESCE($9::date, reported_at),
+           target_date = $10,
+           assigned_to = $11,
+           description = $12,
            updated_at = NOW()
-       WHERE id = $12
+       WHERE id = $13
        RETURNING *`,
       [
         customerId,
@@ -225,6 +251,7 @@ const updateMaintenanceRequest = asyncHandler(async (req, res) => {
         req.body.priority === undefined ? before.priority : requireOneOf(req.body.priority, priorities, "Priority"),
         nextStatus,
         req.body.source === undefined ? before.source : requireOneOf(req.body.source, sources, "Source"),
+        nextReportedDate,
         req.body.target_date === undefined ? before.target_date : dateOnlyOrNull(req.body.target_date),
         req.body.assigned_to === undefined ? before.assigned_to : nullableId(req.body.assigned_to),
         req.body.description === undefined ? before.description : req.body.description || null,

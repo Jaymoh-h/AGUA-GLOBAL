@@ -1,5 +1,15 @@
 import { Download, FileText, LifeBuoy, Printer, ReceiptText, Send, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from "recharts";
 import { EmptyTableRow } from "../components/EmptyState";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
@@ -12,6 +22,20 @@ const number = (value) => Number(value || 0).toLocaleString();
 const date = (value) => value?.slice(0, 10) || "-";
 const label = (value) => String(value || "-").replaceAll("_", " ");
 const accountPositionLabel = (value) => (Number(value || 0) < 0 ? "Customer credit" : "Amount due");
+const formatCompact = (value) => {
+  const amount = Number(value || 0);
+  if (Math.abs(amount) >= 1000000) return `${(amount / 1000000).toFixed(1)}M`;
+  if (Math.abs(amount) >= 1000) return `${(amount / 1000).toFixed(0)}K`;
+  return amount.toLocaleString();
+};
+const paddedChartMax = (dataMax) => {
+  const max = Number(dataMax || 0);
+  if (max <= 0) return 10;
+  const headroom = max * 0.15;
+  const roundedStep = 10 ** Math.max(0, Math.floor(Math.log10(max)) - 1);
+  return Math.ceil((max + headroom) / roundedStep) * roundedStep;
+};
+const moneyTooltip = (value, name) => [money(value), String(name || "").replaceAll("_", " ")];
 const nonZeroChargeRows = (bill) =>
   [
     ["Usage subtotal", bill?.subtotal_amount || bill?.total_amount],
@@ -23,7 +47,6 @@ const nonZeroChargeRows = (bill) =>
   ].filter(([title, amount]) => title === "Usage subtotal" || Number(amount || 0) !== 0);
 
 const blankRequest = {
-  title: "",
   category: "leak",
   priority: "normal",
   description: ""
@@ -120,6 +143,7 @@ function PortalPage({ view = "overview" }) {
 
   const openBalance = useMemo(() => Number(data?.summary?.balance_due || 0), [data]);
   const activeRequests = useMemo(() => Number(data?.summary?.active_requests || 0), [data]);
+  const consumptionPaymentTrend = data?.charts?.consumptionPaymentTrend || [];
   const billTable = useTableControls(data?.bills || [], {
     searchFields: ["bill_number", "billing_period_name", "billing_month", "due_date", "status"]
   });
@@ -173,8 +197,8 @@ function PortalPage({ view = "overview" }) {
   const submitRequest = async (event) => {
     event.preventDefault();
     setMessage("");
-    if (!requestForm.title.trim() || !requestForm.description.trim()) {
-      setMessage("Please add a subject and a few details before submitting.");
+    if (!requestForm.description.trim()) {
+      setMessage("Please add a few details before submitting.");
       return;
     }
     setSaving(true);
@@ -289,6 +313,35 @@ function PortalPage({ view = "overview" }) {
             <StatCard label="Open bills" value={number(data.summary.open_bills)} detail="Unpaid or partial bills" />
             <StatCard label="Available credit" value={money(data.summary.credit_balance)} detail="Auto-applies to new bills" />
             <StatCard label="Open requests" value={number(activeRequests)} detail="Service requests in progress" />
+          </div>
+
+          <div className="panel chart-panel">
+            <div className="panel-heading">
+              <div>
+                <h3>Billing vs Payments</h3>
+                <small>Last six months</small>
+              </div>
+            </div>
+            {consumptionPaymentTrend.length ? (
+              <div className="dashboard-chart">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={consumptionPaymentTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
+                    <YAxis domain={[0, paddedChartMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
+                    <Tooltip formatter={moneyTooltip} />
+                    <Legend />
+                    <Line type="monotone" dataKey="billed_amount" name="Billed" stroke="#0f766e" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="paid_amount" name="Paid" stroke="#2563eb" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <div className="empty-state">
+                <strong>No billing trend yet</strong>
+                <span>Bills and payments will appear here once posted.</span>
+              </div>
+            )}
           </div>
 
           <div className="panel portal-profile-panel">
@@ -598,16 +651,6 @@ function PortalPage({ view = "overview" }) {
               <h3>Submit Request</h3>
               <LifeBuoy size={18} />
             </div>
-            <label>
-              Subject
-              <input
-                value={requestForm.title}
-                onChange={(event) => setRequestField("title", event.target.value)}
-                maxLength={180}
-                placeholder="Example: Low pressure at my connection"
-                required
-              />
-            </label>
             <label>
               Category
               <select value={requestForm.category} onChange={(event) => setRequestField("category", event.target.value)}>

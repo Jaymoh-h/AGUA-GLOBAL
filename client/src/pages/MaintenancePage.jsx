@@ -12,7 +12,7 @@ const label = (value) => String(value || "-").replaceAll("_", " ");
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 
 const emptyForm = () => ({
-  title: "",
+  reported_date: today(),
   category: "leak",
   priority: "normal",
   source: "internal",
@@ -27,7 +27,7 @@ const emptyExpenseDraft = (request = {}) => ({
   expense_date: today(),
   category: `Maintenance - ${label(request.category || "other")}`,
   vendor: "",
-  description: request.id ? `${request.request_number || `Request ${request.id}`}: ${request.title}` : "",
+  description: request.id ? `${request.request_number || `Request ${request.id}`}: ${label(request.category)}` : "",
   amount: "",
   payment_channel: "cash",
   reference: "",
@@ -200,7 +200,6 @@ function MaintenancePage({ navigationIntent, onClearNavigationIntent }) {
   const requestTable = useTableControls(focusedRequests, {
     searchFields: [
       "request_number",
-      "title",
       "customer_name",
       "acc_number",
       "zone_name",
@@ -281,8 +280,8 @@ function MaintenancePage({ navigationIntent, onClearNavigationIntent }) {
             <Wrench size={18} />
           </div>
           <label>
-            Title
-            <input value={form.title} onChange={(event) => setField("title", event.target.value)} placeholder="Leak at customer line" required />
+            Reported date
+            <input value={form.reported_date} max={today()} onChange={(event) => setField("reported_date", event.target.value)} type="date" required />
           </label>
           <label>
             Customer

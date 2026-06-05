@@ -48,6 +48,8 @@ const managementReportTitles = {
 const accountantReportTitles = {
   all: "Accountant Report",
   profitLoss: "Profit And Loss",
+  cashProfitLoss: "Cash Basis Profit And Loss",
+  accrualProfitLoss: "Accrual Basis Profit And Loss",
   billingStatus: "Billing By Status",
   collectionsChannel: "Collections By Channel",
   billingZone: "Billing By Zone",
@@ -229,10 +231,13 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const profitAndLoss = accountantData?.profitAndLoss || {};
   const cashProfit = profitAndLoss.cash || { revenue_lines: [], expense_lines: [], notes: [], totals: {} };
   const accrualProfit = profitAndLoss.accrual || { revenue_lines: [], expense_lines: [], notes: [], totals: {} };
-  const renderProfitStatement = (statement, title) => (
-    <div className="panel profit-loss-statement">
+  const renderProfitStatement = (statement, title, variant) => (
+    <div className={`panel profit-loss-statement profit-loss-statement-${variant}`}>
       <div className="panel-heading compact-heading">
         <h3>{title}</h3>
+        <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", `${variant}ProfitLoss`)} title={`Print ${title.toLowerCase()}`}>
+          <Printer size={17} />
+        </button>
       </div>
       <div className="reading-context">
         <div>
@@ -902,8 +907,8 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                   </button>
                 </div>
                 <div className="profit-loss-grid">
-                  {renderProfitStatement(cashProfit, "Cash Basis")}
-                  {renderProfitStatement(accrualProfit, "Accrual Basis")}
+                  {renderProfitStatement(cashProfit, "Cash Basis", "cash")}
+                  {renderProfitStatement(accrualProfit, "Accrual Basis", "accrual")}
                 </div>
               </div>
 

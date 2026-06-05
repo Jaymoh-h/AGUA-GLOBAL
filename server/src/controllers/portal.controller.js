@@ -13,6 +13,12 @@ const dateOnlyOrNull = (value) => {
   return value;
 };
 
+const buildRequestTitle = ({ category, customerName }) =>
+  [String(category || "other").replace(/_/g, " "), customerName || "Customer portal"]
+    .filter(Boolean)
+    .join(" - ")
+    .slice(0, 180);
+
 const getPortalDashboard = asyncHandler(async (req, res) => {
   const { customerId, accounts } = await resolvePortalCustomer(pool, req);
 
@@ -78,6 +84,41 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
     [customerId]
   );
 
+  const consumptionPaymentTrendResult = await pool.query(
+    `WITH months AS (
+       SELECT generate_series(
+         date_trunc('month', CURRENT_DATE)::date - INTERVAL '5 months',
+         date_trunc('month', CURRENT_DATE)::date,
+         INTERVAL '1 month'
+       )::date AS month_start
+     ),
+     billing AS (
+       SELECT date_trunc('month', billing_month)::date AS month_start,
+              COALESCE(SUM(COALESCE(NULLIF(total_amount, 0), amount)), 0) AS billed_amount
+       FROM bills
+       WHERE customer_id = $1
+         AND bill_pay_status = 'payable'
+       GROUP BY date_trunc('month', billing_month)::date
+     ),
+     payments_by_month AS (
+       SELECT date_trunc('month', payment_date)::date AS month_start,
+              COALESCE(SUM(amount), 0) AS paid_amount
+       FROM payments
+       WHERE customer_id = $1
+         AND status = 'posted'
+       GROUP BY date_trunc('month', payment_date)::date
+     )
+     SELECT to_char(months.month_start, 'Mon YYYY') AS label,
+            months.month_start,
+            COALESCE(billing.billed_amount, 0) AS billed_amount,
+            COALESCE(payments_by_month.paid_amount, 0) AS paid_amount
+     FROM months
+     LEFT JOIN billing ON billing.month_start = months.month_start
+     LEFT JOIN payments_by_month ON payments_by_month.month_start = months.month_start
+     ORDER BY months.month_start ASC`,
+    [customerId]
+  );
+
   const requestsResult = await pool.query(
     `SELECT mr.id, mr.request_number, mr.title, mr.category, mr.priority, mr.status,
             mr.reported_at, mr.target_date, mr.resolved_at, mr.resolution_notes,
@@ -111,6 +152,9 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
     latestReading: latestReadingResult.rows[0] || null,
     bills: billsResult.rows,
     payments: paymentsResult.rows,
+    charts: {
+      consumptionPaymentTrend: consumptionPaymentTrendResult.rows
+    },
     serviceRequests: requestsResult.rows
   });
 });
@@ -157,13 +201,10 @@ const getPortalPayment = asyncHandler(async (req, res) => {
 
 const createPortalServiceRequest = asyncHandler(async (req, res) => {
   const { customerId } = await resolvePortalCustomer(pool, req);
-  const title = String(req.body.title || "").trim();
   const description = String(req.body.description || "").trim();
   const category = req.body.category || "other";
   const priority = req.body.priority || "normal";
 
-  if (!title) throw new ApiError(400, "Title is required.");
-  if (title.length > 180) throw new ApiError(400, "Title must be 180 characters or fewer.");
   if (!description) throw new ApiError(400, "Details are required.");
   if (description.length > 2000) throw new ApiError(400, "Details must be 2000 characters or fewer.");
   if (!categories.includes(category)) throw new ApiError(400, "Category is invalid.");
@@ -172,9 +213,10 @@ const createPortalServiceRequest = asyncHandler(async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const customerResult = await client.query("SELECT id, zone_id FROM customers WHERE id = $1", [customerId]);
+    const customerResult = await client.query("SELECT id, name, zone_id FROM customers WHERE id = $1", [customerId]);
     const customer = customerResult.rows[0];
     if (!customer) throw new ApiError(404, "Customer profile not found.");
+    const title = buildRequestTitle({ category, customerName: customer.name });
 
     const { rows } = await client.query(
       `INSERT INTO maintenance_requests (
