@@ -16,7 +16,7 @@ import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { useToastMessage } from "../components/ToastProvider";
 import { api, assetUrl } from "../services/api";
-import { ensureExtension, namedExport, withPrintTitle } from "../utils/exportNames";
+import { downloadBlobFile, namedExport, withPrintTitle } from "../utils/exportNames";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const moneyAbs = (value) => `KES ${Math.abs(Number(value || 0)).toLocaleString()}`;
@@ -95,14 +95,7 @@ const downloadTextPdf = (filename, pages) => {
   chunks.push(`trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
 
   const blob = new Blob([chunks.join("")], { type: "application/pdf" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = ensureExtension(filename, "pdf");
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+  downloadBlobFile(blob, filename, "pdf");
 };
 
 const buildStatementPdfPages = (statement) => {

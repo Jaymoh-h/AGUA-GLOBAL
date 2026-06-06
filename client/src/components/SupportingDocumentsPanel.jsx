@@ -2,6 +2,7 @@ import { Download, FileText, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useToastMessage } from "./ToastProvider";
 import { api } from "../services/api";
+import { downloadBlobFile } from "../utils/exportNames";
 
 const formatBytes = (value) => {
   const bytes = Number(value || 0);
@@ -19,17 +20,6 @@ const readFileAsDataUrl = (file) =>
     reader.onerror = () => reject(new Error("Could not read the selected file."));
     reader.readAsDataURL(file);
   });
-
-const downloadBlob = (blob, filename) => {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename || "document";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-};
 
 function SupportingDocumentsPanel({ entityType, entityId }) {
   const [documents, setDocuments] = useState([]);
@@ -76,7 +66,7 @@ function SupportingDocumentsPanel({ entityType, entityId }) {
   const download = async (document) => {
     setMessage("");
     try {
-      downloadBlob(await api.documents.download(document.id), document.original_name);
+      downloadBlobFile(await api.documents.download(document.id), document.original_name || "document");
     } catch (err) {
       setMessage(err.message);
     }
