@@ -676,27 +676,31 @@ const getAccountantReports = asyncHandler(async (req, res) => {
 
   const receivablesAging = await pool.query(
     `SELECT
-       b.id,
-       b.bill_number,
-       b.billing_month,
-       b.due_date,
+       c.id AS customer_id,
        c.name AS customer_name,
        c.acc_number,
        z.name AS zone_name,
-       COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount) AS balance_amount,
-       CASE
-         WHEN CURRENT_DATE <= COALESCE(b.due_date, b.billing_month) THEN 'current'
-         WHEN CURRENT_DATE - COALESCE(b.due_date, b.billing_month) <= 30 THEN '1-30'
-         WHEN CURRENT_DATE - COALESCE(b.due_date, b.billing_month) <= 60 THEN '31-60'
-         WHEN CURRENT_DATE - COALESCE(b.due_date, b.billing_month) <= 90 THEN '61-90'
-         ELSE '90+'
-       END AS aging_bucket
-     FROM bills b
+       MIN(COALESCE(b.due_date, b.billing_month)) AS oldest_due_date,
+       COUNT(b.id) AS open_bill_count,
+       COALESCE(SUM(balance) FILTER (WHERE age_days <= 0), 0) AS current_amount,
+       COALESCE(SUM(balance) FILTER (WHERE age_days BETWEEN 1 AND 30), 0) AS days_1_30_amount,
+       COALESCE(SUM(balance) FILTER (WHERE age_days BETWEEN 31 AND 60), 0) AS days_31_60_amount,
+       COALESCE(SUM(balance) FILTER (WHERE age_days BETWEEN 61 AND 90), 0) AS days_61_90_amount,
+       COALESCE(SUM(balance) FILTER (WHERE age_days >= 91), 0) AS days_91_over_amount,
+       COALESCE(SUM(balance), 0) AS total_amount
+     FROM (
+       SELECT b.*,
+              COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount) AS balance,
+              CURRENT_DATE - COALESCE(b.due_date, b.billing_month) AS age_days
+       FROM bills b
+       WHERE b.status <> 'paid'
+         AND b.bill_pay_status = 'payable'
+         AND COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount) > 0
+     ) b
      JOIN customers c ON c.id = b.customer_id
      JOIN zones z ON z.id = c.zone_id
-     WHERE b.status <> 'paid'
-       AND COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount) > 0
-     ORDER BY COALESCE(b.due_date, b.billing_month) ASC, c.acc_number ASC
+     GROUP BY c.id, c.name, c.acc_number, z.name
+     ORDER BY total_amount DESC, oldest_due_date ASC NULLS LAST, c.acc_number ASC
      LIMIT 500`
   );
 

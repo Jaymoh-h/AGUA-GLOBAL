@@ -14,7 +14,9 @@ import { EmptyTableRow } from "../components/EmptyState";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
+import { useToastMessage } from "../components/ToastProvider";
 import { api, assetUrl } from "../services/api";
+import { ensureExtension, namedExport, withPrintTitle } from "../utils/exportNames";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const moneyAbs = (value) => `KES ${Math.abs(Number(value || 0)).toLocaleString()}`;
@@ -96,7 +98,7 @@ const downloadTextPdf = (filename, pages) => {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = filename;
+  link.download = ensureExtension(filename, "pdf");
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -138,7 +140,7 @@ function PortalPage({ view = "overview" }) {
   const [statementFilters, setStatementFilters] = useState({ start_date: "", end_date: "" });
   const [printTarget, setPrintTarget] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
   const [saving, setSaving] = useState(false);
 
   const openBalance = useMemo(() => Number(data?.summary?.balance_due || 0), [data]);
@@ -231,9 +233,17 @@ function PortalPage({ view = "overview" }) {
     setSelectedBill(bill);
   };
 
+  const printDocumentTitle = (target = "") => {
+    const account = data?.customer?.acc_number || "account";
+    if (target === "statement") return `customer statement ${account}`;
+    if (selectedReceipt) return `receipt ${selectedReceipt.payment?.receipt_number || selectedReceipt.payment?.id || "payment"} ${account}`;
+    if (selectedBill) return `bill ${selectedBill.bill_number || selectedBill.id || "billing"} ${account}`;
+    return `${viewTitles[view] || "customer portal"} ${account}`;
+  };
+
   const printDocument = (target = "") => {
     setPrintTarget(target);
-    setTimeout(() => window.print(), 50);
+    setTimeout(() => withPrintTitle(printDocumentTitle(target), () => window.print()), 50);
   };
 
   const fetchStatement = async () => {
@@ -259,7 +269,13 @@ function PortalPage({ view = "overview" }) {
     setMessage("");
     try {
       const nextStatement = statement || (await fetchStatement());
-      downloadTextPdf(`${data.customer.acc_number}-statement.pdf`, buildStatementPdfPages(nextStatement));
+      downloadTextPdf(
+        namedExport("customer-statement", "pdf", [
+          nextStatement.customer.acc_number,
+          nextStatement.period.lifetime ? "lifetime" : `${nextStatement.period.start_date || "start"} to ${nextStatement.period.end_date || "end"}`
+        ]),
+        buildStatementPdfPages(nextStatement)
+      );
       setMessage("Statement PDF downloaded.");
     } catch (err) {
       setMessage(err.message);
@@ -303,8 +319,6 @@ function PortalPage({ view = "overview" }) {
           </label>
         ) : null}
       </header>
-
-      {message ? <p className="form-note">{message}</p> : null}
 
       {view === "overview" ? (
         <>

@@ -2,8 +2,10 @@ import { Download, Eye, History, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
+import { useToastMessage } from "../components/ToastProvider";
 import { api } from "../services/api";
 import { downloadCsvRows } from "../utils/csvTemplate";
+import { namedExport, localDateStamp } from "../utils/exportNames";
 
 const formatDate = (value) => {
   if (!value) return "-";
@@ -69,7 +71,7 @@ const changeSummary = (event) => {
 
 function AuditTrailPage() {
   const [events, setEvents] = useState([]);
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
   const [selectedEvent, setSelectedEvent] = useState(null);
 
   useEffect(() => {
@@ -84,7 +86,7 @@ function AuditTrailPage() {
   });
   const exportEvents = () => {
     downloadCsvRows(
-      "audit-trail.csv",
+      namedExport("audit-trail", "csv", [localDateStamp()]),
       [
         { header: "Time", value: (row) => row.created_at },
         { header: "Actor", value: (row) => row.actor_name || "System" },
@@ -99,7 +101,7 @@ function AuditTrailPage() {
   };
   const exportImports = () => {
     downloadCsvRows(
-      "import-activity.csv",
+      namedExport("import-activity", "csv", [localDateStamp()]),
       [
         { header: "Time", value: (row) => row.created_at },
         { header: "Actor", value: (row) => row.actor_name || "System" },
@@ -123,7 +125,6 @@ function AuditTrailPage() {
         </div>
       </header>
 
-      {message ? <p className="form-note">{message}</p> : null}
       <div className="panel">
         <div className="panel-heading">
           <h3>Import Activity</h3>

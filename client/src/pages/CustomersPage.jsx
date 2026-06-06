@@ -3,8 +3,10 @@ import { useEffect, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
 import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
+import { useToastMessage } from "../components/ToastProvider";
 import { api, assetUrl } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
+import { namedExport, withPrintTitle } from "../utils/exportNames";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const moneyAbs = (value) => `KES ${Math.abs(Number(value || 0)).toLocaleString()}`;
@@ -75,7 +77,7 @@ function CustomersPage({ user }) {
     notes: ""
   });
   const [importing, setImporting] = useState(false);
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
   const canWrite = ["admin", "accountant"].includes(user.role);
 
   const load = async () => {
@@ -211,7 +213,9 @@ function CustomersPage({ user }) {
 
   const printStatement = () => {
     if (!statement) return;
-    window.print();
+    withPrintTitle(`customer statement ${statement.customer.acc_number} ${statement.period.lifetime ? "lifetime" : `${statement.period.start_date || "start"} to ${statement.period.end_date || "end"}`}`, () =>
+      window.print()
+    );
   };
 
   const previewImport = async () => {
@@ -265,7 +269,7 @@ function CustomersPage({ user }) {
 
   const exportCustomers = () => {
     downloadCsvRows(
-      "customers.csv",
+      namedExport("customer-register", "csv", [statusFilter || "all-statuses", zoneFilter ? zones.find((zone) => Number(zone.id) === Number(zoneFilter))?.name : "all-zones"]),
       [
         { header: "Account", value: (row) => row.acc_number },
         { header: "Name", value: (row) => row.name },
@@ -475,7 +479,6 @@ function CustomersPage({ user }) {
               WhatsApp invoices
             </label>
             {editingId ? <AuditPanel entityType="customer" entityId={editingId} title="Customer Audit" /> : null}
-            {message ? <p className="form-note">{message}</p> : null}
             <button className="primary-button" type="submit">
               {editingId ? <Save size={17} /> : <Plus size={17} />}
               {editingId ? "Save changes" : "Add customer"}

@@ -3,8 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
 import TableControls, { useTableControls } from "../components/TableControls";
-import ToastMessage, { toastTypeFromMessage } from "../components/ToastMessage";
+import { useToastMessage } from "../components/ToastProvider";
 import { api, assetUrl } from "../services/api";
+import { withPrintTitle } from "../utils/exportNames";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const number = (value) => Number(value || 0).toLocaleString();
@@ -45,7 +46,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [weeks, setWeeks] = useState([]);
   const [report, setReport] = useState({ weeks: [] });
   const [businessSettings, setBusinessSettings] = useState(null);
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
   const [meterForm, setMeterForm] = useState({
     meter_type: "shared_source",
     meter_number: "",
@@ -345,7 +346,14 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
     if (!nextReport?.weeks?.length) return;
     setPrintMode(mode);
     setPrintGeneratedAt(new Date().toISOString());
-    window.setTimeout(() => window.print(), 80);
+    window.setTimeout(
+      () =>
+        withPrintTitle(
+          `${mode === "summary" ? "Production Weekly Summary" : "Production Report"} ${reportPeriodLabel}`,
+          () => window.print()
+        ),
+      80
+    );
   };
 
   const cancelWeeklyEdit = () => {
@@ -433,8 +441,6 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
           onClear={onClearNavigationIntent}
         />
       ) : null}
-
-      <ToastMessage message={message} type={toastTypeFromMessage(message)} onClose={() => setMessage("")} />
 
       <section className="workspace-grid production-workspace">
         {!hasProductionFocus ? (

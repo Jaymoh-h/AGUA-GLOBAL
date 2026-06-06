@@ -4,8 +4,10 @@ import AuditPanel from "../components/AuditPanel";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
 import TableControls, { useTableControls } from "../components/TableControls";
+import { useToastMessage } from "../components/ToastProvider";
 import { api } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
+import { namedExport } from "../utils/exportNames";
 
 const readingImportHeaders = ["acc_number", "reading_date", "reading_value", "meter_number", "notes"];
 const meterRoleLabels = {
@@ -66,7 +68,7 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [customerFilter, setCustomerFilter] = useState("");
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
 
   const load = async () => {
     const [customerRows, readingRows, eligibility, eventRows, sourceRows] = await Promise.all([
@@ -502,7 +504,13 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
   });
   const exportReadings = () => {
     downloadCsvRows(
-      "meter-readings.csv",
+      namedExport("meter-reading-register", "csv", [
+        customerFilter
+          ? customers.find((customer) => Number(customer.id) === Number(customerFilter))?.acc_number
+          : "all-customers",
+        dateFromFilter || "start",
+        dateToFilter || "end"
+      ]),
       [
         { header: "Customer", value: (row) => row.customer_name },
         { header: "Account", value: (row) => row.acc_number },
@@ -665,7 +673,6 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 />
               </label>
             ) : null}
-            {message ? <p className="form-note">{message}</p> : null}
             <button className="primary-button" type="submit">
               {editingId ? <Save size={17} /> : <Send size={17} />}
               {editingId ? "Save reading" : "Submit reading"}

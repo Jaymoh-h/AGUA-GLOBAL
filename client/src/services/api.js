@@ -270,6 +270,7 @@ export const api = {
   payroll: {
     payees: () => request("/payroll/payees"),
     createPayee: (payload) => request("/payroll/payees", { method: "POST", body: payload }),
+    updatePayee: (id, payload) => request(`/payroll/payees/${id}`, { method: "PATCH", body: payload }),
     terminatePayee: (id, payload) => request(`/payroll/payees/${id}/terminate`, { method: "PATCH", body: payload }),
     runs: () => request("/payroll/runs"),
     createRun: (payload) => request("/payroll/runs", { method: "POST", body: payload }),

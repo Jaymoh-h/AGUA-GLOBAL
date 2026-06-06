@@ -1,5 +1,6 @@
 import { Download, FileText, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useToastMessage } from "./ToastProvider";
 import { api } from "../services/api";
 
 const formatBytes = (value) => {
@@ -33,7 +34,7 @@ const downloadBlob = (blob, filename) => {
 function SupportingDocumentsPanel({ entityType, entityId }) {
   const [documents, setDocuments] = useState([]);
   const [description, setDescription] = useState("");
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
@@ -114,7 +115,6 @@ function SupportingDocumentsPanel({ entityType, entityId }) {
           />
         </label>
       </div>
-      {message ? <p className="form-note">{message}</p> : null}
       <div className="table-wrap">
         <table>
           <thead>

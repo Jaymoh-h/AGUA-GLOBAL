@@ -1305,6 +1305,49 @@ td button,
   margin-top: 12px;
 }
 
+.report-catalog {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.compact-report-catalog {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.report-catalog-item {
+  align-items: flex-start;
+  background: #ffffff;
+  border: 1px solid #dde3ea;
+  border-radius: 8px;
+  color: #162033;
+  display: grid;
+  gap: 4px;
+  min-height: 82px;
+  padding: 11px;
+  text-align: left;
+}
+
+.report-catalog-item:hover:not(:disabled),
+.report-catalog-item.active {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.report-catalog-item:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.report-catalog-item span,
+.report-catalog-item small {
+  color: #637083;
+}
+
+.report-section-collapsed {
+  display: none;
+}
+
 .profit-loss-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2283,6 +2326,8 @@ td {
 
   .active-print-surface.report-print-billingSummary .management-section-billingSummary,
   .active-print-surface.report-print-agingAnalysis .management-section-agingAnalysis,
+  .active-print-surface.report-print-collections .management-section-collections,
+  .active-print-surface.report-print-routeSummary .management-section-routeSummary,
   .active-print-surface.report-print-customerBalances .management-section-customerBalances,
   .active-print-surface.report-print-maintenanceStatus .management-section-maintenanceStatus,
   .active-print-surface.report-print-maintenanceCategory .management-section-maintenanceCategory,

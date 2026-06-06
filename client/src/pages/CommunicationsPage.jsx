@@ -5,6 +5,7 @@ import FocusNotice from "../components/FocusNotice";
 import StatusBadge from "../components/StatusBadge";
 import StatCard from "../components/StatCard";
 import TableControls, { useTableControls } from "../components/TableControls";
+import { useToastMessage } from "../components/ToastProvider";
 import { api } from "../services/api";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
@@ -55,17 +56,17 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
   const [whatsAppTemplateName, setWhatsAppTemplateName] = useState("");
   const [whatsAppTemplateLanguage, setWhatsAppTemplateLanguage] = useState("en_US");
   const [whatsAppTemplateVariables, setWhatsAppTemplateVariables] = useState("");
-  const [templateMessage, setTemplateMessage] = useState("");
+  const [, setTemplateMessage] = useToastMessage();
   const [campaignName, setCampaignName] = useState("");
   const [medium, setMedium] = useState("email");
   const [readiness, setReadiness] = useState("all");
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
   const [sendingId, setSendingId] = useState(null);
   const [bulkSending, setBulkSending] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [campaigns, setCampaigns] = useState([]);
   const [selectedCampaign, setSelectedCampaign] = useState(null);
-  const [campaignMessage, setCampaignMessage] = useState("");
+  const [, setCampaignMessage] = useToastMessage();
 
   const load = ({ preserveMessage = false } = {}) =>
     api.communications
@@ -353,7 +354,6 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
         </button>
       </header>
 
-      {message ? <p className="form-error">{message}</p> : null}
       {["document_delivery", "campaign_attention"].includes(focusKey) ? (
         <FocusNotice
           title={focusKey === "document_delivery" ? "Delivery exceptions" : "Campaigns needing review"}
@@ -469,7 +469,6 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
             Invoice alert template
             <textarea value={activeTemplate} onChange={(event) => setTemplate(event.target.value)} />
           </label>
-          {templateMessage ? <p className="form-note template-status-message">{templateMessage}</p> : null}
           <div className="template-actions">
             <label className="checkbox-row">
               <input type="checkbox" checked={templateDefault} onChange={(event) => setTemplateDefault(event.target.checked)} />
@@ -622,7 +621,6 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
             Refresh
           </button>
         </div>
-        {campaignMessage ? <p className="form-error">{campaignMessage}</p> : null}
         <TableControls table={campaignTable} label="campaigns" placeholder="Search campaigns" />
         <div className="table-wrap campaign-history-wrap">
           <table>

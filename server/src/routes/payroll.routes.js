@@ -7,6 +7,7 @@ const {
   listPayees,
   listRuns,
   terminatePayee,
+  updatePayee,
   updateLineItem,
   updateRunStatus
 } = require("../controllers/payroll.controller");
@@ -17,6 +18,7 @@ const router = express.Router();
 router.use(authenticate);
 router.get("/payees", authorize("admin", "accountant"), listPayees);
 router.post("/payees", authorize("admin", "accountant"), createPayee);
+router.patch("/payees/:id", authorize("admin", "accountant"), updatePayee);
 router.patch("/payees/:id/terminate", authorize("admin"), terminatePayee);
 router.get("/runs", authorize("admin", "accountant"), listRuns);
 router.post("/runs", authorize("admin", "accountant"), createRun);

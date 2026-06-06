@@ -1,13 +1,14 @@
-import { Banknote, CalendarDays, CheckCircle2, Download, Lock, Plus, Save, Send, UserMinus, Users } from "lucide-react";
+import { Banknote, CalendarDays, CheckCircle2, Download, Lock, Pencil, Plus, Save, Send, UserMinus, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
-import ToastMessage, { toastTypeFromMessage } from "../components/ToastMessage";
+import { useToastMessage } from "../components/ToastProvider";
 import { api } from "../services/api";
 import { downloadCsvRows } from "../utils/csvTemplate";
+import { namedExport } from "../utils/exportNames";
 
 const payeeTypes = ["employee", "casual", "contractor", "subscription"];
 const recurringPayeeTypes = ["employee", "subscription"];
@@ -20,30 +21,55 @@ const today = new Date().toISOString().slice(0, 10);
 const firstDay = today.slice(0, 8) + "01";
 
 const readDefaultUnits = (metadata) => {
-  const units = Number(metadata?.default_units);
+  let source = metadata;
+  if (typeof metadata === "string") {
+    try {
+      source = JSON.parse(metadata);
+    } catch (_error) {
+      source = {};
+    }
+  }
+  const units = Number(source?.default_units);
   return Number.isFinite(units) && units >= 0 ? units : "";
 };
+
+const blankPayeeForm = () => ({
+  payee_type: "employee",
+  name: "",
+  code: "",
+  title: "",
+  rate_amount: "",
+  rate_basis: "monthly",
+  default_additions: "",
+  default_deductions: "",
+  payment_channel: "bank",
+  default_units: "",
+  start_date: today
+});
+
+const payeeToForm = (payee) => ({
+  payee_type: payee.payee_type || "employee",
+  name: payee.name || "",
+  code: payee.code || "",
+  title: payee.title || "",
+  rate_amount: payee.rate_amount ?? "",
+  rate_basis: payee.rate_basis || "monthly",
+  default_additions: payee.default_additions ?? "",
+  default_deductions: payee.default_deductions ?? "",
+  payment_channel: payee.payment_channel || "bank",
+  default_units: readDefaultUnits(payee.metadata),
+  start_date: dateOnly(payee.start_date) === "-" ? today : dateOnly(payee.start_date)
+});
 
 function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [payees, setPayees] = useState([]);
   const [runs, setRuns] = useState([]);
   const [selectedRun, setSelectedRun] = useState(null);
   const [typeFilter, setTypeFilter] = useState("");
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
   const [loading, setLoading] = useState(false);
-  const [payeeForm, setPayeeForm] = useState({
-    payee_type: "employee",
-    name: "",
-    code: "",
-    title: "",
-    rate_amount: "",
-    rate_basis: "monthly",
-    default_additions: "",
-    default_deductions: "",
-    payment_channel: "bank",
-    default_units: "",
-    start_date: today
-  });
+  const [editingPayeeId, setEditingPayeeId] = useState(null);
+  const [payeeForm, setPayeeForm] = useState(blankPayeeForm);
   const [periodPayeeForm, setPeriodPayeeForm] = useState({
     payee_type: "casual",
     name: "",
@@ -167,33 +193,37 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
   };
   const setRunField = (field, value) => setRunForm((current) => ({ ...current, [field]: value }));
 
-  const createPayee = async (event) => {
+  const resetPayeeForm = () => {
+    setEditingPayeeId(null);
+    setPayeeForm(blankPayeeForm());
+  };
+
+  const editPayee = (payee) => {
+    setEditingPayeeId(payee.id);
+    setPayeeForm(payeeToForm(payee));
+    setMessage(`${payee.name} loaded for editing.`);
+  };
+
+  const savePayee = async (event) => {
     event.preventDefault();
     setMessage("");
     try {
       const defaultUnits = Number(payeeForm.default_units);
-      await api.payroll.createPayee({
+      const payload = {
         ...payeeForm,
         rate_amount: Number(payeeForm.rate_amount),
         default_additions: Number(payeeForm.default_additions || 0),
         default_deductions: Number(payeeForm.default_deductions || 0),
         metadata: Number.isFinite(defaultUnits) && defaultUnits >= 0 ? { default_units: defaultUnits } : {}
-      });
-      setPayeeForm({
-        payee_type: "employee",
-        name: "",
-        code: "",
-        title: "",
-        rate_amount: "",
-        rate_basis: "monthly",
-        default_additions: "",
-        default_deductions: "",
-        payment_channel: "bank",
-        default_units: "",
-        start_date: today
-      });
+      };
+      if (editingPayeeId) {
+        await api.payroll.updatePayee(editingPayeeId, payload);
+      } else {
+        await api.payroll.createPayee(payload);
+      }
+      resetPayeeForm();
       await load();
-      setMessage("Recurring payee added.");
+      setMessage(editingPayeeId ? "Recurring payee updated." : "Recurring payee added.");
     } catch (err) {
       setMessage(err.message);
     }
@@ -320,7 +350,7 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
 
   const exportLines = () => {
     downloadCsvRows(
-      `payroll-run-${selectedRun?.id || "draft"}.csv`,
+      namedExport("payroll-run-lines", "csv", [selectedRun?.name || selectedRun?.id || "no-run", typeFilter || "all-payees"]),
       [
         { header: "Payee", value: (row) => row.name },
         { header: "Code", value: (row) => row.code },
@@ -374,8 +404,6 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
       </div>
       ) : null}
 
-      <ToastMessage message={message} type={toastTypeFromMessage(message)} onClose={() => setMessage("")} />
-
       <section className="workspace-grid payroll-workspace-grid">
         <div className="page-stack">
           {!hasPayrollFocus ? (
@@ -419,9 +447,9 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
           ) : null}
 
           {!hasPayrollFocus ? (
-          <form className="panel form-grid payroll-recurring-form" onSubmit={createPayee}>
+          <form className="panel form-grid payroll-recurring-form" onSubmit={savePayee}>
             <div className="panel-heading">
-              <h3>Add Recurring Payee</h3>
+              <h3>{editingPayeeId ? "Edit Recurring Payee" : "Add Recurring Payee"}</h3>
               <Users size={18} />
             </div>
             <label>
@@ -485,10 +513,18 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
                 <option value="manual_adjustment">Manual adjustment</option>
               </select>
             </label>
-            <button className="primary-button" type="submit" disabled={loading}>
-              <Save size={17} />
-              Save payee
-            </button>
+            <div className="row-actions full-span">
+              <button className="primary-button" type="submit" disabled={loading}>
+                <Save size={17} />
+                {editingPayeeId ? "Save changes" : "Save payee"}
+              </button>
+              {editingPayeeId ? (
+                <button type="button" onClick={resetPayeeForm} disabled={loading}>
+                  <X size={16} />
+                  Cancel
+                </button>
+              ) : null}
+            </div>
           </form>
           ) : null}
 
@@ -816,14 +852,18 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
                         <td>{money(payee.default_deductions)}</td>
                         <td>{label(payee.payment_channel)}</td>
                         <td>
-                          {user.role === "admin" && payee.status === "active" ? (
-                            <button type="button" onClick={() => terminatePayee(payee)}>
-                              <UserMinus size={15} />
-                              {payee.payee_type === "subscription" ? "Cancel" : "Terminate"}
+                          <div className="row-actions">
+                            <button type="button" onClick={() => editPayee(payee)}>
+                              <Pencil size={15} />
+                              Edit
                             </button>
-                          ) : (
-                            "-"
-                          )}
+                            {user.role === "admin" && payee.status === "active" ? (
+                              <button type="button" onClick={() => terminatePayee(payee)}>
+                                <UserMinus size={15} />
+                                {payee.payee_type === "subscription" ? "Cancel" : "Terminate"}
+                              </button>
+                            ) : null}
+                          </div>
                         </td>
                       </tr>
                     ))

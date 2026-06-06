@@ -5,8 +5,10 @@ import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
+import { useToastMessage } from "../components/ToastProvider";
 import { api, assetUrl } from "../services/api";
 import { downloadCsvRows } from "../utils/csvTemplate";
+import { namedExport, withPrintTitle } from "../utils/exportNames";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const date = (value) => (value ? new Date(value).toLocaleDateString() : "-");
@@ -28,7 +30,7 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [status, setStatus] = useState("");
   const [selectedBill, setSelectedBill] = useState(null);
   const [businessSettings, setBusinessSettings] = useState(null);
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
   const canManage = ["admin", "accountant"].includes(user.role);
 
   const load = () => api.bills.list(status).then(setBills);
@@ -70,7 +72,10 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
 
   const printBill = () => {
     if (!selectedBill) return;
-    window.print();
+    withPrintTitle(
+      `bill ${selectedBill.bill_number || selectedBill.id} ${selectedBill.acc_number || selectedBill.customer_name || ""}`,
+      () => window.print()
+    );
   };
   const sendBillEmail = async (id) => {
     setMessage("");
@@ -110,7 +115,7 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
   });
   const exportBills = () => {
     downloadCsvRows(
-      "bills.csv",
+      namedExport("bill-register", "csv", [status || "all-statuses", focusKey || "all-bills"]),
       [
         { header: "Bill", value: (row) => row.bill_number },
         { header: "Customer", value: (row) => row.customer_name },
@@ -145,7 +150,6 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
         </select>
       </header>
 
-      {message ? <p className="form-note">{message}</p> : null}
       {focusKey === "held_bills" ? (
         <FocusNotice
           title="Held bills"

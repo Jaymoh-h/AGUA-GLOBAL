@@ -98,10 +98,23 @@ const sendBillEmail = asyncHandler(async (req, res) => {
     const bill = billResult.rows[0];
     if (!bill) throw new ApiError(404, "Bill not found.");
 
+    const penalties = await client.query(
+      `SELECT bpa.*, waived.name AS waived_by_name
+       FROM bill_penalty_applications bpa
+       LEFT JOIN users waived ON waived.id = bpa.waived_by
+       WHERE bpa.bill_id = $1
+       ORDER BY bpa.application_month DESC, bpa.id DESC`,
+      [bill.id]
+    );
+
     const [business, recipient] = await Promise.all([
       getBusinessSettings(client),
       getCustomerEmailRecipient(client, bill.customer_id)
     ]);
+    const billWithDetails = {
+      ...bill,
+      penalty_applications: penalties.rows
+    };
     const email = buildBillEmail({ bill, business });
     const result = await sendDocumentEmail(client, req, {
       documentType: "bill",
@@ -110,7 +123,7 @@ const sendBillEmail = asyncHandler(async (req, res) => {
       recipient: recipient.email,
       subject: email.subject,
       text: email.text,
-      attachments: [buildBillPdfAttachment({ bill, business })]
+      attachments: [buildBillPdfAttachment({ bill: billWithDetails, business })]
     });
 
     let auditError = null;

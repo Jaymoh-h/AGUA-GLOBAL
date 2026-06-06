@@ -1,4 +1,4 @@
-import { Download, FileSpreadsheet, Printer, RefreshCw } from "lucide-react";
+import { FileSpreadsheet, Printer, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import { EmptyTableRow } from "../components/EmptyState";
@@ -6,13 +6,23 @@ import FocusNotice from "../components/FocusNotice";
 import StatCard from "../components/StatCard";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
-import { downloadJson } from "../utils/csvTemplate";
+import { withPrintTitle } from "../utils/exportNames";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const number = (value) => Number(value || 0).toLocaleString();
 const date = (value) => value?.slice(0, 10) || "-";
 const label = (value) => String(value || "-").replaceAll("_", " ");
 const percent = (value) => `${(Number(value || 0) * 100).toFixed(2)}%`;
+const sumRows = (rows, field) => rows.reduce((sum, row) => sum + Number(row?.[field] || 0), 0);
+const countRows = (rows, field) => rows.reduce((sum, row) => sum + Number(row?.[field] || 0), 0);
+const agingBucketFields = [
+  "current_amount",
+  "days_1_30_amount",
+  "days_31_60_amount",
+  "days_61_90_amount",
+  "days_91_over_amount",
+  "total_amount"
+];
 
 const localDateInput = (dateValue = new Date()) => {
   const year = dateValue.getFullYear();
@@ -37,6 +47,8 @@ const managementReportTitles = {
   all: "Management Reports",
   billingSummary: "Billing Summary",
   agingAnalysis: "Aging Analysis",
+  collections: "Collections",
+  routeSummary: "Route Reading Summary",
   customerBalances: "Customer Balances",
   maintenanceStatus: "Maintenance Status",
   maintenanceCategory: "Maintenance By Category",
@@ -83,6 +95,9 @@ const dataQualityRecordColumns = {
   ]
 };
 
+const reportSectionClass = (baseClass, isVisible) =>
+  `${baseClass} ${isVisible ? "" : "report-section-collapsed"}`;
+
 function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [data, setData] = useState(null);
   const [accountantData, setAccountantData] = useState(null);
@@ -93,10 +108,10 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [message, setMessage] = useState("");
   const [accountantMessage, setAccountantMessage] = useState("");
   const [printAllRows, setPrintAllRows] = useState(false);
-  const [backupMessage, setBackupMessage] = useState("");
-  const [backupLoading, setBackupLoading] = useState(false);
   const [dataQuality, setDataQuality] = useState([]);
   const [selectedQualityKey, setSelectedQualityKey] = useState("");
+  const [activeManagementReport, setActiveManagementReport] = useState("billingSummary");
+  const [activeAccountantReport, setActiveAccountantReport] = useState("profitLoss");
 
   useEffect(() => {
     api.reports.summary().then(setData).catch((err) => setMessage(err.message));
@@ -157,28 +172,17 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   };
 
   const printReport = (scope, target = "all") => {
+    const title =
+      scope === "management"
+        ? managementReportTitles[target] || managementReportTitles.all
+        : accountantReportTitles[target] || accountantReportTitles.all;
     flushSync(() => {
       setPrintScope(scope);
       setPrintTarget(target);
       setPrintAllRows(true);
     });
-    window.print();
+    withPrintTitle(`${title} ${filters.start_date} to ${filters.end_date}`, () => window.print());
     setPrintAllRows(false);
-  };
-
-  const downloadBackupPack = async () => {
-    setBackupMessage("");
-    setBackupLoading(true);
-    try {
-      const backup = await api.reports.backup();
-      const datasetCount = Object.keys(backup.dataset_counts || {}).length;
-      downloadJson(`agua-operational-backup-${localDateInput()}.json`, backup);
-      setBackupMessage(`Backup downloaded with ${number(datasetCount)} datasets.`);
-    } catch (err) {
-      setBackupMessage(err.message);
-    } finally {
-      setBackupLoading(false);
-    }
   };
 
   const managementPrintTitle = managementReportTitles[printScope === "management" ? printTarget : "all"] || "Management Reports";
@@ -210,6 +214,11 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
     null;
   const selectedQualityRecords = selectedQuality?.records || [];
   const selectedQualityColumns = dataQualityRecordColumns[selectedQuality?.key] || [];
+  const qualityIssueCount = dataQuality.reduce((sum, check) => sum + Number(check.count || 0), 0);
+  const highQualityIssueCount = dataQuality
+    .filter((check) => check.severity === "high")
+    .reduce((sum, check) => sum + Number(check.count || 0), 0);
+  const reviewableQualityCount = dataQuality.filter((check) => Number(check.count || 0) > 0 && check.records?.length).length;
   const receiptRegisterTable = useTableControls(accountantData?.receiptRegister || [], {
     searchFields: ["receipt_number", "payment_date", "customer_name", "acc_number", "payment_channel", "external_reference", "recorded_by_name"]
   });
@@ -217,7 +226,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
     searchFields: ["receipt_number", "payment_date", "customer_name", "acc_number", "bill_number", "billing_month", "payment_channel"]
   });
   const receivablesAgingTable = useTableControls(accountantData?.receivablesAging || [], {
-    searchFields: ["customer_name", "acc_number", "zone_name", "bill_number", "billing_month", "due_date", "aging_bucket"]
+    searchFields: ["customer_name", "acc_number", "zone_name", "oldest_due_date", "open_bill_count", "total_amount"]
   });
   const depositRegisterTable = useTableControls(accountantData?.depositRegister || [], {
     searchFields: ["customer_name", "acc_number", "zone_name", "deposit_amount", "deposit_paid", "deposit_paid_at"]
@@ -241,9 +250,187 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const expenseRegisterRows = printAllRows ? expenseRegisterTable.filteredRows : expenseRegisterTable.visibleRows;
   const contractorBalanceRows = printAllRows ? contractorBalanceTable.filteredRows : contractorBalanceTable.visibleRows;
   const contractorInvoiceRows = printAllRows ? contractorInvoiceTable.filteredRows : contractorInvoiceTable.visibleRows;
+  const billingSummaryTotals = data
+    ? {
+        bill_count: countRows(data.billingSummary, "bill_count"),
+        units_billed: sumRows(data.billingSummary, "units_billed"),
+        billed_amount: sumRows(data.billingSummary, "billed_amount"),
+        paid_amount: sumRows(data.billingSummary, "paid_amount"),
+        balance_amount: sumRows(data.billingSummary, "balance_amount")
+      }
+    : {};
+  const agingSummaryTotals = data
+    ? {
+        bill_count: countRows(data.agingSummary, "bill_count"),
+        balance_amount: sumRows(data.agingSummary, "balance_amount")
+      }
+    : {};
+  const collectionsSummaryTotals = data
+    ? {
+        receipt_count: countRows(data.collectionsSummary, "receipt_count"),
+        received_amount: sumRows(data.collectionsSummary, "received_amount"),
+        allocated_amount: sumRows(data.collectionsSummary, "allocated_amount")
+      }
+    : {};
+  const zoneReadingTotals = data
+    ? {
+        customer_count: countRows(data.zoneReadingSummary, "customer_count"),
+        customers_with_readings: countRows(data.zoneReadingSummary, "customers_with_readings"),
+        customers_without_readings: countRows(data.zoneReadingSummary, "customers_without_readings")
+      }
+    : {};
+  const maintenanceStatusTotals = data
+    ? {
+        request_count: countRows(data.maintenanceByStatus || [], "request_count"),
+        urgent_count: countRows(data.maintenanceByStatus || [], "urgent_count"),
+        overdue_count: countRows(data.maintenanceByStatus || [], "overdue_count")
+      }
+    : {};
+  const maintenanceCategoryTotals = data
+    ? {
+        request_count: countRows(data.maintenanceByCategory || [], "request_count"),
+        urgent_count: countRows(data.maintenanceByCategory || [], "urgent_count"),
+        overdue_count: countRows(data.maintenanceByCategory || [], "overdue_count")
+      }
+    : {};
+  const maintenanceZoneTotals = data
+    ? {
+        request_count: countRows(data.maintenanceByZone || [], "request_count"),
+        urgent_count: countRows(data.maintenanceByZone || [], "urgent_count"),
+        overdue_count: countRows(data.maintenanceByZone || [], "overdue_count")
+      }
+    : {};
+  const maintenanceAssigneeTotals = data
+    ? {
+        request_count: countRows(data.maintenanceByAssignee || [], "request_count"),
+        open_count: countRows(data.maintenanceByAssignee || [], "open_count"),
+        in_progress_count: countRows(data.maintenanceByAssignee || [], "in_progress_count"),
+        overdue_count: countRows(data.maintenanceByAssignee || [], "overdue_count")
+      }
+    : {};
+  const customerBalanceTotals = {
+    open_bills: countRows(customerBalanceRows, "open_bills"),
+    balance_due: sumRows(customerBalanceRows, "balance_due")
+  };
+  const billingRegisterTotals = {
+    units_used: sumRows(billingRegisterRows, "units_used"),
+    subtotal_amount: sumRows(billingRegisterRows, "subtotal_amount"),
+    fixed_charge_amount: sumRows(billingRegisterRows, "fixed_charge_amount"),
+    penalty_amount: sumRows(billingRegisterRows, "penalty_amount"),
+    vat_amount: sumRows(billingRegisterRows, "vat_amount"),
+    adjustment_amount: sumRows(billingRegisterRows, "adjustment_amount"),
+    billed_amount: sumRows(billingRegisterRows, "billed_amount"),
+    paid_amount: sumRows(billingRegisterRows, "paid_amount"),
+    balance_amount: sumRows(billingRegisterRows, "balance_amount")
+  };
+  const receiptRegisterTotals = {
+    amount: sumRows(receiptRegisterRows, "amount"),
+    total_allocated_amount: sumRows(receiptRegisterRows, "total_allocated_amount")
+  };
+  const allocationLedgerTotals = {
+    allocated_amount: sumRows(allocationLedgerRows, "allocated_amount")
+  };
+  const receivablesAgingTotals = agingBucketFields.reduce(
+    (result, field) => ({ ...result, [field]: sumRows(receivablesAgingRows, field) }),
+    { open_bill_count: countRows(receivablesAgingRows, "open_bill_count") }
+  );
+  const depositRegisterTotals = {
+    deposit_amount: sumRows(depositRegisterRows, "deposit_amount")
+  };
+  const expenseCategoryTotals = accountantData
+    ? {
+        expense_count: countRows(accountantData.expensesByCategory, "expense_count"),
+        expense_amount: sumRows(accountantData.expensesByCategory, "expense_amount")
+      }
+    : {};
+  const expenseRegisterTotals = {
+    amount: sumRows(expenseRegisterRows, "amount")
+  };
+  const contractorBalanceTotals = {
+    open_invoice_count: countRows(contractorBalanceRows, "open_invoice_count"),
+    open_amount: sumRows(contractorBalanceRows, "open_amount"),
+    overdue_amount: sumRows(contractorBalanceRows, "overdue_amount"),
+    overdue_invoice_count: countRows(contractorBalanceRows, "overdue_invoice_count")
+  };
+  const contractorInvoiceRegisterTotals = {
+    subtotal_amount: sumRows(contractorInvoiceRows, "subtotal_amount"),
+    vat_amount: sumRows(contractorInvoiceRows, "vat_amount"),
+    total_amount: sumRows(contractorInvoiceRows, "total_amount"),
+    document_count: countRows(contractorInvoiceRows, "document_count")
+  };
+  const billingByStatusTotals = accountantData
+    ? {
+        bill_count: countRows(accountantData.billingByStatus, "bill_count"),
+        billed_amount: sumRows(accountantData.billingByStatus, "billed_amount"),
+        paid_amount: sumRows(accountantData.billingByStatus, "paid_amount"),
+        balance_amount: sumRows(accountantData.billingByStatus, "balance_amount")
+      }
+    : {};
+  const collectionsByChannelTotals = accountantData
+    ? {
+        receipt_count: countRows(accountantData.collectionsByChannel, "receipt_count"),
+        received_amount: sumRows(accountantData.collectionsByChannel, "received_amount"),
+        allocated_amount: sumRows(accountantData.collectionsByChannel, "allocated_amount"),
+        unallocated_amount: sumRows(accountantData.collectionsByChannel, "unallocated_amount")
+      }
+    : {};
+  const billingByZoneTotals = accountantData
+    ? {
+        bill_count: countRows(accountantData.billingByZone, "bill_count"),
+        units_billed: sumRows(accountantData.billingByZone, "units_billed"),
+        billed_amount: sumRows(accountantData.billingByZone, "billed_amount"),
+        paid_amount: sumRows(accountantData.billingByZone, "paid_amount"),
+        balance_amount: sumRows(accountantData.billingByZone, "balance_amount")
+      }
+    : {};
+  const contractorPayablesByStatusTotals = accountantData
+    ? {
+        invoice_count: countRows(accountantData.contractorPayablesByStatus, "invoice_count"),
+        invoice_amount: sumRows(accountantData.contractorPayablesByStatus, "invoice_amount"),
+        overdue_amount: sumRows(accountantData.contractorPayablesByStatus, "overdue_amount")
+      }
+    : {};
+  const contractorPayablesAgingTotals = accountantData
+    ? {
+        invoice_count: countRows(accountantData.contractorPayablesAging, "invoice_count"),
+        invoice_amount: sumRows(accountantData.contractorPayablesAging, "invoice_amount")
+      }
+    : {};
   const profitAndLoss = accountantData?.profitAndLoss || {};
   const cashProfit = profitAndLoss.cash || { revenue_lines: [], expense_lines: [], notes: [], totals: {} };
   const accrualProfit = profitAndLoss.accrual || { revenue_lines: [], expense_lines: [], notes: [], totals: {} };
+  const managementReportCatalog = [
+    { key: "billingSummary", title: "Billing Summary", detail: `${number(billingSummaryTotals.bill_count)} bills | ${money(billingSummaryTotals.billed_amount)} billed` },
+    { key: "agingAnalysis", title: "Aging Analysis", detail: `${number(agingSummaryTotals.bill_count)} unpaid bills | ${money(agingSummaryTotals.balance_amount)} outstanding` },
+    { key: "collections", title: "Collections", detail: `${number(collectionsSummaryTotals.receipt_count)} receipts | ${money(collectionsSummaryTotals.received_amount)} received` },
+    { key: "routeSummary", title: "Route Reading Summary", detail: `${number(zoneReadingTotals.customers_without_readings)} missing readings` },
+    { key: "maintenanceStatus", title: "Maintenance Status", detail: `${number(maintenanceStatusTotals.request_count)} requests` },
+    { key: "maintenanceCategory", title: "Maintenance By Category", detail: `${number(maintenanceCategoryTotals.overdue_count)} overdue` },
+    { key: "maintenanceZone", title: "Maintenance By Zone", detail: `${number(maintenanceZoneTotals.urgent_count)} urgent` },
+    { key: "maintenanceAssignee", title: "Maintenance Assignment", detail: `${number(maintenanceAssigneeTotals.request_count)} assigned/open requests` },
+    { key: "maintenanceRegister", title: "Maintenance Register", detail: `${number(maintenanceRegisterTable.total)} records` },
+    { key: "customerBalances", title: "Customer Balances", detail: `${number(customerBalanceTable.total)} customers | ${money(customerBalanceTotals.balance_due)} balance` }
+  ];
+  const accountantReportCatalog = [
+    { key: "profitLoss", title: "Profit And Loss", detail: `Cash ${money(cashProfit.totals?.net_profit)} | Accrual ${money(accrualProfit.totals?.net_profit)}` },
+    { key: "billingStatus", title: "Billing By Status", detail: `${number(billingByStatusTotals.bill_count)} bills` },
+    { key: "collectionsChannel", title: "Collections By Channel", detail: `${money(collectionsByChannelTotals.received_amount)} received` },
+    { key: "billingZone", title: "Billing By Zone", detail: `${number(billingByZoneTotals.bill_count)} bills by zone` },
+    { key: "billingRegister", title: "Billing Register", detail: `${number(billingRegisterTable.total)} bill rows` },
+    { key: "receiptRegister", title: "Receipt Register", detail: `${number(receiptRegisterTable.total)} receipt rows` },
+    { key: "allocationLedger", title: "Payment Allocation Ledger", detail: `${money(allocationLedgerTotals.allocated_amount)} allocated` },
+    { key: "agingDetail", title: "Receivables Aging Detail", detail: `${number(receivablesAgingTable.total)} customers | ${money(receivablesAgingTotals.total_amount)} total` },
+    { key: "depositRegister", title: "Deposit Register", detail: `${money(depositRegisterTotals.deposit_amount)} deposits` },
+    { key: "expensesCategory", title: "Expenses By Category", detail: `${money(expenseCategoryTotals.expense_amount)} expenses` },
+    { key: "expenseRegister", title: "Expense Register", detail: `${number(expenseRegisterTable.total)} expense rows` },
+    { key: "contractorPayables", title: "Contractor Payables", detail: `${money(accountantData?.contractorPayablesTotals?.open_amount)} open` },
+    { key: "contractorBalances", title: "Contractor Balances", detail: `${number(contractorBalanceTable.total)} contractors` },
+    { key: "contractorInvoiceRegister", title: "Contractor Invoice Register", detail: `${number(contractorInvoiceTable.total)} invoices` }
+  ];
+  const showManagementReport = (key) =>
+    printAllRows && printScope === "management" ? printTarget === "all" || printTarget === key : activeManagementReport === key;
+  const showAccountantReport = (key) =>
+    printAllRows && printScope === "accountant" ? printTarget === "all" || printTarget === key : activeAccountantReport === key;
   const renderProfitStatement = (statement, title, variant) => (
     <div className={`panel profit-loss-statement profit-loss-statement-${variant}`}>
       <div className="panel-heading compact-heading">
@@ -347,20 +534,6 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
         </button>
       </header>
 
-      {user?.role === "admin" ? (
-        <div className="panel screen-only">
-          <div className="panel-heading">
-            <h3>Backup Pack</h3>
-            <button type="button" onClick={downloadBackupPack} disabled={backupLoading}>
-              <Download size={17} />
-              {backupLoading ? "Preparing..." : "Download backup"}
-            </button>
-          </div>
-          <p className="muted">Server-generated operational export. Password hashes and reset tokens are excluded.</p>
-          {backupMessage ? <p className="form-note">{backupMessage}</p> : null}
-        </div>
-      ) : null}
-
       {hasDataQualityFocus ? (
         <FocusNotice
           title={focusedQualityLabel}
@@ -371,46 +544,35 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
 
       <div className="panel screen-only">
         <div className="panel-heading">
-          <h3>Data Quality Checks</h3>
+          <div>
+            <h3>Data Quality Checks</h3>
+            <p className="muted">
+              {qualityIssueCount
+                ? `${number(qualityIssueCount)} finding(s), ${number(highQualityIssueCount)} high priority.`
+                : "No active findings from the current checks."}
+            </p>
+          </div>
+          {reviewableQualityCount ? (
+            <span className="status status-pending">{number(reviewableQualityCount)} reviewable</span>
+          ) : (
+            <span className="status status-paid">clear</span>
+          )}
         </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Check</th>
-                <th>Severity</th>
-                <th>Count</th>
-                <th>Detail</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleDataQuality.map((check) => (
-                <tr className={selectedQuality?.key === check.key ? "selected-row" : ""} key={check.key}>
-                  <td>{check.label}</td>
-                  <td>{label(check.severity)}</td>
-                  <td>{number(check.count)}</td>
-                  <td>{check.detail}</td>
-                  <td>
-                    {check.records?.length ? (
-                      <button type="button" onClick={() => setSelectedQualityKey(check.key)}>
-                        Review
-                      </button>
-                    ) : (
-                      <span className="muted">-</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {!visibleDataQuality.length ? (
-                <tr>
-                  <td colSpan="5" className="muted">
-                    No checks available.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+        <div className="report-catalog compact-report-catalog">
+          {visibleDataQuality.map((check) => (
+            <button
+              className={selectedQuality?.key === check.key ? "report-catalog-item active" : "report-catalog-item"}
+              disabled={!check.records?.length}
+              key={check.key}
+              onClick={() => setSelectedQualityKey(check.key)}
+              type="button"
+            >
+              <strong>{check.label}</strong>
+              <span>{label(check.severity)} | {number(check.count)} finding(s)</span>
+              <small>{check.records?.length ? "Open review detail" : check.detail}</small>
+            </button>
+          ))}
+          {!visibleDataQuality.length ? <p className="muted">No checks available.</p> : null}
         </div>
         {selectedQuality && selectedQualityColumns.length ? (
           <div className="quality-detail-panel">
@@ -454,6 +616,28 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
         ) : null}
       </div>
 
+      <div className="panel screen-only">
+        <div className="panel-heading">
+          <div>
+            <h3>Management Report Catalog</h3>
+            <p className="muted">Choose one report to open. Print all remains available from the page header.</p>
+          </div>
+        </div>
+        <div className="report-catalog">
+          {managementReportCatalog.map((report) => (
+            <button
+              className={activeManagementReport === report.key ? "report-catalog-item active" : "report-catalog-item"}
+              key={report.key}
+              onClick={() => setActiveManagementReport(report.key)}
+              type="button"
+            >
+              <strong>{report.title}</strong>
+              <span>{report.detail}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className={`print-surface report-print report-print-management report-print-${printTarget} ${printScope === "management" ? "active-print-surface" : ""}`}>
         <div className="report-print-header">
           {businessSettings?.logo_url ? (
@@ -487,7 +671,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
         </div>
 
       <section className="report-grid">
-        <div className="panel management-section management-section-billingSummary">
+        <div className={reportSectionClass("panel management-section management-section-billingSummary", showManagementReport("billingSummary"))}>
           <div className="panel-heading">
             <h3>Billing Summary</h3>
             <div className="row-actions">
@@ -520,12 +704,22 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                     <td>{money(row.balance_amount)}</td>
                   </tr>
                 ))}
+                {data.billingSummary.length ? (
+                  <tr className="muted-total">
+                    <td><strong>Total</strong></td>
+                    <td><strong>{number(billingSummaryTotals.bill_count)}</strong></td>
+                    <td><strong>{number(billingSummaryTotals.units_billed)}</strong></td>
+                    <td><strong>{money(billingSummaryTotals.billed_amount)}</strong></td>
+                    <td><strong>{money(billingSummaryTotals.paid_amount)}</strong></td>
+                    <td><strong>{money(billingSummaryTotals.balance_amount)}</strong></td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
         </div>
 
-        <div className="panel management-section management-section-agingAnalysis">
+        <div className={reportSectionClass("panel management-section management-section-agingAnalysis", showManagementReport("agingAnalysis"))}>
           <div className="panel-heading">
             <h3>Aging Analysis</h3>
             <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "agingAnalysis")} title="Print aging analysis">
@@ -549,14 +743,24 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                     <td>{money(row.balance_amount)}</td>
                   </tr>
                 ))}
+                {data.agingSummary.length ? (
+                  <tr className="muted-total">
+                    <td><strong>Total</strong></td>
+                    <td><strong>{number(agingSummaryTotals.bill_count)}</strong></td>
+                    <td><strong>{money(agingSummaryTotals.balance_amount)}</strong></td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
         </div>
 
-        <div className="panel management-section">
+        <div className={reportSectionClass("panel management-section management-section-collections", showManagementReport("collections"))}>
           <div className="panel-heading">
             <h3>Collections</h3>
+            <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "collections")} title="Print collections">
+              <Printer size={17} />
+            </button>
           </div>
           <div className="table-wrap">
             <table>
@@ -579,14 +783,25 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                     <td>{money(row.allocated_amount)}</td>
                   </tr>
                 ))}
+                {data.collectionsSummary.length ? (
+                  <tr className="muted-total">
+                    <td colSpan="2"><strong>Total</strong></td>
+                    <td><strong>{number(collectionsSummaryTotals.receipt_count)}</strong></td>
+                    <td><strong>{money(collectionsSummaryTotals.received_amount)}</strong></td>
+                    <td><strong>{money(collectionsSummaryTotals.allocated_amount)}</strong></td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
         </div>
 
-        <div className="panel management-section">
+        <div className={reportSectionClass("panel management-section management-section-routeSummary", showManagementReport("routeSummary"))}>
           <div className="panel-heading">
             <h3>Route Reading Summary</h3>
+            <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "routeSummary")} title="Print route reading summary">
+              <Printer size={17} />
+            </button>
           </div>
           <div className="table-wrap">
             <table>
@@ -609,12 +824,21 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                     <td>{date(row.latest_reading_date)}</td>
                   </tr>
                 ))}
+                {data.zoneReadingSummary.length ? (
+                  <tr className="muted-total">
+                    <td><strong>Total</strong></td>
+                    <td><strong>{number(zoneReadingTotals.customer_count)}</strong></td>
+                    <td><strong>{number(zoneReadingTotals.customers_with_readings)}</strong></td>
+                    <td><strong>{number(zoneReadingTotals.customers_without_readings)}</strong></td>
+                    <td>-</td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
         </div>
 
-        <div className="panel management-section management-section-maintenanceStatus">
+        <div className={reportSectionClass("panel management-section management-section-maintenanceStatus", showManagementReport("maintenanceStatus"))}>
           <div className="panel-heading">
             <h3>Maintenance Status</h3>
             <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "maintenanceStatus")} title="Print maintenance status">
@@ -644,12 +868,20 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 ) : (
                   <EmptyRow colSpan={4} />
                 )}
+                {data.maintenanceByStatus?.length ? (
+                  <tr className="muted-total">
+                    <td><strong>Total</strong></td>
+                    <td><strong>{number(maintenanceStatusTotals.request_count)}</strong></td>
+                    <td><strong>{number(maintenanceStatusTotals.urgent_count)}</strong></td>
+                    <td><strong>{number(maintenanceStatusTotals.overdue_count)}</strong></td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
         </div>
 
-        <div className="panel management-section management-section-maintenanceCategory">
+        <div className={reportSectionClass("panel management-section management-section-maintenanceCategory", showManagementReport("maintenanceCategory"))}>
           <div className="panel-heading">
             <h3>Maintenance By Category</h3>
             <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "maintenanceCategory")} title="Print maintenance by category">
@@ -679,12 +911,20 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 ) : (
                   <EmptyRow colSpan={4} />
                 )}
+                {data.maintenanceByCategory?.length ? (
+                  <tr className="muted-total">
+                    <td><strong>Total</strong></td>
+                    <td><strong>{number(maintenanceCategoryTotals.request_count)}</strong></td>
+                    <td><strong>{number(maintenanceCategoryTotals.urgent_count)}</strong></td>
+                    <td><strong>{number(maintenanceCategoryTotals.overdue_count)}</strong></td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
         </div>
 
-        <div className="panel management-section management-section-maintenanceZone">
+        <div className={reportSectionClass("panel management-section management-section-maintenanceZone", showManagementReport("maintenanceZone"))}>
           <div className="panel-heading">
             <h3>Maintenance By Zone</h3>
             <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "maintenanceZone")} title="Print maintenance by zone">
@@ -714,12 +954,20 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 ) : (
                   <EmptyRow colSpan={4} />
                 )}
+                {data.maintenanceByZone?.length ? (
+                  <tr className="muted-total">
+                    <td><strong>Total</strong></td>
+                    <td><strong>{number(maintenanceZoneTotals.request_count)}</strong></td>
+                    <td><strong>{number(maintenanceZoneTotals.urgent_count)}</strong></td>
+                    <td><strong>{number(maintenanceZoneTotals.overdue_count)}</strong></td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
         </div>
 
-        <div className="panel management-section management-section-maintenanceAssignee">
+        <div className={reportSectionClass("panel management-section management-section-maintenanceAssignee", showManagementReport("maintenanceAssignee"))}>
           <div className="panel-heading">
             <h3>Maintenance Assignment</h3>
             <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "maintenanceAssignee")} title="Print maintenance assignment">
@@ -751,12 +999,21 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 ) : (
                   <EmptyRow colSpan={5} />
                 )}
+                {data.maintenanceByAssignee?.length ? (
+                  <tr className="muted-total">
+                    <td><strong>Total</strong></td>
+                    <td><strong>{number(maintenanceAssigneeTotals.request_count)}</strong></td>
+                    <td><strong>{number(maintenanceAssigneeTotals.open_count)}</strong></td>
+                    <td><strong>{number(maintenanceAssigneeTotals.in_progress_count)}</strong></td>
+                    <td><strong>{number(maintenanceAssigneeTotals.overdue_count)}</strong></td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
         </div>
 
-        <div className="panel full-span management-section management-section-maintenanceRegister">
+        <div className={reportSectionClass("panel full-span management-section management-section-maintenanceRegister", showManagementReport("maintenanceRegister"))}>
           <div className="panel-heading">
             <h3>Maintenance Register</h3>
             <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "maintenanceRegister")} title="Print maintenance register">
@@ -807,7 +1064,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
           </div>
         </div>
 
-        <div className="panel full-span management-section management-section-customerBalances">
+        <div className={reportSectionClass("panel full-span management-section management-section-customerBalances", showManagementReport("customerBalances"))}>
           <div className="panel-heading">
             <h3>Customer Balances</h3>
             <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "customerBalances")} title="Print customer balances">
@@ -842,6 +1099,14 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 ) : (
                   <EmptyRow colSpan={6} />
                 )}
+                {customerBalanceTable.total ? (
+                  <tr className="muted-total">
+                    <td colSpan="3"><strong>Total</strong></td>
+                    <td><strong>{number(customerBalanceTotals.open_bills)}</strong></td>
+                    <td>-</td>
+                    <td><strong>{money(customerBalanceTotals.balance_due)}</strong></td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>
@@ -878,6 +1143,29 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
         </header>
 
         {accountantMessage && <p className="form-error">{accountantMessage}</p>}
+        {accountantData && accountantTotals ? (
+          <div className="panel screen-only">
+            <div className="panel-heading">
+              <div>
+                <h3>Accountant Report Catalog</h3>
+                <p className="muted">Choose one report to open for review. Use the printer button in a report for individual printing.</p>
+              </div>
+            </div>
+            <div className="report-catalog">
+              {accountantReportCatalog.map((report) => (
+                <button
+                  className={activeAccountantReport === report.key ? "report-catalog-item active" : "report-catalog-item"}
+                  key={report.key}
+                  onClick={() => setActiveAccountantReport(report.key)}
+                  type="button"
+                >
+                  <strong>{report.title}</strong>
+                  <span>{report.detail}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {!accountantData || !accountantTotals ? (
           <p className="muted">Loading accounting reports...</p>
         ) : (
@@ -914,7 +1202,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
             </div>
 
             <section className="report-grid">
-              <div className="full-span report-section report-section-profitLoss">
+              <div className={reportSectionClass("full-span report-section report-section-profitLoss", showAccountantReport("profitLoss"))}>
                 <div className="panel-heading">
                   <h3>Profit And Loss</h3>
                   <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "profitLoss")} title="Print profit and loss">
@@ -927,7 +1215,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </div>
               </div>
 
-              <div className="panel report-section report-section-billingStatus">
+              <div className={reportSectionClass("panel report-section report-section-billingStatus", showAccountantReport("billingStatus"))}>
                 <div className="panel-heading">
                   <h3>Billing By Status</h3>
                   <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "billingStatus")} title="Print billing by status">
@@ -959,12 +1247,21 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                       ) : (
                         <EmptyRow colSpan={5} />
                       )}
+                      {accountantData.billingByStatus.length ? (
+                        <tr className="muted-total">
+                          <td><strong>Total</strong></td>
+                          <td><strong>{number(billingByStatusTotals.bill_count)}</strong></td>
+                          <td><strong>{money(billingByStatusTotals.billed_amount)}</strong></td>
+                          <td><strong>{money(billingByStatusTotals.paid_amount)}</strong></td>
+                          <td><strong>{money(billingByStatusTotals.balance_amount)}</strong></td>
+                        </tr>
+                      ) : null}
                     </tbody>
                   </table>
                 </div>
               </div>
 
-              <div className="panel report-section report-section-collectionsChannel">
+              <div className={reportSectionClass("panel report-section report-section-collectionsChannel", showAccountantReport("collectionsChannel"))}>
                 <div className="panel-heading">
                   <h3>Collections By Channel</h3>
                   <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "collectionsChannel")} title="Print collections by channel">
@@ -996,12 +1293,21 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                       ) : (
                         <EmptyRow colSpan={5} />
                       )}
+                      {accountantData.collectionsByChannel.length ? (
+                        <tr className="muted-total">
+                          <td><strong>Total</strong></td>
+                          <td><strong>{number(collectionsByChannelTotals.receipt_count)}</strong></td>
+                          <td><strong>{money(collectionsByChannelTotals.received_amount)}</strong></td>
+                          <td><strong>{money(collectionsByChannelTotals.allocated_amount)}</strong></td>
+                          <td><strong>{money(collectionsByChannelTotals.unallocated_amount)}</strong></td>
+                        </tr>
+                      ) : null}
                     </tbody>
                   </table>
                 </div>
               </div>
 
-              <div className="panel full-span report-section report-section-billingZone">
+              <div className={reportSectionClass("panel full-span report-section report-section-billingZone", showAccountantReport("billingZone"))}>
                 <div className="panel-heading">
                   <h3>Billing By Zone</h3>
                   <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "billingZone")} title="Print billing by zone">
@@ -1035,12 +1341,22 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                       ) : (
                         <EmptyRow colSpan={6} />
                       )}
+                      {accountantData.billingByZone.length ? (
+                        <tr className="muted-total">
+                          <td><strong>Total</strong></td>
+                          <td><strong>{number(billingByZoneTotals.bill_count)}</strong></td>
+                          <td><strong>{number(billingByZoneTotals.units_billed)}</strong></td>
+                          <td><strong>{money(billingByZoneTotals.billed_amount)}</strong></td>
+                          <td><strong>{money(billingByZoneTotals.paid_amount)}</strong></td>
+                          <td><strong>{money(billingByZoneTotals.balance_amount)}</strong></td>
+                        </tr>
+                      ) : null}
                     </tbody>
                   </table>
                 </div>
               </div>
 
-              <div className="panel full-span report-section report-section-billingRegister">
+              <div className={reportSectionClass("panel full-span report-section report-section-billingRegister", showAccountantReport("billingRegister"))}>
                 <div className="panel-heading">
                   <h3>Billing Register</h3>
                   <div className="row-actions">
@@ -1073,30 +1389,45 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                     </thead>
                     <tbody>
                       {billingRegisterTable.total ? (
-                        billingRegisterRows.map((row) => (
-                          <tr key={row.id}>
-                            <td>
-                              {row.bill_number || `Bill ${row.id}`}
-                              <small>{date(row.due_date)}</small>
-                            </td>
-                            <td>{row.billing_period_name || date(row.billing_month)}</td>
-                            <td>
-                              {row.customer_name}
-                              <small>{row.acc_number}</small>
-                            </td>
-                            <td>{row.zone_name}</td>
-                            <td>{number(row.units_used)}</td>
-                            <td>{money(row.rate)}</td>
-                            <td>{money(row.subtotal_amount)}</td>
-                            <td>{money(row.fixed_charge_amount)}</td>
-                            <td>{money(row.penalty_amount)}</td>
-                            <td>{money(row.vat_amount)}</td>
-                            <td>{money(row.adjustment_amount)}</td>
-                            <td>{money(row.billed_amount)}</td>
-                            <td>{money(row.paid_amount)}</td>
-                            <td>{money(row.balance_amount)}</td>
+                        <>
+                          {billingRegisterRows.map((row) => (
+                            <tr key={row.id}>
+                              <td>
+                                {row.bill_number || `Bill ${row.id}`}
+                                <small>{date(row.due_date)}</small>
+                              </td>
+                              <td>{row.billing_period_name || date(row.billing_month)}</td>
+                              <td>
+                                {row.customer_name}
+                                <small>{row.acc_number}</small>
+                              </td>
+                              <td>{row.zone_name}</td>
+                              <td>{number(row.units_used)}</td>
+                              <td>{money(row.rate)}</td>
+                              <td>{money(row.subtotal_amount)}</td>
+                              <td>{money(row.fixed_charge_amount)}</td>
+                              <td>{money(row.penalty_amount)}</td>
+                              <td>{money(row.vat_amount)}</td>
+                              <td>{money(row.adjustment_amount)}</td>
+                              <td>{money(row.billed_amount)}</td>
+                              <td>{money(row.paid_amount)}</td>
+                              <td>{money(row.balance_amount)}</td>
+                            </tr>
+                          ))}
+                          <tr className="muted-total">
+                            <td colSpan="4"><strong>Total</strong></td>
+                            <td><strong>{number(billingRegisterTotals.units_used)}</strong></td>
+                            <td>-</td>
+                            <td><strong>{money(billingRegisterTotals.subtotal_amount)}</strong></td>
+                            <td><strong>{money(billingRegisterTotals.fixed_charge_amount)}</strong></td>
+                            <td><strong>{money(billingRegisterTotals.penalty_amount)}</strong></td>
+                            <td><strong>{money(billingRegisterTotals.vat_amount)}</strong></td>
+                            <td><strong>{money(billingRegisterTotals.adjustment_amount)}</strong></td>
+                            <td><strong>{money(billingRegisterTotals.billed_amount)}</strong></td>
+                            <td><strong>{money(billingRegisterTotals.paid_amount)}</strong></td>
+                            <td><strong>{money(billingRegisterTotals.balance_amount)}</strong></td>
                           </tr>
-                        ))
+                        </>
                       ) : (
                         <EmptyRow colSpan={14} />
                       )}
@@ -1105,7 +1436,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </div>
               </div>
 
-              <div className="panel full-span report-section report-section-receiptRegister">
+              <div className={reportSectionClass("panel full-span report-section report-section-receiptRegister", showAccountantReport("receiptRegister"))}>
                 <div className="panel-heading">
                   <h3>Receipt Register</h3>
                   <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "receiptRegister")} title="Print receipt register">
@@ -1129,21 +1460,29 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                     </thead>
                     <tbody>
                       {receiptRegisterTable.total ? (
-                        receiptRegisterRows.map((row) => (
-                          <tr key={row.id}>
-                            <td>{row.receipt_number}</td>
-                            <td>{date(row.payment_date)}</td>
-                            <td>
-                              {row.customer_name}
-                              <small>{row.acc_number}</small>
-                            </td>
-                            <td>{label(row.payment_channel)}</td>
-                            <td>{row.external_reference || "-"}</td>
-                            <td>{money(row.amount)}</td>
-                            <td>{money(row.total_allocated_amount)}</td>
-                            <td>{row.recorded_by_name || "-"}</td>
+                        <>
+                          {receiptRegisterRows.map((row) => (
+                            <tr key={row.id}>
+                              <td>{row.receipt_number}</td>
+                              <td>{date(row.payment_date)}</td>
+                              <td>
+                                {row.customer_name}
+                                <small>{row.acc_number}</small>
+                              </td>
+                              <td>{label(row.payment_channel)}</td>
+                              <td>{row.external_reference || "-"}</td>
+                              <td>{money(row.amount)}</td>
+                              <td>{money(row.total_allocated_amount)}</td>
+                              <td>{row.recorded_by_name || "-"}</td>
+                            </tr>
+                          ))}
+                          <tr className="muted-total">
+                            <td colSpan="5"><strong>Total</strong></td>
+                            <td><strong>{money(receiptRegisterTotals.amount)}</strong></td>
+                            <td><strong>{money(receiptRegisterTotals.total_allocated_amount)}</strong></td>
+                            <td>-</td>
                           </tr>
-                        ))
+                        </>
                       ) : (
                         <EmptyRow colSpan={8} />
                       )}
@@ -1152,7 +1491,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </div>
               </div>
 
-              <div className="panel full-span report-section report-section-allocationLedger">
+              <div className={reportSectionClass("panel full-span report-section report-section-allocationLedger", showAccountantReport("allocationLedger"))}>
                 <div className="panel-heading">
                   <h3>Payment Allocation Ledger</h3>
                   <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "allocationLedger")} title="Print payment allocation ledger">
@@ -1175,20 +1514,26 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                     </thead>
                     <tbody>
                       {allocationLedgerTable.total ? (
-                        allocationLedgerRows.map((row) => (
-                          <tr key={row.id}>
-                            <td>{row.receipt_number}</td>
-                            <td>{date(row.payment_date)}</td>
-                            <td>
-                              {row.customer_name}
-                              <small>{row.acc_number}</small>
-                            </td>
-                            <td>{row.bill_number || "-"}</td>
-                            <td>{date(row.billing_month)}</td>
-                            <td>{label(row.payment_channel)}</td>
-                            <td>{money(row.allocated_amount)}</td>
+                        <>
+                          {allocationLedgerRows.map((row) => (
+                            <tr key={row.id}>
+                              <td>{row.receipt_number}</td>
+                              <td>{date(row.payment_date)}</td>
+                              <td>
+                                {row.customer_name}
+                                <small>{row.acc_number}</small>
+                              </td>
+                              <td>{row.bill_number || "-"}</td>
+                              <td>{date(row.billing_month)}</td>
+                              <td>{label(row.payment_channel)}</td>
+                              <td>{money(row.allocated_amount)}</td>
+                            </tr>
+                          ))}
+                          <tr className="muted-total">
+                            <td colSpan="6"><strong>Total</strong></td>
+                            <td><strong>{money(allocationLedgerTotals.allocated_amount)}</strong></td>
                           </tr>
-                        ))
+                        </>
                       ) : (
                         <EmptyRow colSpan={7} />
                       )}
@@ -1197,43 +1542,58 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </div>
               </div>
 
-              <div className="panel full-span report-section report-section-agingDetail">
+              <div className={reportSectionClass("panel full-span report-section report-section-agingDetail", showAccountantReport("agingDetail"))}>
                 <div className="panel-heading">
                   <h3>Receivables Aging Detail</h3>
                   <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "agingDetail")} title="Print aging detail">
                     <Printer size={17} />
                   </button>
                 </div>
-                <TableControls table={receivablesAgingTable} label="bills" placeholder="Search aging detail" />
+                <TableControls table={receivablesAgingTable} label="customers" placeholder="Search aging detail" />
                 <div className="table-wrap">
                   <table>
                     <thead>
                       <tr>
                         <th>Customer</th>
-                        <th>Zone</th>
-                        <th>Bill</th>
-                        <th>Billing Month</th>
-                        <th>Due Date</th>
-                        <th>Bucket</th>
-                        <th>Balance</th>
+                        <th>Current</th>
+                        <th>1-30</th>
+                        <th>31-60</th>
+                        <th>61-90</th>
+                        <th>91 and over</th>
+                        <th>Total</th>
                       </tr>
                     </thead>
                     <tbody>
                       {receivablesAgingTable.total ? (
-                        receivablesAgingRows.map((row) => (
-                          <tr key={row.id}>
+                        <>
+                          {receivablesAgingRows.map((row) => (
+                            <tr key={row.customer_id}>
+                              <td>
+                                {row.customer_name}
+                                <small>{row.acc_number} | {row.zone_name}</small>
+                                <small>{number(row.open_bill_count)} bill(s), oldest due {date(row.oldest_due_date)}</small>
+                              </td>
+                              <td>{money(row.current_amount)}</td>
+                              <td>{money(row.days_1_30_amount)}</td>
+                              <td>{money(row.days_31_60_amount)}</td>
+                              <td>{money(row.days_61_90_amount)}</td>
+                              <td>{money(row.days_91_over_amount)}</td>
+                              <td>{money(row.total_amount)}</td>
+                            </tr>
+                          ))}
+                          <tr className="muted-total">
                             <td>
-                              {row.customer_name}
-                              <small>{row.acc_number}</small>
+                              <strong>Total</strong>
+                              <small>{number(receivablesAgingTotals.open_bill_count)} open bill(s)</small>
                             </td>
-                            <td>{row.zone_name}</td>
-                            <td>{row.bill_number || `Bill ${row.id}`}</td>
-                            <td>{date(row.billing_month)}</td>
-                            <td>{date(row.due_date)}</td>
-                            <td>{row.aging_bucket}</td>
-                            <td>{money(row.balance_amount)}</td>
+                            <td><strong>{money(receivablesAgingTotals.current_amount)}</strong></td>
+                            <td><strong>{money(receivablesAgingTotals.days_1_30_amount)}</strong></td>
+                            <td><strong>{money(receivablesAgingTotals.days_31_60_amount)}</strong></td>
+                            <td><strong>{money(receivablesAgingTotals.days_61_90_amount)}</strong></td>
+                            <td><strong>{money(receivablesAgingTotals.days_91_over_amount)}</strong></td>
+                            <td><strong>{money(receivablesAgingTotals.total_amount)}</strong></td>
                           </tr>
-                        ))
+                        </>
                       ) : (
                         <EmptyRow colSpan={7} />
                       )}
@@ -1242,7 +1602,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </div>
               </div>
 
-              <div className="panel full-span report-section report-section-depositRegister">
+              <div className={reportSectionClass("panel full-span report-section report-section-depositRegister", showAccountantReport("depositRegister"))}>
                 <div className="panel-heading">
                   <h3>Deposit Register</h3>
                   <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "depositRegister")} title="Print deposit register">
@@ -1263,18 +1623,25 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                     </thead>
                     <tbody>
                       {depositRegisterTable.total ? (
-                        depositRegisterRows.map((row) => (
-                          <tr key={row.id}>
-                            <td>
-                              {row.customer_name}
-                              <small>{row.acc_number}</small>
-                            </td>
-                            <td>{row.zone_name}</td>
-                            <td>{money(row.deposit_amount)}</td>
-                            <td>{row.deposit_paid ? "Paid" : "Unpaid"}</td>
-                            <td>{date(row.deposit_paid_at)}</td>
+                        <>
+                          {depositRegisterRows.map((row) => (
+                            <tr key={row.id}>
+                              <td>
+                                {row.customer_name}
+                                <small>{row.acc_number}</small>
+                              </td>
+                              <td>{row.zone_name}</td>
+                              <td>{money(row.deposit_amount)}</td>
+                              <td>{row.deposit_paid ? "Paid" : "Unpaid"}</td>
+                              <td>{date(row.deposit_paid_at)}</td>
+                            </tr>
+                          ))}
+                          <tr className="muted-total">
+                            <td colSpan="2"><strong>Total</strong></td>
+                            <td><strong>{money(depositRegisterTotals.deposit_amount)}</strong></td>
+                            <td colSpan="2">-</td>
                           </tr>
-                        ))
+                        </>
                       ) : (
                         <EmptyRow colSpan={5} />
                       )}
@@ -1283,7 +1650,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </div>
               </div>
 
-              <div className="panel report-section report-section-expensesCategory">
+              <div className={reportSectionClass("panel report-section report-section-expensesCategory", showAccountantReport("expensesCategory"))}>
                 <div className="panel-heading">
                   <h3>Expenses By Category</h3>
                   <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "expensesCategory")} title="Print expenses by category">
@@ -1311,12 +1678,19 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                       ) : (
                         <EmptyRow colSpan={3} />
                       )}
+                      {accountantData.expensesByCategory.length ? (
+                        <tr className="muted-total">
+                          <td><strong>Total</strong></td>
+                          <td><strong>{number(expenseCategoryTotals.expense_count)}</strong></td>
+                          <td><strong>{money(expenseCategoryTotals.expense_amount)}</strong></td>
+                        </tr>
+                      ) : null}
                     </tbody>
                   </table>
                 </div>
               </div>
 
-              <div className="panel full-span report-section report-section-expenseRegister">
+              <div className={reportSectionClass("panel full-span report-section report-section-expenseRegister", showAccountantReport("expenseRegister"))}>
                 <div className="panel-heading">
                   <h3>Expense Register</h3>
                   <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "expenseRegister")} title="Print expense register">
@@ -1340,18 +1714,24 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                     </thead>
                     <tbody>
                       {expenseRegisterTable.total ? (
-                        expenseRegisterRows.map((row) => (
-                          <tr key={row.id}>
-                            <td>{date(row.expense_date)}</td>
-                            <td>{row.category}</td>
-                            <td>{row.vendor || "-"}</td>
-                            <td>{row.description}</td>
-                            <td>{label(row.payment_channel)}</td>
-                            <td>{row.reference || row.receipt_number || "-"}</td>
-                            <td>{row.recorded_by_name || "-"}</td>
-                            <td>{money(row.amount)}</td>
+                        <>
+                          {expenseRegisterRows.map((row) => (
+                            <tr key={row.id}>
+                              <td>{date(row.expense_date)}</td>
+                              <td>{row.category}</td>
+                              <td>{row.vendor || "-"}</td>
+                              <td>{row.description}</td>
+                              <td>{label(row.payment_channel)}</td>
+                              <td>{row.reference || row.receipt_number || "-"}</td>
+                              <td>{row.recorded_by_name || "-"}</td>
+                              <td>{money(row.amount)}</td>
+                            </tr>
+                          ))}
+                          <tr className="muted-total">
+                            <td colSpan="7"><strong>Total</strong></td>
+                            <td><strong>{money(expenseRegisterTotals.amount)}</strong></td>
                           </tr>
-                        ))
+                        </>
                       ) : (
                         <EmptyRow colSpan={8} />
                       )}
@@ -1360,7 +1740,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </div>
               </div>
 
-              <div className="panel full-span report-section report-section-contractorPayables">
+              <div className={reportSectionClass("panel full-span report-section report-section-contractorPayables", showAccountantReport("contractorPayables"))}>
                 <div className="panel-heading">
                   <h3>Contractor Payables</h3>
                   <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "contractorPayables")} title="Print contractor payables">
@@ -1417,6 +1797,14 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                           ) : (
                             <EmptyRow colSpan={4} />
                           )}
+                          {accountantData.contractorPayablesByStatus.length ? (
+                            <tr className="muted-total">
+                              <td><strong>Total</strong></td>
+                              <td><strong>{number(contractorPayablesByStatusTotals.invoice_count)}</strong></td>
+                              <td><strong>{money(contractorPayablesByStatusTotals.invoice_amount)}</strong></td>
+                              <td><strong>{money(contractorPayablesByStatusTotals.overdue_amount)}</strong></td>
+                            </tr>
+                          ) : null}
                         </tbody>
                       </table>
                     </div>
@@ -1446,6 +1834,13 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                           ) : (
                             <EmptyRow colSpan={3} />
                           )}
+                          {accountantData.contractorPayablesAging.length ? (
+                            <tr className="muted-total">
+                              <td><strong>Total</strong></td>
+                              <td><strong>{number(contractorPayablesAgingTotals.invoice_count)}</strong></td>
+                              <td><strong>{money(contractorPayablesAgingTotals.invoice_amount)}</strong></td>
+                            </tr>
+                          ) : null}
                         </tbody>
                       </table>
                     </div>
@@ -1453,7 +1848,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </div>
               </div>
 
-              <div className="panel full-span report-section report-section-contractorBalances">
+              <div className={reportSectionClass("panel full-span report-section report-section-contractorBalances", showAccountantReport("contractorBalances"))}>
                 <div className="panel-heading">
                   <h3>Contractor Balances</h3>
                   <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "contractorBalances")} title="Print contractor balances">
@@ -1475,25 +1870,37 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                     </thead>
                     <tbody>
                       {contractorBalanceTable.total ? (
-                        contractorBalanceRows.map((row) => (
-                          <tr key={row.id}>
+                        <>
+                          {contractorBalanceRows.map((row) => (
+                            <tr key={row.id}>
+                              <td>
+                                {row.contractor_name}
+                                <small>{row.tax_pin || "-"}</small>
+                              </td>
+                              <td>
+                                {row.phone || "-"}
+                                <small>{row.email || "-"}</small>
+                              </td>
+                              <td>{number(row.open_invoice_count)}</td>
+                              <td>{date(row.oldest_due_date)}</td>
+                              <td>{money(row.open_amount)}</td>
+                              <td>
+                                {money(row.overdue_amount)}
+                                <small>{number(row.overdue_invoice_count)} invoice(s)</small>
+                              </td>
+                            </tr>
+                          ))}
+                          <tr className="muted-total">
+                            <td colSpan="2"><strong>Total</strong></td>
+                            <td><strong>{number(contractorBalanceTotals.open_invoice_count)}</strong></td>
+                            <td>-</td>
+                            <td><strong>{money(contractorBalanceTotals.open_amount)}</strong></td>
                             <td>
-                              {row.contractor_name}
-                              <small>{row.tax_pin || "-"}</small>
-                            </td>
-                            <td>
-                              {row.phone || "-"}
-                              <small>{row.email || "-"}</small>
-                            </td>
-                            <td>{number(row.open_invoice_count)}</td>
-                            <td>{date(row.oldest_due_date)}</td>
-                            <td>{money(row.open_amount)}</td>
-                            <td>
-                              {money(row.overdue_amount)}
-                              <small>{number(row.overdue_invoice_count)} invoice(s)</small>
+                              <strong>{money(contractorBalanceTotals.overdue_amount)}</strong>
+                              <small>{number(contractorBalanceTotals.overdue_invoice_count)} invoice(s)</small>
                             </td>
                           </tr>
-                        ))
+                        </>
                       ) : (
                         <EmptyRow colSpan={6} />
                       )}
@@ -1502,7 +1909,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </div>
               </div>
 
-              <div className="panel full-span report-section report-section-contractorInvoiceRegister">
+              <div className={reportSectionClass("panel full-span report-section report-section-contractorInvoiceRegister", showAccountantReport("contractorInvoiceRegister"))}>
                 <div className="panel-heading">
                   <h3>Contractor Invoice Register</h3>
                   <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "contractorInvoiceRegister")} title="Print contractor invoice register">
@@ -1528,29 +1935,39 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                     </thead>
                     <tbody>
                       {contractorInvoiceTable.total ? (
-                        contractorInvoiceRows.map((row) => (
-                          <tr key={row.id}>
-                            <td>
-                              {row.invoice_number}
-                              <small>{row.description}</small>
-                            </td>
-                            <td>
-                              {row.contractor_name}
-                              <small>{row.contractor_tax_pin || "-"}</small>
-                            </td>
-                            <td>
-                              {date(row.invoice_date)}
-                              <small>Due {date(row.due_date)}</small>
-                            </td>
-                            <td>{row.category}</td>
-                            <td>{money(row.subtotal_amount)}</td>
-                            <td>{money(row.vat_amount)}</td>
-                            <td>{money(row.total_amount)}</td>
-                            <td>{label(row.status)}</td>
-                            <td>{row.expense_id ? `Expense #${row.expense_id}` : "-"}</td>
-                            <td>{number(row.document_count)}</td>
+                        <>
+                          {contractorInvoiceRows.map((row) => (
+                            <tr key={row.id}>
+                              <td>
+                                {row.invoice_number}
+                                <small>{row.description}</small>
+                              </td>
+                              <td>
+                                {row.contractor_name}
+                                <small>{row.contractor_tax_pin || "-"}</small>
+                              </td>
+                              <td>
+                                {date(row.invoice_date)}
+                                <small>Due {date(row.due_date)}</small>
+                              </td>
+                              <td>{row.category}</td>
+                              <td>{money(row.subtotal_amount)}</td>
+                              <td>{money(row.vat_amount)}</td>
+                              <td>{money(row.total_amount)}</td>
+                              <td>{label(row.status)}</td>
+                              <td>{row.expense_id ? `Expense #${row.expense_id}` : "-"}</td>
+                              <td>{number(row.document_count)}</td>
+                            </tr>
+                          ))}
+                          <tr className="muted-total">
+                            <td colSpan="4"><strong>Total</strong></td>
+                            <td><strong>{money(contractorInvoiceRegisterTotals.subtotal_amount)}</strong></td>
+                            <td><strong>{money(contractorInvoiceRegisterTotals.vat_amount)}</strong></td>
+                            <td><strong>{money(contractorInvoiceRegisterTotals.total_amount)}</strong></td>
+                            <td colSpan="2">-</td>
+                            <td><strong>{number(contractorInvoiceRegisterTotals.document_count)}</strong></td>
                           </tr>
-                        ))
+                        </>
                       ) : (
                         <EmptyRow colSpan={10} />
                       )}

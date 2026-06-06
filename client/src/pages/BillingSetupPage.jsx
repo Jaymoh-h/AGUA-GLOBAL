@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
+import { useToastMessage } from "../components/ToastProvider";
 import { api } from "../services/api";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
@@ -29,7 +30,7 @@ function BillingSetupPage({ onNavigate }) {
   const [penaltyDate, setPenaltyDate] = useState(new Date().toISOString().slice(0, 10));
   const [penaltyPreview, setPenaltyPreview] = useState(null);
   const [penaltyBusy, setPenaltyBusy] = useState(false);
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
 
   const load = async () => {
     const [periodRows, settingsRow, penaltyRows] = await Promise.all([
@@ -395,7 +396,6 @@ function BillingSetupPage({ onNavigate }) {
               Apply previewed penalties
             </button>
           </div>
-          {message ? <p className="form-note">{message}</p> : null}
         </div>
 
         <div className="panel wide-panel">

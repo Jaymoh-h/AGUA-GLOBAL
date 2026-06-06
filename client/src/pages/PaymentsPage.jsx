@@ -4,9 +4,10 @@ import AuditPanel from "../components/AuditPanel";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
 import TableControls, { useTableControls } from "../components/TableControls";
-import ToastMessage, { toastTypeFromMessage } from "../components/ToastMessage";
+import { useToastMessage } from "../components/ToastProvider";
 import { api, assetUrl } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate, rowsToCsv } from "../utils/csvTemplate";
+import { namedExport, withPrintTitle } from "../utils/exportNames";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const date = (value) => value?.slice(0, 10) || "-";
@@ -580,7 +581,7 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
     adjustment_date: new Date().toISOString().slice(0, 10),
     reason: ""
   });
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
   const selectedCustomer = customers.find((customer) => Number(customer.id) === Number(form.customer_id));
   const selectedBalance = Number(selectedCustomer?.balance_due || 0);
   const importReady = useMemo(
@@ -965,7 +966,15 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
   };
 
   const printReceipt = () => {
-    setTimeout(() => window.print(), 50);
+    const receipt = receiptDetail?.payment || {};
+    setTimeout(
+      () =>
+        withPrintTitle(
+          `receipt ${receipt.receipt_number || receipt.id || "payment"} ${receipt.acc_number || receipt.customer_name || ""}`,
+          () => window.print()
+        ),
+      50
+    );
   };
 
   const sendReceiptEmail = async (id) => {
@@ -1168,7 +1177,12 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
   });
   const exportPayments = () => {
     downloadCsvRows(
-      "payments.csv",
+      namedExport("payment-register", "csv", [
+        channelFilter || "all-channels",
+        dateFromFilter || "start",
+        dateToFilter || "end",
+        focusKey || "all-payments"
+      ]),
       [
         { header: "Receipt", value: (row) => row.receipt_number },
         { header: "Customer", value: (row) => row.customer_name },
@@ -1280,7 +1294,6 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
               Notes
               <textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} rows="3" />
             </label>
-            <ToastMessage message={message} type={toastTypeFromMessage(message)} onClose={() => setMessage("")} />
             <button className="primary-button" type="submit">
               {editingId ? <Save size={17} /> : <CircleDollarSign size={17} />}
               {editingId ? "Save payment" : "Record payment"}

@@ -5,6 +5,7 @@ import FocusNotice from "../components/FocusNotice";
 import StatusBadge from "../components/StatusBadge";
 import SupportingDocumentsPanel from "../components/SupportingDocumentsPanel";
 import TableControls, { useTableControls } from "../components/TableControls";
+import { useToastMessage } from "../components/ToastProvider";
 import { api } from "../services/api";
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -59,7 +60,7 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
   const [editingContractorId, setEditingContractorId] = useState(null);
   const [editingInvoiceId, setEditingInvoiceId] = useState(null);
   const [invoiceFilters, setInvoiceFilters] = useState({ status: "all", contractor_id: "", due: "all" });
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
   const [saving, setSaving] = useState(false);
   const [activeDocumentInvoiceId, setActiveDocumentInvoiceId] = useState(null);
   const [activePostInvoiceId, setActivePostInvoiceId] = useState(null);
@@ -358,8 +359,6 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
           <small>Supplier register</small>
         </div>
       </div>
-
-      {message ? <p className="form-note">{message}</p> : null}
 
       <section className={hasSupplierFocus ? "page-stack" : "workspace-grid"}>
         {!hasSupplierFocus ? (

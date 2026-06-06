@@ -5,6 +5,7 @@ import FocusNotice from "../components/FocusNotice";
 import StatusBadge from "../components/StatusBadge";
 import SupportingDocumentsPanel from "../components/SupportingDocumentsPanel";
 import TableControls, { useTableControls } from "../components/TableControls";
+import { useToastMessage } from "../components/ToastProvider";
 import { api } from "../services/api";
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -47,7 +48,7 @@ function MaintenancePage({ navigationIntent, onClearNavigationIntent }) {
   const [activeExpenseRequestId, setActiveExpenseRequestId] = useState(null);
   const [activeDocumentRequestId, setActiveDocumentRequestId] = useState(null);
   const [expenseDrafts, setExpenseDrafts] = useState({});
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
   const [saving, setSaving] = useState(false);
 
   const counts = useMemo(
@@ -360,7 +361,6 @@ function MaintenancePage({ navigationIntent, onClearNavigationIntent }) {
             Description
             <textarea value={form.description} onChange={(event) => setField("description", event.target.value)} rows="4" />
           </label>
-          {message ? <p className="form-note">{message}</p> : null}
           <button className="primary-button" type="submit" disabled={saving}>
             <Save size={17} />
             Save request

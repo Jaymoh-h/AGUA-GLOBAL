@@ -304,6 +304,88 @@ const createPayee = asyncHandler(async (req, res) => {
   }
 });
 
+const updatePayee = asyncHandler(async (req, res) => {
+  if (!recurringPayeeTypes.includes(req.body.payee_type)) {
+    throw new ApiError(400, "Only employee and subscription profiles can be edited here.");
+  }
+  const startDate = parseDateOnly(req.body.start_date, "Start date");
+  const payeePayload = buildPayeePayload(req.body, { recurrenceType: "recurring", startDate });
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query("SELECT * FROM payroll_payees WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const before = beforeResult.rows[0];
+    if (!before) throw new ApiError(404, "Payroll payee not found.");
+    if (before.recurrence_type !== "recurring") {
+      throw new ApiError(400, "Only recurring payroll profiles can be edited here.");
+    }
+    if (!recurringPayeeTypes.includes(before.payee_type)) {
+      throw new ApiError(400, "Only employees and subscriptions can be edited from the recurring register.");
+    }
+
+    if (payeePayload.code) {
+      const duplicateResult = await client.query(
+        "SELECT id FROM payroll_payees WHERE lower(code) = lower($1) AND id <> $2 LIMIT 1",
+        [payeePayload.code, before.id]
+      );
+      if (duplicateResult.rows.length) throw new ApiError(400, "Payee code is already in use.");
+    }
+    if (before.end_date && startDate && startDate > before.end_date) {
+      throw new ApiError(400, "Start date cannot be after the payee end date.");
+    }
+
+    const result = await client.query(
+      `UPDATE payroll_payees
+       SET payee_type = $1,
+           name = $2,
+           code = NULLIF($3, ''),
+           title = NULLIF($4, ''),
+           rate_amount = $5,
+           rate_basis = $6,
+           default_additions = $7,
+           default_deductions = $8,
+           payment_channel = $9,
+           metadata = $10,
+           start_date = COALESCE($11, start_date),
+           updated_at = NOW()
+       WHERE id = $12
+       RETURNING *`,
+      [
+        payeePayload.payee_type,
+        payeePayload.name,
+        payeePayload.code,
+        payeePayload.title,
+        payeePayload.rate_amount,
+        payeePayload.rate_basis,
+        payeePayload.default_additions,
+        payeePayload.default_deductions,
+        payeePayload.payment_channel,
+        payeePayload.metadata,
+        payeePayload.start_date,
+        before.id
+      ]
+    );
+
+    await recordAuditEvent(client, {
+      req,
+      action: "payroll_payee.updated",
+      entityType: "payroll_payee",
+      entityId: before.id,
+      beforeData: before,
+      afterData: result.rows[0]
+    });
+
+    await client.query("COMMIT");
+    res.json(result.rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 const listRuns = asyncHandler(async (_req, res) => {
   const { rows } = await pool.query(
     `SELECT pr.*,
@@ -732,6 +814,7 @@ module.exports = {
   listPayees,
   listRuns,
   terminatePayee,
+  updatePayee,
   updateLineItem,
   updateRunStatus
 };

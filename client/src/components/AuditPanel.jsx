@@ -1,6 +1,7 @@
 import { History } from "lucide-react";
 import { useEffect, useState } from "react";
 import EmptyState from "./EmptyState";
+import { useToastMessage } from "./ToastProvider";
 import { api } from "../services/api";
 
 const formatDate = (value) => (value ? new Date(value).toLocaleString() : "-");
@@ -16,7 +17,7 @@ const snapshotSummary = (event) => {
 
 function AuditPanel({ entityType, entityId, title = "Audit History" }) {
   const [events, setEvents] = useState([]);
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
 
   useEffect(() => {
     if (!entityType || !entityId) {
@@ -48,7 +49,6 @@ function AuditPanel({ entityType, entityId, title = "Audit History" }) {
         <h3>{title}</h3>
         <History size={16} />
       </div>
-      {message ? <p className="form-note">{message}</p> : null}
       <div className="audit-list">
         {events.length ? (
           events.map((event) => (

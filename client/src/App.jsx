@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import Layout, { pageAccess as access } from "./components/Layout";
+import ToastProvider from "./components/ToastProvider";
 import LoginPage from "./pages/LoginPage";
 import PasswordChangePage from "./pages/PasswordChangePage";
 import { api, setFutureDateOverrideHandler } from "./services/api";
@@ -183,24 +184,26 @@ function App() {
   };
 
   return (
-    <Layout appName={appName} user={user} currentPage={currentPage} onNavigate={handleNavigate} onLogout={handleLogout}>
-      <Suspense
-        fallback={
-          <div className="panel">
-            <EmptyPageMessage />
-          </div>
-        }
-      >
-        {pages[currentPage] || pages.dashboard}
-      </Suspense>
-      {futureDateOverride ? (
-        <FutureDateOverrideDialog
-          message={futureDateOverride.message}
-          onCancel={() => closeFutureDateOverride("")}
-          onSubmit={closeFutureDateOverride}
-        />
-      ) : null}
-    </Layout>
+    <ToastProvider>
+      <Layout appName={appName} user={user} currentPage={currentPage} onNavigate={handleNavigate} onLogout={handleLogout}>
+        <Suspense
+          fallback={
+            <div className="panel">
+              <EmptyPageMessage />
+            </div>
+          }
+        >
+          {pages[currentPage] || pages.dashboard}
+        </Suspense>
+        {futureDateOverride ? (
+          <FutureDateOverrideDialog
+            message={futureDateOverride.message}
+            onCancel={() => closeFutureDateOverride("")}
+            onSubmit={closeFutureDateOverride}
+          />
+        ) : null}
+      </Layout>
+    </ToastProvider>
   );
 }
 

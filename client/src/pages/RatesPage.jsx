@@ -2,6 +2,7 @@ import { Layers3, Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
+import { useToastMessage } from "../components/ToastProvider";
 import { api } from "../services/api";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
@@ -45,7 +46,7 @@ function RatesPage() {
   const [form, setForm] = useState(() => makeBlank());
   const [blocks, setBlocks] = useState([emptyBlock()]);
   const [editingId, setEditingId] = useState(null);
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
   const [saving, setSaving] = useState(false);
 
   const load = () => api.rates.list().then(setRates);
@@ -213,7 +214,6 @@ function RatesPage() {
               <input checked={form.is_active} onChange={(event) => setField("is_active", event.target.checked)} type="checkbox" />
               Active
             </label>
-            {message ? <p className="form-note">{message}</p> : null}
             <div className="row-actions">
               <button className="primary-button" type="submit" disabled={saving}>
                 {editingId ? <Save size={17} /> : <Plus size={17} />}

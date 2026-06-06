@@ -3,9 +3,10 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
 import SupportingDocumentsPanel from "../components/SupportingDocumentsPanel";
-import ToastMessage, { toastTypeFromMessage } from "../components/ToastMessage";
+import { useToastMessage } from "../components/ToastProvider";
 import { api } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
+import { namedExport } from "../utils/exportNames";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const expenseImportHeaders = [
@@ -41,7 +42,7 @@ function ExpensesPage() {
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
   const [activeDocumentExpenseId, setActiveDocumentExpenseId] = useState(null);
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
 
   const importReady = useMemo(
     () => importPreview?.rows?.length > 0 && importPreview.summary.invalid === 0,
@@ -144,7 +145,12 @@ function ExpensesPage() {
   });
   const exportExpenses = () => {
     downloadCsvRows(
-      "expenses.csv",
+      namedExport("expense-register", "csv", [
+        categoryFilter || "all-categories",
+        channelFilter || "all-channels",
+        dateFromFilter || "start",
+        dateToFilter || "end"
+      ]),
       [
         { header: "Date", value: (row) => row.expense_date },
         { header: "Category", value: (row) => row.category },
@@ -216,7 +222,6 @@ function ExpensesPage() {
               Notes
               <textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} rows="3" />
             </label>
-            <ToastMessage message={message} type={toastTypeFromMessage(message)} onClose={() => setMessage("")} />
             <button className="primary-button" type="submit">
               <Save size={17} />
               Save expense

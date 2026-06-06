@@ -1,6 +1,9 @@
-import { Building2, Save, Settings2, Upload } from "lucide-react";
+import { Building2, Download, Save, Settings2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useToastMessage } from "../components/ToastProvider";
 import { api, assetUrl } from "../services/api";
+import { downloadJson } from "../utils/csvTemplate";
+import { localDateStamp, namedExport } from "../utils/exportNames";
 
 const blankSettings = {
   business_name: "",
@@ -25,8 +28,9 @@ const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 function BusinessSettingsPage({ user }) {
   const [settings, setSettings] = useState(blankSettings);
   const [billingSettings, setBillingSettings] = useState(null);
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [backupLoading, setBackupLoading] = useState(false);
   const canEdit = user.role === "admin";
 
   useEffect(() => {
@@ -102,6 +106,21 @@ function BusinessSettingsPage({ user }) {
     } finally {
       setUploadingLogo(false);
       event.target.value = "";
+    }
+  };
+
+  const downloadBackupPack = async () => {
+    setMessage("");
+    setBackupLoading(true);
+    try {
+      const backup = await api.reports.backup();
+      const datasetCount = Object.keys(backup.dataset_counts || {}).length;
+      downloadJson(namedExport("operational-backup-pack", "json", [localDateStamp()]), backup);
+      setMessage(`Backup downloaded with ${datasetCount.toLocaleString()} dataset(s).`);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setBackupLoading(false);
     }
   };
 
@@ -201,7 +220,6 @@ function BusinessSettingsPage({ user }) {
               rows="2"
             />
           </label>
-          {message ? <p className="form-note">{message}</p> : null}
           {canEdit ? (
             <button className="primary-button" type="submit">
               {uploadingLogo ? <Upload size={17} /> : <Save size={17} />}
@@ -211,6 +229,21 @@ function BusinessSettingsPage({ user }) {
         </form>
 
         <div className="page-stack wide-panel">
+          {canEdit ? (
+            <div className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h3>Data Backup Pack</h3>
+                  <p className="muted">Server-generated operational export. Password hashes and reset tokens are excluded.</p>
+                </div>
+                <button type="button" onClick={downloadBackupPack} disabled={backupLoading}>
+                  <Download size={17} />
+                  {backupLoading ? "Preparing..." : "Download"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           {billingSettings ? (
             <div className="panel">
               <div className="panel-heading">

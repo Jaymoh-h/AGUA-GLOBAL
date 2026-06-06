@@ -2,6 +2,7 @@ import { Edit3, Link2, RotateCcw, Save, UserPlus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
+import { useToastMessage } from "../components/ToastProvider";
 import { api } from "../services/api";
 
 const blank = {
@@ -27,7 +28,7 @@ function UsersPage({ user: currentUser }) {
   const [customers, setCustomers] = useState([]);
   const [form, setForm] = useState(blank);
   const [editingId, setEditingId] = useState(null);
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
 
   const load = async () => {
     const [userRows, customerRows] = await Promise.all([api.users.list(), api.customers.list()]);
@@ -246,7 +247,6 @@ function UsersPage({ user: currentUser }) {
             />
             Account active
           </label>
-          {message ? <p className="form-note">{message}</p> : null}
           <button className="primary-button" type="submit">
             {editingId ? <Save size={17} /> : <UserPlus size={17} />}
             {editingId ? "Save changes" : "Create user"}

@@ -1,3 +1,5 @@
+import { ensureExtension } from "./exportNames";
+
 export const downloadCsvTemplate = (filename, headers) => {
   const csv = `${headers.join(",")}\n`;
   downloadCsv(filename, csv);
@@ -25,7 +27,7 @@ export const downloadCsv = (filename, csv) => {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = filename;
+  link.download = ensureExtension(filename, "csv");
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -38,7 +40,7 @@ export const downloadJson = (filename, data) => {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = filename;
+  link.download = ensureExtension(filename, "json");
   document.body.appendChild(link);
   link.click();
   link.remove();

@@ -2,6 +2,7 @@ import { MapPin, Plus, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
+import { useToastMessage } from "../components/ToastProvider";
 import { api } from "../services/api";
 
 const blank = { name: "", description: "", is_active: true };
@@ -10,7 +11,7 @@ function ZonesPage() {
   const [zones, setZones] = useState([]);
   const [form, setForm] = useState(blank);
   const [editingId, setEditingId] = useState(null);
-  const [message, setMessage] = useState("");
+  const [, setMessage] = useToastMessage();
 
   const load = () => api.zones.list().then(setZones);
 
@@ -81,7 +82,6 @@ function ZonesPage() {
             />
             Active
           </label>
-          {message ? <p className="form-note">{message}</p> : null}
           <button className="primary-button" type="submit">
             {editingId ? <Save size={17} /> : <Plus size={17} />}
             {editingId ? "Save changes" : "Add zone"}
