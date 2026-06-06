@@ -120,9 +120,9 @@ const createExpenseRecord = async (client, req, payload, { auditReason = null } 
   const { rows } = await client.query(
     `INSERT INTO expenses (
       expense_date, category, vendor, description, amount, payment_channel,
-      reference, receipt_number, maintenance_request_id, notes, recorded_by
+      reference, receipt_number, maintenance_request_id, contractor_invoice_id, notes, recorded_by
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
     RETURNING *`,
     [
       payload.expense_date,
@@ -134,6 +134,7 @@ const createExpenseRecord = async (client, req, payload, { auditReason = null } 
       payload.reference || null,
       payload.receipt_number || null,
       payload.maintenance_request_id || null,
+      payload.contractor_invoice_id || null,
       payload.notes || null,
       req.user.id
     ]
@@ -156,10 +157,12 @@ const listExpenses = asyncHandler(async (_req, res) => {
     `SELECT e.*,
             u.name AS recorded_by_name,
             mr.request_number AS maintenance_request_number,
-            mr.title AS maintenance_request_title
+            mr.title AS maintenance_request_title,
+            ci.invoice_number AS contractor_invoice_number
      FROM expenses e
      LEFT JOIN users u ON u.id = e.recorded_by
      LEFT JOIN maintenance_requests mr ON mr.id = e.maintenance_request_id
+     LEFT JOIN contractor_invoices ci ON ci.id = e.contractor_invoice_id
      ORDER BY e.expense_date DESC, e.created_at DESC
      LIMIT 300`
   );

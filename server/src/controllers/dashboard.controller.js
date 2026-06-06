@@ -33,16 +33,6 @@ const getRoleAllowedItems = (role, items) =>
   items.filter((item) => !item.roles || item.roles.includes(role));
 
 const buildDashboardCharts = async () => {
-  const lastConcludedPeriod = await queryOne(
-    `SELECT id, name, period_start, period_end
-     FROM billing_periods
-     WHERE period_end < CURRENT_DATE
-     ORDER BY period_end DESC, id DESC
-     LIMIT 1`
-  );
-  const chartPeriodStart = lastConcludedPeriod.period_start || null;
-  const chartPeriodEnd = lastConcludedPeriod.period_end || null;
-
   const billingTrend = await queryRows(
      `WITH months AS (
        SELECT generate_series(
@@ -112,39 +102,6 @@ const buildDashboardCharts = async () => {
       )
     : [];
 
-  const zoneConsumption = await queryRows(
-    `SELECT COALESCE(z.name, c.location, 'Unassigned') AS label,
-            COALESCE(SUM(b.units_used), 0) AS units_used,
-            COALESCE(SUM(COALESCE(NULLIF(b.total_amount, 0), b.amount)), 0) AS billed_amount
-     FROM bills b
-     JOIN customers c ON c.id = b.customer_id
-     LEFT JOIN zones z ON z.id = c.zone_id
-     WHERE b.bill_pay_status = 'payable'
-       AND (
-         ($1::date IS NOT NULL AND b.billing_month >= $1::date AND b.billing_month <= $2::date)
-         OR ($1::date IS NULL AND b.billing_month >= date_trunc('month', CURRENT_DATE)::date AND b.billing_month < (date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month'))
-       )
-     GROUP BY COALESCE(z.name, c.location, 'Unassigned')
-     ORDER BY COALESCE(SUM(b.units_used), 0) DESC
-     LIMIT 8`,
-    [chartPeriodStart, chartPeriodEnd]
-  );
-
-  const collectionsByChannel = await queryRows(
-    `SELECT payment_channel AS label,
-            COUNT(*)::integer AS receipt_count,
-            COALESCE(SUM(amount), 0) AS collected_amount
-     FROM payments
-     WHERE status = 'posted'
-       AND (
-         ($1::date IS NOT NULL AND payment_date >= $1::date AND payment_date <= $2::date)
-         OR ($1::date IS NULL AND payment_date >= date_trunc('month', CURRENT_DATE)::date AND payment_date < (date_trunc('month', CURRENT_DATE)::date + INTERVAL '1 month'))
-       )
-     GROUP BY payment_channel
-     ORDER BY COALESCE(SUM(amount), 0) DESC`,
-    [chartPeriodStart, chartPeriodEnd]
-  );
-
   const productionTrend = (await getTableExists("production_weekly_readings"))
     ? await queryRows(
         `WITH recent_weeks AS (
@@ -205,18 +162,7 @@ const buildDashboardCharts = async () => {
     billingTrend,
     receivablesAging,
     maintenanceStatus,
-    zoneConsumption,
-    collectionsByChannel,
-    productionTrend: productionTrend.reverse(),
-    periods: {
-      lastConcludedBillingPeriod: lastConcludedPeriod.period_start
-        ? {
-            name: lastConcludedPeriod.name,
-            period_start: lastConcludedPeriod.period_start,
-            period_end: lastConcludedPeriod.period_end
-          }
-        : null
-    }
+    productionTrend: productionTrend.reverse()
   };
 };
 
@@ -233,6 +179,7 @@ const buildActionCenter = async (role) => {
     deliveries,
     campaigns,
     payroll,
+    supplierPayables,
     production,
     duplicateOpenBills,
     futureDatedRecords
@@ -335,6 +282,16 @@ const buildActionCenter = async (role) => {
          COALESCE(SUM(total_net), 0) AS amount
        FROM payroll_runs
        WHERE status IN ('pending_approval', 'approved')`
+    ),
+    optionalQuery(
+      "contractor_invoices",
+      { approved_count: 0, approved_amount: 0, overdue_count: 0, overdue_amount: 0 },
+      `SELECT
+         COUNT(*) FILTER (WHERE status = 'approved') AS approved_count,
+         COALESCE(SUM(total_amount) FILTER (WHERE status = 'approved'), 0) AS approved_amount,
+         COUNT(*) FILTER (WHERE status IN ('draft', 'submitted', 'approved') AND due_date < CURRENT_DATE) AS overdue_count,
+         COALESCE(SUM(total_amount) FILTER (WHERE status IN ('draft', 'submitted', 'approved') AND due_date < CURRENT_DATE), 0) AS overdue_amount
+       FROM contractor_invoices`
     ),
     optionalQuery(
       "production_weekly_readings",
@@ -507,6 +464,28 @@ const buildActionCenter = async (role) => {
       severity: "medium",
       detail: "Payroll runs pending approval or payment.",
       page: "payroll",
+      roles: ["admin", "accountant"]
+    },
+    {
+      key: "approved_supplier_invoices",
+      group: "finance",
+      label: "Supplier invoices ready to post",
+      count: toNumber(supplierPayables.approved_count),
+      amount: toNumber(supplierPayables.approved_amount),
+      severity: "medium",
+      detail: "Approved contractor or supplier invoices not yet posted to expenses.",
+      page: "contractors",
+      roles: ["admin", "accountant"]
+    },
+    {
+      key: "overdue_supplier_invoices",
+      group: "finance",
+      label: "Overdue supplier invoices",
+      count: toNumber(supplierPayables.overdue_count),
+      amount: toNumber(supplierPayables.overdue_amount),
+      severity: "high",
+      detail: "Open contractor or supplier invoices past their due date.",
+      page: "contractors",
       roles: ["admin", "accountant"]
     },
     {

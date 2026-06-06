@@ -59,7 +59,10 @@ const accountantReportTitles = {
   agingDetail: "Receivables Aging Detail",
   depositRegister: "Deposit Register",
   expensesCategory: "Expenses By Category",
-  expenseRegister: "Expense Register"
+  expenseRegister: "Expense Register",
+  contractorPayables: "Contractor Payables",
+  contractorBalances: "Contractor Balances",
+  contractorInvoiceRegister: "Contractor Invoice Register"
 };
 
 const dataQualityRecordColumns = {
@@ -137,7 +140,9 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
       ),
       outstanding: Number(accountantData.billingTotals?.balance_amount || 0),
       expenses: Number(accountantData.expenseTotals?.expense_amount || 0),
-      deposits: accountantData.depositRegister.reduce((sum, row) => sum + Number(row.deposit_amount || 0), 0)
+      deposits: accountantData.depositRegister.reduce((sum, row) => sum + Number(row.deposit_amount || 0), 0),
+      payables: Number(accountantData.contractorPayablesTotals?.open_amount || 0),
+      overduePayables: Number(accountantData.contractorPayablesTotals?.overdue_amount || 0)
     };
   }, [accountantData]);
 
@@ -220,6 +225,12 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const expenseRegisterTable = useTableControls(accountantData?.expenseRegister || [], {
     searchFields: ["expense_date", "category", "vendor", "description", "payment_channel", "reference", "receipt_number", "recorded_by_name", "amount"]
   });
+  const contractorBalanceTable = useTableControls(accountantData?.contractorBalances || [], {
+    searchFields: ["contractor_name", "phone", "email", "tax_pin", "open_invoice_count", "open_amount", "overdue_amount"]
+  });
+  const contractorInvoiceTable = useTableControls(accountantData?.contractorInvoiceRegister || [], {
+    searchFields: ["invoice_number", "contractor_name", "category", "description", "status", "total_amount", "expense_id"]
+  });
   const maintenanceRegisterRows = printAllRows ? maintenanceRegisterTable.filteredRows : maintenanceRegisterTable.visibleRows;
   const customerBalanceRows = printAllRows ? customerBalanceTable.filteredRows : customerBalanceTable.visibleRows;
   const billingRegisterRows = printAllRows ? billingRegisterTable.filteredRows : billingRegisterTable.visibleRows;
@@ -228,6 +239,8 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const receivablesAgingRows = printAllRows ? receivablesAgingTable.filteredRows : receivablesAgingTable.visibleRows;
   const depositRegisterRows = printAllRows ? depositRegisterTable.filteredRows : depositRegisterTable.visibleRows;
   const expenseRegisterRows = printAllRows ? expenseRegisterTable.filteredRows : expenseRegisterTable.visibleRows;
+  const contractorBalanceRows = printAllRows ? contractorBalanceTable.filteredRows : contractorBalanceTable.visibleRows;
+  const contractorInvoiceRows = printAllRows ? contractorInvoiceTable.filteredRows : contractorInvoiceTable.visibleRows;
   const profitAndLoss = accountantData?.profitAndLoss || {};
   const cashProfit = profitAndLoss.cash || { revenue_lines: [], expense_lines: [], notes: [], totals: {} };
   const accrualProfit = profitAndLoss.accrual || { revenue_lines: [], expense_lines: [], notes: [], totals: {} };
@@ -894,6 +907,8 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
               <StatCard label="Period collected" value={money(accountantTotals.collected)} detail="Posted receipts" />
               <StatCard label="Period balance" value={money(accountantTotals.outstanding)} detail="Bill balances" />
               <StatCard label="Period expenses" value={money(accountantTotals.expenses)} detail="Operating costs" />
+              <StatCard label="Open payables" value={money(accountantTotals.payables)} detail="Contractor invoices not posted/paid" />
+              <StatCard label="Overdue payables" value={money(accountantTotals.overduePayables)} detail="Past due contractor invoices" />
               <StatCard label="Cash net profit" value={money(cashProfit.totals?.net_profit)} detail={`Margin ${percent(cashProfit.totals?.margin)}`} />
               <StatCard label="Accrual net profit" value={money(accrualProfit.totals?.net_profit)} detail={`Margin ${percent(accrualProfit.totals?.margin)}`} />
             </div>
@@ -1339,6 +1354,205 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                         ))
                       ) : (
                         <EmptyRow colSpan={8} />
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="panel full-span report-section report-section-contractorPayables">
+                <div className="panel-heading">
+                  <h3>Contractor Payables</h3>
+                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "contractorPayables")} title="Print contractor payables">
+                    <Printer size={17} />
+                  </button>
+                </div>
+                <div className="reading-context">
+                  <div>
+                    <span>Open invoices</span>
+                    <strong>{number(accountantData.contractorPayablesTotals?.open_invoice_count)}</strong>
+                  </div>
+                  <div>
+                    <span>Open amount</span>
+                    <strong>{money(accountantData.contractorPayablesTotals?.open_amount)}</strong>
+                  </div>
+                  <div>
+                    <span>Approved</span>
+                    <strong>{money(accountantData.contractorPayablesTotals?.approved_amount)}</strong>
+                  </div>
+                  <div>
+                    <span>Overdue</span>
+                    <strong>{money(accountantData.contractorPayablesTotals?.overdue_amount)}</strong>
+                  </div>
+                  <div>
+                    <span>Posted this period</span>
+                    <strong>{money(accountantData.contractorPayablesTotals?.posted_amount)}</strong>
+                  </div>
+                </div>
+                <div className="report-grid">
+                  <div className="panel">
+                    <div className="panel-heading compact-heading">
+                      <h3>By Status</h3>
+                    </div>
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Status</th>
+                            <th>Invoices</th>
+                            <th>Amount</th>
+                            <th>Overdue</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {accountantData.contractorPayablesByStatus.length ? (
+                            accountantData.contractorPayablesByStatus.map((row) => (
+                              <tr key={row.status}>
+                                <td>{label(row.status)}</td>
+                                <td>{number(row.invoice_count)}</td>
+                                <td>{money(row.invoice_amount)}</td>
+                                <td>{money(row.overdue_amount)}</td>
+                              </tr>
+                            ))
+                          ) : (
+                            <EmptyRow colSpan={4} />
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div className="panel">
+                    <div className="panel-heading compact-heading">
+                      <h3>Aging</h3>
+                    </div>
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Bucket</th>
+                            <th>Invoices</th>
+                            <th>Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {accountantData.contractorPayablesAging.length ? (
+                            accountantData.contractorPayablesAging.map((row) => (
+                              <tr key={row.bucket}>
+                                <td>{row.bucket}</td>
+                                <td>{number(row.invoice_count)}</td>
+                                <td>{money(row.invoice_amount)}</td>
+                              </tr>
+                            ))
+                          ) : (
+                            <EmptyRow colSpan={3} />
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="panel full-span report-section report-section-contractorBalances">
+                <div className="panel-heading">
+                  <h3>Contractor Balances</h3>
+                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "contractorBalances")} title="Print contractor balances">
+                    <Printer size={17} />
+                  </button>
+                </div>
+                <TableControls table={contractorBalanceTable} label="contractors" placeholder="Search contractor balances" />
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Contractor</th>
+                        <th>Contact</th>
+                        <th>Open Invoices</th>
+                        <th>Oldest Due</th>
+                        <th>Open Amount</th>
+                        <th>Overdue</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {contractorBalanceTable.total ? (
+                        contractorBalanceRows.map((row) => (
+                          <tr key={row.id}>
+                            <td>
+                              {row.contractor_name}
+                              <small>{row.tax_pin || "-"}</small>
+                            </td>
+                            <td>
+                              {row.phone || "-"}
+                              <small>{row.email || "-"}</small>
+                            </td>
+                            <td>{number(row.open_invoice_count)}</td>
+                            <td>{date(row.oldest_due_date)}</td>
+                            <td>{money(row.open_amount)}</td>
+                            <td>
+                              {money(row.overdue_amount)}
+                              <small>{number(row.overdue_invoice_count)} invoice(s)</small>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <EmptyRow colSpan={6} />
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="panel full-span report-section report-section-contractorInvoiceRegister">
+                <div className="panel-heading">
+                  <h3>Contractor Invoice Register</h3>
+                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "contractorInvoiceRegister")} title="Print contractor invoice register">
+                    <Printer size={17} />
+                  </button>
+                </div>
+                <TableControls table={contractorInvoiceTable} label="contractor invoices" placeholder="Search contractor invoices" />
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Invoice</th>
+                        <th>Contractor</th>
+                        <th>Dates</th>
+                        <th>Category</th>
+                        <th>Subtotal</th>
+                        <th>VAT</th>
+                        <th>Total</th>
+                        <th>Status</th>
+                        <th>Expense</th>
+                        <th>Documents</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {contractorInvoiceTable.total ? (
+                        contractorInvoiceRows.map((row) => (
+                          <tr key={row.id}>
+                            <td>
+                              {row.invoice_number}
+                              <small>{row.description}</small>
+                            </td>
+                            <td>
+                              {row.contractor_name}
+                              <small>{row.contractor_tax_pin || "-"}</small>
+                            </td>
+                            <td>
+                              {date(row.invoice_date)}
+                              <small>Due {date(row.due_date)}</small>
+                            </td>
+                            <td>{row.category}</td>
+                            <td>{money(row.subtotal_amount)}</td>
+                            <td>{money(row.vat_amount)}</td>
+                            <td>{money(row.total_amount)}</td>
+                            <td>{label(row.status)}</td>
+                            <td>{row.expense_id ? `Expense #${row.expense_id}` : "-"}</td>
+                            <td>{number(row.document_count)}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <EmptyRow colSpan={10} />
                       )}
                     </tbody>
                   </table>

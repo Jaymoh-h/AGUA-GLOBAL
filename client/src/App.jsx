@@ -9,6 +9,7 @@ const BillsPage = lazy(() => import("./pages/BillsPage"));
 const BillingSetupPage = lazy(() => import("./pages/BillingSetupPage"));
 const BusinessSettingsPage = lazy(() => import("./pages/BusinessSettingsPage"));
 const CommunicationsPage = lazy(() => import("./pages/CommunicationsPage"));
+const ContractorInvoicesPage = lazy(() => import("./pages/ContractorInvoicesPage"));
 const CustomersPage = lazy(() => import("./pages/CustomersPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const ExpensesPage = lazy(() => import("./pages/ExpensesPage"));
@@ -171,6 +172,7 @@ function App() {
     audit: <AuditTrailPage user={user} />,
     payments: <PaymentsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
     expenses: <ExpensesPage user={user} />,
+    contractors: <ContractorInvoicesPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
     payroll: <PayrollPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
     maintenance: <MaintenancePage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
     production: <ProductionPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,

@@ -26,12 +26,14 @@ const adjustmentRoutes = require("./routes/adjustment.routes");
 const productionRoutes = require("./routes/production.routes");
 const payrollRoutes = require("./routes/payroll.routes");
 const communicationRoutes = require("./routes/communication.routes");
+const documentRoutes = require("./routes/document.routes");
+const contractorInvoiceRoutes = require("./routes/contractorInvoice.routes");
 
 const app = express();
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(cors({ origin: clientOrigin, credentials: true }));
-app.use(express.json({ limit: "5mb" }));
+app.use(express.json({ limit: "8mb" }));
 app.use(morgan("dev"));
 app.use("/uploads", express.static(path.join(__dirname, "..", "public", "uploads")));
 
@@ -60,6 +62,8 @@ app.use("/api/adjustments", adjustmentRoutes);
 app.use("/api/production", productionRoutes);
 app.use("/api/payroll", payrollRoutes);
 app.use("/api/communications", communicationRoutes);
+app.use("/api/documents", documentRoutes);
+app.use("/api/contractor-invoices", contractorInvoiceRoutes);
 
 app.use(errorHandler);
 

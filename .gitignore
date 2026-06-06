@@ -5,7 +5,7 @@ node_modules/
 dist/
 build/
 coverage/
+server/storage/documents/
 *.log
 .DS_Store
 Thumbs.db
-

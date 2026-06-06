@@ -69,6 +69,18 @@ const request = async (path, options = {}) => {
   return data;
 };
 
+const requestBlob = async (path) => {
+  const headers = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${API_BASE}${path}`, { headers });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.message || "Download failed.");
+  }
+  return response.blob();
+};
+
 export const assetUrl = (path) => {
   if (!path) return "";
   if (/^(https?:|data:|blob:)/.test(path)) return path;
@@ -87,6 +99,12 @@ export const api = {
       body: { current_password: currentPassword, new_password: newPassword }
     }),
   dashboard: () => request("/dashboard"),
+  documents: {
+    list: (entityType, entityId) => request(`/documents?entity_type=${entityType}&entity_id=${entityId}`),
+    upload: (payload) => request("/documents", { method: "POST", body: payload }),
+    remove: (id) => request(`/documents/${id}`, { method: "DELETE" }),
+    download: (id) => requestBlob(`/documents/${id}/download`)
+  },
   reports: {
     summary: () => request("/reports/summary"),
     accountant: (params = {}) => {
@@ -236,6 +254,18 @@ export const api = {
     create: (payload) => request("/expenses", { method: "POST", body: payload }),
     previewImport: (csv) => request("/expenses/imports/preview", { method: "POST", body: { csv } }),
     commitImport: (csv) => request("/expenses/imports/commit", { method: "POST", body: { csv } })
+  },
+  contractorInvoices: {
+    contractors: () => request("/contractor-invoices/contractors"),
+    createContractor: (payload) => request("/contractor-invoices/contractors", { method: "POST", body: payload }),
+    updateContractor: (id, payload) => request(`/contractor-invoices/contractors/${id}`, { method: "PUT", body: payload }),
+    invoices: () => request("/contractor-invoices/invoices"),
+    createInvoice: (payload) => request("/contractor-invoices/invoices", { method: "POST", body: payload }),
+    updateInvoice: (id, payload) => request(`/contractor-invoices/invoices/${id}`, { method: "PUT", body: payload }),
+    updateStatus: (id, payload) =>
+      request(`/contractor-invoices/invoices/${id}/status`, { method: "PATCH", body: payload }),
+    postExpense: (id, payload) =>
+      request(`/contractor-invoices/invoices/${id}/post-expense`, { method: "POST", body: payload })
   },
   payroll: {
     payees: () => request("/payroll/payees"),

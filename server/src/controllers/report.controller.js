@@ -756,6 +756,119 @@ const getAccountantReports = asyncHandler(async (req, res) => {
      LIMIT 500`,
     dateParams
   );
+
+  const contractorPayablesTotals = await pool.query(
+    `SELECT
+       COUNT(*) FILTER (WHERE status IN ('draft', 'submitted', 'approved')) AS open_invoice_count,
+       COALESCE(SUM(total_amount) FILTER (WHERE status IN ('draft', 'submitted', 'approved')), 0) AS open_amount,
+       COUNT(*) FILTER (WHERE status = 'approved') AS approved_invoice_count,
+       COALESCE(SUM(total_amount) FILTER (WHERE status = 'approved'), 0) AS approved_amount,
+       COUNT(*) FILTER (WHERE status IN ('draft', 'submitted', 'approved') AND due_date < CURRENT_DATE) AS overdue_invoice_count,
+       COALESCE(SUM(total_amount) FILTER (WHERE status IN ('draft', 'submitted', 'approved') AND due_date < CURRENT_DATE), 0) AS overdue_amount,
+       COUNT(*) FILTER (WHERE status = 'posted_to_expense' AND posted_at::date BETWEEN $1 AND $2) AS posted_invoice_count,
+       COALESCE(SUM(total_amount) FILTER (WHERE status = 'posted_to_expense' AND posted_at::date BETWEEN $1 AND $2), 0) AS posted_amount
+     FROM contractor_invoices`,
+    dateParams
+  );
+
+  const contractorPayablesByStatus = await pool.query(
+    `SELECT
+       status,
+       COUNT(*) AS invoice_count,
+       COALESCE(SUM(total_amount), 0) AS invoice_amount,
+       COALESCE(SUM(total_amount) FILTER (WHERE due_date < CURRENT_DATE), 0) AS overdue_amount
+     FROM contractor_invoices
+     WHERE invoice_date BETWEEN $1 AND $2
+     GROUP BY status
+     ORDER BY CASE status
+       WHEN 'draft' THEN 0
+       WHEN 'submitted' THEN 1
+       WHEN 'approved' THEN 2
+       WHEN 'rejected' THEN 3
+       WHEN 'posted_to_expense' THEN 4
+       WHEN 'paid' THEN 5
+       ELSE 6
+     END`,
+    dateParams
+  );
+
+  const contractorPayablesAging = await pool.query(
+    `SELECT bucket,
+            COUNT(*) AS invoice_count,
+            COALESCE(SUM(total_amount), 0) AS invoice_amount
+     FROM (
+       SELECT CASE
+                WHEN CURRENT_DATE <= due_date THEN 'current'
+                WHEN CURRENT_DATE - due_date <= 30 THEN '1-30'
+                WHEN CURRENT_DATE - due_date <= 60 THEN '31-60'
+                WHEN CURRENT_DATE - due_date <= 90 THEN '61-90'
+                ELSE '90+'
+              END AS bucket,
+              total_amount
+       FROM contractor_invoices
+       WHERE status IN ('draft', 'submitted', 'approved')
+     ) aged
+     GROUP BY bucket
+     ORDER BY CASE bucket WHEN 'current' THEN 0 WHEN '1-30' THEN 1 WHEN '31-60' THEN 2 WHEN '61-90' THEN 3 ELSE 4 END`
+  );
+
+  const contractorBalances = await pool.query(
+    `SELECT c.id,
+            c.name AS contractor_name,
+            c.phone,
+            c.email,
+            c.tax_pin,
+            COUNT(ci.id) FILTER (WHERE ci.status IN ('draft', 'submitted', 'approved')) AS open_invoice_count,
+            COALESCE(SUM(ci.total_amount) FILTER (WHERE ci.status IN ('draft', 'submitted', 'approved')), 0) AS open_amount,
+            MIN(ci.due_date) FILTER (WHERE ci.status IN ('draft', 'submitted', 'approved')) AS oldest_due_date,
+            COUNT(ci.id) FILTER (WHERE ci.status IN ('draft', 'submitted', 'approved') AND ci.due_date < CURRENT_DATE) AS overdue_invoice_count,
+            COALESCE(SUM(ci.total_amount) FILTER (WHERE ci.status IN ('draft', 'submitted', 'approved') AND ci.due_date < CURRENT_DATE), 0) AS overdue_amount
+     FROM contractors c
+     LEFT JOIN contractor_invoices ci ON ci.contractor_id = c.id
+     GROUP BY c.id
+     HAVING COUNT(ci.id) FILTER (WHERE ci.status IN ('draft', 'submitted', 'approved')) > 0
+     ORDER BY overdue_amount DESC, open_amount DESC, c.name ASC
+     LIMIT 500`
+  );
+
+  const contractorInvoiceRegister = await pool.query(
+    `SELECT ci.id,
+            ci.invoice_number,
+            ci.invoice_date,
+            ci.due_date,
+            ci.category,
+            ci.description,
+            ci.subtotal_amount,
+            ci.vat_amount,
+            ci.total_amount,
+            ci.status,
+            ci.reviewed_at,
+            ci.posted_at,
+            ci.expense_id,
+            c.name AS contractor_name,
+            c.tax_pin AS contractor_tax_pin,
+            creator.name AS created_by_name,
+            reviewer.name AS reviewed_by_name,
+            poster.name AS posted_by_name,
+            COALESCE(document_summary.document_count, 0) AS document_count
+     FROM contractor_invoices ci
+     JOIN contractors c ON c.id = ci.contractor_id
+     LEFT JOIN users creator ON creator.id = ci.created_by
+     LEFT JOIN users reviewer ON reviewer.id = ci.reviewed_by
+     LEFT JOIN users poster ON poster.id = ci.posted_by
+     LEFT JOIN LATERAL (
+       SELECT COUNT(*) AS document_count
+       FROM supporting_documents sd
+       WHERE sd.entity_type = 'contractor_invoice'
+         AND sd.entity_id = ci.id
+         AND sd.deleted_at IS NULL
+     ) document_summary ON TRUE
+     WHERE ci.invoice_date BETWEEN $1 AND $2
+     ORDER BY ci.invoice_date DESC, ci.created_at DESC
+     LIMIT 500`,
+    dateParams
+  );
+
   const profitAndLoss = await buildProfitAndLoss(startDate, endDate);
 
   res.json({
@@ -775,6 +888,11 @@ const getAccountantReports = asyncHandler(async (req, res) => {
     expenseTotals: expenseTotals.rows[0],
     expensesByCategory: expensesByCategory.rows,
     expenseRegister: expenseRegister.rows,
+    contractorPayablesTotals: contractorPayablesTotals.rows[0],
+    contractorPayablesByStatus: contractorPayablesByStatus.rows,
+    contractorPayablesAging: contractorPayablesAging.rows,
+    contractorBalances: contractorBalances.rows,
+    contractorInvoiceRegister: contractorInvoiceRegister.rows,
     profitAndLoss
   });
 });

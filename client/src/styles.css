@@ -925,6 +925,36 @@ td button,
   margin: 6px 0 0;
 }
 
+.supporting-documents-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.document-upload-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.document-file-input {
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  flex-direction: row;
+  gap: 8px;
+  height: 40px;
+  justify-content: center;
+  min-width: 136px;
+  padding: 0 12px;
+}
+
+.document-file-input input {
+  display: none;
+}
+
 .logo-preview {
   width: 100%;
   min-height: 76px;
@@ -1667,6 +1697,20 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.filter-toolbar {
+  justify-content: flex-start;
+  align-items: end;
+}
+
+.filter-toolbar label {
+  min-width: min(100%, 150px);
+  max-width: 220px;
+}
+
+.compact-table-wrap {
+  max-height: 320px;
+}
+
 .table-search {
   position: relative;
   flex: 1 1 240px;
@@ -2257,7 +2301,10 @@ td {
   .active-print-surface.report-print-agingDetail .report-section-agingDetail,
   .active-print-surface.report-print-depositRegister .report-section-depositRegister,
   .active-print-surface.report-print-expensesCategory .report-section-expensesCategory,
-  .active-print-surface.report-print-expenseRegister .report-section-expenseRegister {
+  .active-print-surface.report-print-expenseRegister .report-section-expenseRegister,
+  .active-print-surface.report-print-contractorPayables .report-section-contractorPayables,
+  .active-print-surface.report-print-contractorBalances .report-section-contractorBalances,
+  .active-print-surface.report-print-contractorInvoiceRegister .report-section-contractorInvoiceRegister {
     display: block;
   }
 

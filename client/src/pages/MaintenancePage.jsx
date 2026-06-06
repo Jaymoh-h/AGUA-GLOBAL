@@ -1,8 +1,9 @@
-import { Ban, Banknote, CheckCircle2, Play, RefreshCw, Save, Wrench, X } from "lucide-react";
+import { Ban, Banknote, CheckCircle2, FileText, Play, RefreshCw, Save, Wrench, X } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
 import StatusBadge from "../components/StatusBadge";
+import SupportingDocumentsPanel from "../components/SupportingDocumentsPanel";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api } from "../services/api";
 
@@ -44,6 +45,7 @@ function MaintenancePage({ navigationIntent, onClearNavigationIntent }) {
   const [statusFilter, setStatusFilter] = useState("");
   const [resolutionDrafts, setResolutionDrafts] = useState({});
   const [activeExpenseRequestId, setActiveExpenseRequestId] = useState(null);
+  const [activeDocumentRequestId, setActiveDocumentRequestId] = useState(null);
   const [expenseDrafts, setExpenseDrafts] = useState({});
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -149,6 +151,7 @@ function MaintenancePage({ navigationIntent, onClearNavigationIntent }) {
 
   const openExpenseForm = (request) => {
     setActiveExpenseRequestId(request.id);
+    setActiveDocumentRequestId(null);
     setExpenseDrafts((current) => ({
       ...current,
       [request.id]: current[request.id] || emptyExpenseDraft(request)
@@ -433,6 +436,18 @@ function MaintenancePage({ navigationIntent, onClearNavigationIntent }) {
                           </td>
                           <td>
                             <div className="row-actions">
+                              <button
+                                className="icon-button"
+                                type="button"
+                                onClick={() => {
+                                  setActiveExpenseRequestId(null);
+                                  setActiveDocumentRequestId((current) => (current === request.id ? null : request.id));
+                                }}
+                                title="Supporting documents"
+                                disabled={saving}
+                              >
+                                <FileText size={16} />
+                              </button>
                               {request.status === "open" ? (
                                 <button
                                   className="icon-button"
@@ -558,6 +573,13 @@ function MaintenancePage({ navigationIntent, onClearNavigationIntent }) {
                                   </button>
                                 </div>
                               </form>
+                            </td>
+                          </tr>
+                        ) : null}
+                        {activeDocumentRequestId === request.id ? (
+                          <tr>
+                            <td colSpan="8">
+                              <SupportingDocumentsPanel entityType="maintenance_request" entityId={request.id} />
                             </td>
                           </tr>
                         ) : null}

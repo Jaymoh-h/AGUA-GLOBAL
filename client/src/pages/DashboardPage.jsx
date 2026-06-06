@@ -48,7 +48,6 @@ const paddedChartMax = (dataMax) => {
 
 const moneyTooltip = (value, name) => [money(value), String(name || "").replace("_", " ")];
 const countTooltip = (value, name) => [Number(value || 0).toLocaleString(), String(name || "").replace("_", " ")];
-const date = (value) => value?.slice(0, 10) || "";
 
 const useLargeDashboardCharts = () => {
   const [isLarge, setIsLarge] = useState(() => {
@@ -86,11 +85,7 @@ function DashboardPage({ onNavigate }) {
   const billingTrend = charts.billingTrend || [];
   const receivablesAging = charts.receivablesAging || [];
   const maintenanceStatus = charts.maintenanceStatus || [];
-  const zoneConsumption = charts.zoneConsumption || [];
-  const collectionsByChannel = charts.collectionsByChannel || [];
   const productionTrend = charts.productionTrend || [];
-  const concludedPeriod = charts.periods?.lastConcludedBillingPeriod || null;
-  const concludedPeriodLabel = concludedPeriod?.name || [date(concludedPeriod?.period_start), date(concludedPeriod?.period_end)].filter(Boolean).join(" to ");
   const visibleBillingTrend = billingTrend.slice(-(showLargeCharts ? 12 : 6));
   const visibleProductionTrend = productionTrend.slice(-(showLargeCharts ? 13 : 8));
 
@@ -186,57 +181,6 @@ function DashboardPage({ onNavigate }) {
             </div>
           ) : (
             <EmptyState title="No maintenance records" detail="Maintenance status will appear after requests are logged." />
-          )}
-        </div>
-
-        <div className="panel chart-panel">
-          <div className="panel-heading">
-            <div>
-              <h3>Consumption by Zone</h3>
-              <small>{concludedPeriodLabel ? `Last concluded period: ${concludedPeriodLabel}` : "Current billing month"}</small>
-            </div>
-          </div>
-          {zoneConsumption.length ? (
-            <div className="dashboard-chart">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={zoneConsumption} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
-                  <YAxis domain={[0, paddedChartMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
-                  <Tooltip formatter={countTooltip} />
-                  <Legend />
-                  <Bar dataKey="units_used" name="Units" radius={[5, 5, 0, 0]} fill="#2563eb" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <EmptyState title="No zone consumption yet" detail="Current-month billed units will appear here." />
-          )}
-        </div>
-
-        <div className="panel chart-panel">
-          <div className="panel-heading">
-            <div>
-              <h3>Collections by Channel</h3>
-              <small>{concludedPeriodLabel ? `Receipts in ${concludedPeriodLabel}` : "Current month receipts"}</small>
-            </div>
-          </div>
-          {collectionsByChannel.length ? (
-            <div className="dashboard-chart">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={collectionsByChannel} dataKey="collected_amount" nameKey="label" innerRadius={54} outerRadius={84} paddingAngle={2}>
-                    {collectionsByChannel.map((row, index) => (
-                      <Cell key={row.label} fill={chartColors[index % chartColors.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={moneyTooltip} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <EmptyState title="No collections this month" detail="Posted receipts will appear by channel here." />
           )}
         </div>
 

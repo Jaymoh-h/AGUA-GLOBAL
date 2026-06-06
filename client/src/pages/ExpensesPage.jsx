@@ -1,7 +1,8 @@
-import { Banknote, Download, Eye, FileUp, Save } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Banknote, Download, Eye, FileText, FileUp, Save } from "lucide-react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
+import SupportingDocumentsPanel from "../components/SupportingDocumentsPanel";
 import ToastMessage, { toastTypeFromMessage } from "../components/ToastMessage";
 import { api } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
@@ -39,6 +40,7 @@ function ExpensesPage() {
   const [channelFilter, setChannelFilter] = useState("");
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
+  const [activeDocumentExpenseId, setActiveDocumentExpenseId] = useState(null);
   const [message, setMessage] = useState("");
 
   const importReady = useMemo(
@@ -373,24 +375,44 @@ function ExpensesPage() {
                     <th>Channel</th>
                     <th>Reference</th>
                     <th>Recorded By</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {expenseTable.visibleRows.length ? (
                     expenseTable.visibleRows.map((expense) => (
-                      <tr key={expense.id}>
-                        <td>{expense.expense_date?.slice(0, 10)}</td>
-                        <td>{expense.category}</td>
-                        <td>{expense.vendor || "-"}</td>
-                        <td>{expense.description}</td>
-                        <td>{money(expense.amount)}</td>
-                        <td>{expense.payment_channel}</td>
-                        <td>{expense.reference || expense.receipt_number || "-"}</td>
-                        <td>{expense.recorded_by_name || "-"}</td>
-                      </tr>
+                      <Fragment key={expense.id}>
+                        <tr key={expense.id}>
+                          <td>{expense.expense_date?.slice(0, 10)}</td>
+                          <td>{expense.category}</td>
+                          <td>{expense.vendor || "-"}</td>
+                          <td>{expense.description}</td>
+                          <td>{money(expense.amount)}</td>
+                          <td>{expense.payment_channel}</td>
+                          <td>{expense.reference || expense.receipt_number || "-"}</td>
+                          <td>{expense.recorded_by_name || "-"}</td>
+                          <td>
+                            <button
+                              className="icon-button"
+                              type="button"
+                              onClick={() => setActiveDocumentExpenseId((current) => (current === expense.id ? null : expense.id))}
+                              title="Supporting documents"
+                            >
+                              <FileText size={16} />
+                            </button>
+                          </td>
+                        </tr>
+                        {activeDocumentExpenseId === expense.id ? (
+                          <tr key={`${expense.id}-documents`}>
+                            <td colSpan="9">
+                              <SupportingDocumentsPanel entityType="expense" entityId={expense.id} />
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
                     ))
                   ) : (
-                    <EmptyTableRow colSpan={8} title="No expenses found" detail="Record an expense or adjust the filters." />
+                    <EmptyTableRow colSpan={9} title="No expenses found" detail="Record an expense or adjust the filters." />
                   )}
                 </tbody>
               </table>
