@@ -16,17 +16,34 @@ const blank = {
   is_active: true
 };
 
+const blankAccessProfile = {
+  label: "",
+  role: "business_viewer",
+  customer_id: "",
+  is_active: true
+};
+
+const roleOptions = [
+  { value: "admin", label: "Admin" },
+  { value: "meter_reader", label: "Meter reader" },
+  { value: "accountant", label: "Accountant" },
+  { value: "business_viewer", label: "Business viewer" },
+  { value: "customer", label: "Customer/client" }
+];
+
 const formatDateTime = (value) => {
   if (!value) return "Never";
   return new Date(value).toLocaleString();
 };
 
 const customerLabel = (customer) => `${customer.acc_number} - ${customer.name}`;
+const roleLabel = (role) => roleOptions.find((option) => option.value === role)?.label || String(role || "").replace("_", " ");
 
 function UsersPage({ user: currentUser }) {
   const [users, setUsers] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [form, setForm] = useState(blank);
+  const [accessForm, setAccessForm] = useState(blankAccessProfile);
   const [editingId, setEditingId] = useState(null);
   const [, setMessage] = useToastMessage();
 
@@ -43,6 +60,7 @@ function UsersPage({ user: currentUser }) {
   const resetForm = () => {
     setEditingId(null);
     setForm(blank);
+    setAccessForm(blankAccessProfile);
     setMessage("");
   };
 
@@ -54,6 +72,14 @@ function UsersPage({ user: currentUser }) {
       ...(field === "customer_id" && value
         ? { linked_customer_ids: [...new Set([...current.linked_customer_ids, Number(value)])] }
         : {})
+    }));
+  };
+
+  const setAccessField = (field, value) => {
+    setAccessForm((current) => ({
+      ...current,
+      [field]: value,
+      ...(field === "role" && value !== "customer" ? { customer_id: "" } : {})
     }));
   };
 
@@ -84,6 +110,7 @@ function UsersPage({ user: currentUser }) {
       password: "",
       is_active: Boolean(account.is_active)
     });
+    setAccessForm(blankAccessProfile);
     setMessage("");
   };
 
@@ -127,6 +154,37 @@ function UsersPage({ user: currentUser }) {
       await api.users.update(account.id, { is_active: !account.is_active });
       await load();
       setMessage(account.is_active ? "Account locked." : "Account unlocked.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const selectedUser = users.find((account) => Number(account.id) === Number(editingId));
+
+  const submitAccessProfile = async (event) => {
+    event.preventDefault();
+    if (!editingId) return;
+    setMessage("");
+    try {
+      await api.users.createAccessProfile(editingId, {
+        ...accessForm,
+        customer_id: accessForm.role === "customer" && accessForm.customer_id ? Number(accessForm.customer_id) : null
+      });
+      setAccessForm(blankAccessProfile);
+      await load();
+      setMessage("Access context added.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const toggleAccessProfile = async (profile) => {
+    if (!editingId || profile.is_default) return;
+    setMessage("");
+    try {
+      await api.users.updateAccessProfile(editingId, profile.id, { is_active: !profile.is_active });
+      await load();
+      setMessage(profile.is_active ? "Access context disabled." : "Access context enabled.");
     } catch (err) {
       setMessage(err.message);
     }
@@ -180,10 +238,11 @@ function UsersPage({ user: currentUser }) {
           <label>
             Role
             <select value={form.role} onChange={(event) => setField("role", event.target.value)}>
-              <option value="admin">Admin</option>
-              <option value="meter_reader">Meter reader</option>
-              <option value="accountant">Accountant</option>
-              <option value="customer">Customer/client</option>
+              {roleOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </label>
           {form.role === "customer" ? (
@@ -251,6 +310,72 @@ function UsersPage({ user: currentUser }) {
             {editingId ? <Save size={17} /> : <UserPlus size={17} />}
             {editingId ? "Save changes" : "Create user"}
           </button>
+          {selectedUser ? (
+            <div className="access-profile-panel">
+              <div className="panel-heading compact-heading">
+                <h4>Access Contexts</h4>
+                <Link2 size={16} />
+              </div>
+              <div className="linked-account-list">
+                {(selectedUser.access_profiles || []).map((profile) => (
+                  <div key={profile.id} className="linked-account-option access-profile-row">
+                    <span>
+                      <strong>{profile.label || roleLabel(profile.role)}</strong>
+                      <small>
+                        {roleLabel(profile.role)}
+                        {profile.customer_acc_number ? ` - ${profile.customer_acc_number} ${profile.customer_name || ""}` : ""}
+                      </small>
+                    </span>
+                    {profile.is_default ? <em>Default</em> : null}
+                    <button
+                      type="button"
+                      onClick={() => toggleAccessProfile(profile)}
+                      disabled={profile.is_default}
+                    >
+                      {profile.is_active ? "Disable" : "Enable"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="divider-line" />
+              <div className="form-grid compact-form">
+                <label>
+                  Context label
+                  <input
+                    value={accessForm.label}
+                    onChange={(event) => setAccessField("label", event.target.value)}
+                    placeholder="Director view, customer portal..."
+                  />
+                </label>
+                <label>
+                  Role
+                  <select value={accessForm.role} onChange={(event) => setAccessField("role", event.target.value)}>
+                    {roleOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {accessForm.role === "customer" ? (
+                  <label>
+                    Customer account
+                    <select value={accessForm.customer_id} onChange={(event) => setAccessField("customer_id", event.target.value)} required>
+                      <option value="">Select customer</option>
+                      {customers.map((customer) => (
+                        <option key={customer.id} value={customer.id}>
+                          {customerLabel(customer)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                <button className="secondary-wide-button" type="button" onClick={submitAccessProfile}>
+                  Add access context
+                </button>
+              </div>
+            </div>
+          ) : null}
         </form>
 
         <div className="panel wide-panel">
@@ -281,7 +406,13 @@ function UsersPage({ user: currentUser }) {
                         <small>{account.phone || "-"}</small>
                       </td>
                       <td>{account.email}</td>
-                      <td>{account.role.replace("_", " ")}</td>
+                      <td>
+                        {roleLabel(account.role)}
+                        <small>
+                          {(account.access_profiles || []).length} access context
+                          {(account.access_profiles || []).length === 1 ? "" : "s"}
+                        </small>
+                      </td>
                       <td>
                         <strong>{account.customer_acc_number || "-"}</strong>
                         <small>{account.customer_name || ""}</small>

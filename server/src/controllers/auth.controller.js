@@ -7,24 +7,48 @@ const asyncHandler = require("../utils/asyncHandler");
 const { clientOrigin, jwtSecret, jwtExpiresIn, passwordResetMinutes } = require("../config/env");
 const { recordAuditEvent } = require("../services/audit.service");
 const { sendPasswordResetEmail } = require("../services/email.service");
+const {
+  legacyProfileFromUser,
+  listAccessProfiles,
+  publicAccessProfile
+} = require("../services/accessProfile.service");
 const { validatePassword } = require("../utils/passwordPolicy");
 
-const publicUser = (user) => ({
-  id: user.id,
-  name: user.name,
-  email: user.email,
-  phone: user.phone,
-  role: user.role,
-  customer_id: user.customer_id,
-  must_change_password: Boolean(user.must_change_password),
-  password_changed_at: user.password_changed_at,
-  last_login_at: user.last_login_at
-});
+const publicUser = (user, profile = null) => {
+  const accessProfile = profile || legacyProfileFromUser(user);
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    phone: user.phone,
+    role: accessProfile.role,
+    customer_id: accessProfile.customer_id,
+    access_profile_id: accessProfile.id,
+    access_profile_label: accessProfile.label,
+    must_change_password: Boolean(user.must_change_password),
+    password_changed_at: user.password_changed_at,
+    last_login_at: user.last_login_at
+  };
+};
 
-const signUserToken = (user) =>
-  jwt.sign({ id: user.id, role: user.role }, jwtSecret, {
-    expiresIn: jwtExpiresIn
-  });
+const signUserToken = (user, profile = null) => {
+  const accessProfile = profile || legacyProfileFromUser(user);
+  return jwt.sign(
+    {
+      id: user.id,
+      role: accessProfile.role,
+      access_profile_id: accessProfile.id,
+      customer_id: accessProfile.customer_id
+    },
+    jwtSecret,
+    {
+      expiresIn: jwtExpiresIn
+    }
+  );
+};
+
+const signContextSelectionToken = (user) =>
+  jwt.sign({ id: user.id, purpose: "context_selection" }, jwtSecret, { expiresIn: "10m" });
 
 const hashResetToken = (token) => crypto.createHash("sha256").update(token).digest("hex");
 
@@ -49,16 +73,59 @@ const login = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Invalid email or password.");
   }
 
+  const profiles = await listAccessProfiles(pool, user.id, { activeOnly: true });
+  const activeProfiles = profiles.length ? profiles : [legacyProfileFromUser(user)];
+
+  if (activeProfiles.length > 1) {
+    return res.json({
+      requires_context_selection: true,
+      context_selection_token: signContextSelectionToken(user),
+      user: publicUser(user),
+      contexts: activeProfiles.map(publicAccessProfile)
+    });
+  }
+
   const loginResult = await pool.query(
     "UPDATE users SET last_login_at = NOW() WHERE id = $1 RETURNING *",
     [user.id]
   );
 
-  const token = signUserToken(loginResult.rows[0]);
+  const token = signUserToken(loginResult.rows[0], activeProfiles[0]);
 
-  res.json({
+  return res.json({
     token,
-    user: publicUser(loginResult.rows[0])
+    user: publicUser(loginResult.rows[0], activeProfiles[0])
+  });
+});
+
+const selectContext = asyncHandler(async (req, res) => {
+  const { context_selection_token, access_profile_id } = req.body;
+  if (!context_selection_token || !access_profile_id) {
+    throw new ApiError(400, "Context selection token and access context are required.");
+  }
+
+  let payload;
+  try {
+    payload = jwt.verify(context_selection_token, jwtSecret);
+  } catch (_error) {
+    throw new ApiError(401, "Context selection has expired. Please sign in again.");
+  }
+  if (payload.purpose !== "context_selection") {
+    throw new ApiError(401, "Invalid context selection token.");
+  }
+
+  const { rows } = await pool.query("SELECT * FROM users WHERE id = $1 AND is_active = TRUE", [payload.id]);
+  const user = rows[0];
+  if (!user) throw new ApiError(401, "Invalid or inactive user.");
+
+  const profiles = await listAccessProfiles(pool, user.id, { activeOnly: true });
+  const profile = profiles.find((item) => Number(item.id) === Number(access_profile_id));
+  if (!profile) throw new ApiError(403, "Selected access context is not available.");
+
+  const loginResult = await pool.query("UPDATE users SET last_login_at = NOW() WHERE id = $1 RETURNING *", [user.id]);
+  res.json({
+    token: signUserToken(loginResult.rows[0], profile),
+    user: publicUser(loginResult.rows[0], profile)
   });
 });
 
@@ -217,11 +284,23 @@ const changePassword = asyncHandler(async (req, res) => {
     [passwordHash, req.user.id]
   );
 
-  res.json({ user: publicUser(result.rows[0]) });
+  const currentProfile = req.user.access_profile_id
+    ? {
+        id: req.user.access_profile_id,
+        role: req.user.role,
+        customer_id: req.user.customer_id,
+        label: req.user.access_profile_label,
+        is_active: true,
+        is_default: false
+      }
+    : null;
+
+  res.json({ user: publicUser(result.rows[0], currentProfile) });
 });
 
 module.exports = {
   login,
+  selectContext,
   me,
   requestPasswordReset,
   resetPassword,

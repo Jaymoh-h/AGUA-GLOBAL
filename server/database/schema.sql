@@ -18,6 +18,7 @@ DROP TABLE IF EXISTS audit_events CASCADE;
 DROP TABLE IF EXISTS billing_settings CASCADE;
 DROP TABLE IF EXISTS business_settings CASCADE;
 DROP TABLE IF EXISTS billing_periods CASCADE;
+DROP TABLE IF EXISTS user_access_profiles CASCADE;
 DROP TABLE IF EXISTS portal_user_customers CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 DROP TABLE IF EXISTS customers CASCADE;
@@ -99,7 +100,7 @@ CREATE TABLE users (
   name VARCHAR(120) NOT NULL,
   email VARCHAR(160) UNIQUE NOT NULL,
   phone VARCHAR(40),
-  role VARCHAR(30) NOT NULL CHECK (role IN ('admin', 'meter_reader', 'accountant', 'customer')),
+  role VARCHAR(30) NOT NULL CHECK (role IN ('admin', 'meter_reader', 'accountant', 'customer', 'business_viewer')),
   password_hash TEXT NOT NULL,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
@@ -123,6 +124,29 @@ CREATE TABLE password_reset_tokens (
 CREATE INDEX idx_password_reset_tokens_user_active
   ON password_reset_tokens(user_id, expires_at DESC)
   WHERE used_at IS NULL;
+
+CREATE TABLE user_access_profiles (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role VARCHAR(30) NOT NULL CHECK (role IN ('admin', 'meter_reader', 'accountant', 'customer', 'business_viewer')),
+  label VARCHAR(120),
+  customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  is_default BOOLEAN NOT NULL DEFAULT FALSE,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_user_access_profiles_default
+  ON user_access_profiles(user_id)
+  WHERE is_default = TRUE;
+
+CREATE INDEX idx_user_access_profiles_user_active
+  ON user_access_profiles(user_id, is_active);
+
+CREATE INDEX idx_user_access_profiles_customer
+  ON user_access_profiles(customer_id);
 
 CREATE TABLE portal_user_customers (
   id SERIAL PRIMARY KEY,

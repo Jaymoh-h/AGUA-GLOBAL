@@ -5,6 +5,6 @@ const { authenticate, authorize } = require("../middleware/auth");
 const router = express.Router();
 
 router.use(authenticate);
-router.get("/", authorize("admin", "accountant"), listAuditEvents);
+router.get("/", authorize("admin", "accountant", "business_viewer"), listAuditEvents);
 
 module.exports = router;

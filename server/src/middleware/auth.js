@@ -2,6 +2,7 @@ const jwt = require("jsonwebtoken");
 const pool = require("../db/pool");
 const { jwtSecret } = require("../config/env");
 const ApiError = require("../utils/apiError");
+const { getAccessProfile } = require("../services/accessProfile.service");
 
 const authenticate = async (req, _res, next) => {
   try {
@@ -26,6 +27,16 @@ const authenticate = async (req, _res, next) => {
     }
 
     req.user = rows[0];
+    if (payload.access_profile_id) {
+      const profile = await getAccessProfile(pool, req.user.id, payload.access_profile_id);
+      if (!profile || !profile.is_active) {
+        throw new ApiError(401, "Selected access context is invalid or inactive.");
+      }
+      req.user.role = profile.role;
+      req.user.customer_id = profile.customer_id;
+      req.user.access_profile_id = profile.id;
+      req.user.access_profile_label = profile.label;
+    }
     if (
       req.user.must_change_password &&
       !["/api/auth/me", "/api/auth/change-password"].includes(req.originalUrl)

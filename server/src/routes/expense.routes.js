@@ -10,7 +10,7 @@ const { authenticate, authorize } = require("../middleware/auth");
 const router = express.Router();
 
 router.use(authenticate);
-router.get("/", authorize("admin", "accountant"), listExpenses);
+router.get("/", authorize("admin", "accountant", "business_viewer"), listExpenses);
 router.post("/imports/preview", authorize("admin", "accountant"), previewExpenseImport);
 router.post("/imports/commit", authorize("admin", "accountant"), commitExpenseImport);
 router.post("/", authorize("admin", "accountant"), createExpense);

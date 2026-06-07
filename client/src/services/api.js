@@ -89,6 +89,11 @@ export const assetUrl = (path) => {
 
 export const api = {
   login: (email, password) => request("/auth/login", { method: "POST", body: { email, password } }),
+  selectContext: (contextSelectionToken, accessProfileId) =>
+    request("/auth/select-context", {
+      method: "POST",
+      body: { context_selection_token: contextSelectionToken, access_profile_id: accessProfileId }
+    }),
   requestPasswordReset: (email) => request("/auth/password-reset/request", { method: "POST", body: { email } }),
   resetPassword: (token, newPassword) =>
     request("/auth/password-reset/confirm", { method: "POST", body: { token, new_password: newPassword } }),
@@ -308,6 +313,9 @@ export const api = {
   users: {
     list: () => request("/users"),
     create: (payload) => request("/users", { method: "POST", body: payload }),
-    update: (id, payload) => request(`/users/${id}`, { method: "PUT", body: payload })
+    update: (id, payload) => request(`/users/${id}`, { method: "PUT", body: payload }),
+    createAccessProfile: (id, payload) => request(`/users/${id}/access-profiles`, { method: "POST", body: payload }),
+    updateAccessProfile: (id, profileId, payload) =>
+      request(`/users/${id}/access-profiles/${profileId}`, { method: "PATCH", body: payload })
   }
 };

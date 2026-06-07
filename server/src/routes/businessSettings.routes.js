@@ -12,7 +12,7 @@ const router = express.Router();
 router.get("/public", getPublicBusinessSettings);
 
 router.use(authenticate);
-router.get("/", authorize("admin", "accountant"), getBusinessSettings);
+router.get("/", authorize("admin", "accountant", "business_viewer"), getBusinessSettings);
 router.put("/", authorize("admin"), updateBusinessSettings);
 router.post("/logo", authorize("admin"), uploadBusinessLogo);
 

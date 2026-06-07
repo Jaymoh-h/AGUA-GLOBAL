@@ -16,13 +16,13 @@ const { authenticate, authorize } = require("../middleware/auth");
 const router = express.Router();
 
 router.use(authenticate);
-router.get("/payees", authorize("admin", "accountant"), listPayees);
+router.get("/payees", authorize("admin", "accountant", "business_viewer"), listPayees);
 router.post("/payees", authorize("admin", "accountant"), createPayee);
 router.patch("/payees/:id", authorize("admin", "accountant"), updatePayee);
 router.patch("/payees/:id/terminate", authorize("admin"), terminatePayee);
-router.get("/runs", authorize("admin", "accountant"), listRuns);
+router.get("/runs", authorize("admin", "accountant", "business_viewer"), listRuns);
 router.post("/runs", authorize("admin", "accountant"), createRun);
-router.get("/runs/:id", authorize("admin", "accountant"), getRun);
+router.get("/runs/:id", authorize("admin", "accountant", "business_viewer"), getRun);
 router.post("/runs/:id/line-items", authorize("admin", "accountant"), addRunLineItem);
 router.patch("/runs/:id/status", authorize("admin", "accountant"), updateRunStatus);
 router.patch("/line-items/:lineId", authorize("admin", "accountant"), updateLineItem);

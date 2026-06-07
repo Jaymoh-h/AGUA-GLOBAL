@@ -1222,6 +1222,36 @@ td button,
   color: #0f766e;
 }
 
+.context-choice {
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-choice:hover {
+  border-color: #0ea5e9;
+}
+
+.access-profile-panel {
+  display: grid;
+  gap: 10px;
+  padding-top: 6px;
+}
+
+.access-profile-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.divider-line {
+  height: 1px;
+  background: #e5e9ef;
+}
+
+.compact-form {
+  gap: 10px;
+}
+
 .empty-state {
   display: grid;
   gap: 4px;

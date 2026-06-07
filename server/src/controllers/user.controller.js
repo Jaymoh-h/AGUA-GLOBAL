@@ -4,9 +4,13 @@ const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
 const { clearPortalLinks, ensurePrimaryPortalLink, replacePortalLinks } = require("../services/portalAccount.service");
+const {
+  createAccessProfile,
+  roles,
+  syncDefaultAccessProfile,
+  updateAccessProfile
+} = require("../services/accessProfile.service");
 const { validatePassword } = require("../utils/passwordPolicy");
-
-const roles = ["admin", "meter_reader", "accountant", "customer"];
 
 const publicColumns = (alias = "u") => `
   ${alias}.id, ${alias}.customer_id, ${alias}.name, ${alias}.email, ${alias}.phone, ${alias}.role, ${alias}.is_active,
@@ -27,7 +31,25 @@ const publicColumns = (alias = "u") => `
     FROM portal_user_customers puc
     JOIN customers pc ON pc.id = puc.customer_id
     WHERE puc.user_id = ${alias}.id
-  ), '[]'::json) AS linked_customers
+  ), '[]'::json) AS linked_customers,
+  COALESCE((
+    SELECT json_agg(
+      json_build_object(
+        'id', uap.id,
+        'role', uap.role,
+        'label', COALESCE(uap.label, initcap(replace(uap.role, '_', ' '))),
+        'customer_id', uap.customer_id,
+        'customer_acc_number', ac.acc_number,
+        'customer_name', ac.name,
+        'is_active', uap.is_active,
+        'is_default', uap.is_default
+      )
+      ORDER BY uap.is_default DESC, uap.created_at ASC, uap.id ASC
+    )
+    FROM user_access_profiles uap
+    LEFT JOIN customers ac ON ac.id = uap.customer_id
+    WHERE uap.user_id = ${alias}.id
+  ), '[]'::json) AS access_profiles
 `;
 
 const normalizeCustomerId = (role, customerId) => {
@@ -105,6 +127,7 @@ const createUser = asyncHandler(async (req, res) => {
     if (role === "customer") {
       await replacePortalLinks(client, rows[0].id, linkedCustomerIds, nextCustomerId, req.user.id);
     }
+    await syncDefaultAccessProfile(client, rows[0], req.user.id);
     const userResult = await client.query(
       `SELECT ${publicColumns("u")}
        FROM users u
@@ -220,6 +243,7 @@ const updateUser = asyncHandler(async (req, res) => {
     } else {
       await clearPortalLinks(client, rows[0].id);
     }
+    await syncDefaultAccessProfile(client, rows[0], req.user.id);
     const afterResult = await client.query(
       `SELECT ${publicColumns("u")}
        FROM users u
@@ -246,8 +270,82 @@ const updateUser = asyncHandler(async (req, res) => {
   }
 });
 
+const createUserAccessProfile = asyncHandler(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const userResult = await client.query("SELECT * FROM users WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const account = userResult.rows[0];
+    if (!account) throw new ApiError(404, "User not found.");
+
+    const profile = await createAccessProfile(client, account.id, req.body, req.user.id);
+    if (profile.role === "customer" && profile.customer_id) {
+      await ensurePrimaryPortalLink(client, account.id, profile.customer_id, req.user.id);
+    }
+    const afterResult = await client.query(
+      `SELECT ${publicColumns("u")}
+       FROM users u
+       LEFT JOIN customers c ON c.id = u.customer_id
+       WHERE u.id = $1`,
+      [account.id]
+    );
+    await recordAuditEvent(client, {
+      req,
+      action: "user.access_profile.created",
+      entityType: "user",
+      entityId: account.id,
+      afterData: { profile }
+    });
+    await client.query("COMMIT");
+    res.status(201).json(afterResult.rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+const updateUserAccessProfile = asyncHandler(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const userResult = await client.query("SELECT * FROM users WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const account = userResult.rows[0];
+    if (!account) throw new ApiError(404, "User not found.");
+
+    const profile = await updateAccessProfile(client, account.id, req.params.profileId, req.body);
+    if (profile.role === "customer" && profile.customer_id && profile.is_active) {
+      await ensurePrimaryPortalLink(client, account.id, profile.customer_id, req.user.id);
+    }
+    const afterResult = await client.query(
+      `SELECT ${publicColumns("u")}
+       FROM users u
+       LEFT JOIN customers c ON c.id = u.customer_id
+       WHERE u.id = $1`,
+      [account.id]
+    );
+    await recordAuditEvent(client, {
+      req,
+      action: "user.access_profile.updated",
+      entityType: "user",
+      entityId: account.id,
+      afterData: { profile }
+    });
+    await client.query("COMMIT");
+    res.json(afterResult.rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = {
   listUsers,
   createUser,
-  updateUser
+  updateUser,
+  createUserAccessProfile,
+  updateUserAccessProfile
 };

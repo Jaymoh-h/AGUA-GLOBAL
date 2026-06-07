@@ -1,4 +1,4 @@
-import { Droplets, LockKeyhole, Mail } from "lucide-react";
+import { Droplets, LockKeyhole, Mail, UserRoundCheck } from "lucide-react";
 import { useState } from "react";
 import { api } from "../services/api";
 
@@ -22,6 +22,9 @@ function LoginPage({ appName, onLogin, sessionMessage = "" }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState(sessionMessage);
   const [loading, setLoading] = useState(false);
+  const [contextSelection, setContextSelection] = useState(null);
+
+  const roleLabel = (role) => String(role || "").replace("_", " ");
 
   const submit = async (event) => {
     event.preventDefault();
@@ -31,9 +34,29 @@ function LoginPage({ appName, onLogin, sessionMessage = "" }) {
 
     try {
       const data = await api.login(email, password);
+      if (data.requires_context_selection) {
+        setContextSelection(data);
+        setPassword("");
+        return;
+      }
       onLogin(data);
     } catch (err) {
       setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const selectContext = async (profileId) => {
+    setLoading(true);
+    setError("");
+    setNotice("");
+    try {
+      const data = await api.selectContext(contextSelection.context_selection_token, profileId);
+      onLogin(data);
+    } catch (err) {
+      setError(err.message);
+      setContextSelection(null);
     } finally {
       setLoading(false);
     }
@@ -159,7 +182,41 @@ function LoginPage({ appName, onLogin, sessionMessage = "" }) {
           </form>
         ) : null}
 
-        {mode === "login" ? (
+        {mode === "login" && contextSelection ? (
+          <div className="form-grid">
+            <div className="panel-heading compact-heading">
+              <h3>Choose Access</h3>
+              <UserRoundCheck size={17} />
+            </div>
+            <p className="muted">Select where you want to continue as {contextSelection.user?.name || email}.</p>
+            <div className="linked-account-list">
+              {(contextSelection.contexts || []).map((context) => (
+                <button
+                  key={context.id}
+                  className="linked-account-option context-choice"
+                  type="button"
+                  onClick={() => selectContext(context.id)}
+                  disabled={loading}
+                >
+                  <span>
+                    <strong>{context.label || roleLabel(context.role)}</strong>
+                    <small>
+                      {context.customer_acc_number
+                        ? `${context.customer_acc_number} - ${context.customer_name || "Customer"}`
+                        : roleLabel(context.role)}
+                    </small>
+                  </span>
+                </button>
+              ))}
+            </div>
+            {error ? <p className="form-error">{error}</p> : null}
+            <button className="secondary-wide-button" type="button" onClick={() => setContextSelection(null)}>
+              Back to sign in
+            </button>
+          </div>
+        ) : null}
+
+        {mode === "login" && !contextSelection ? (
           <form onSubmit={submit} className="form-grid">
             <label>
               Email

@@ -12,8 +12,8 @@ const { authenticate, authorize } = require("../middleware/auth");
 const router = express.Router();
 
 router.use(authenticate);
-router.get("/", authorize("admin", "accountant"), listBills);
-router.get("/:id", authorize("admin", "accountant"), getBill);
+router.get("/", authorize("admin", "accountant", "business_viewer"), listBills);
+router.get("/:id", authorize("admin", "accountant", "business_viewer"), getBill);
 router.post("/:id/email", authorize("admin", "accountant"), sendBillEmail);
 router.post("/:id/sms", authorize("admin", "accountant"), sendBillSms);
 router.patch("/:id/promote", authorize("admin"), promoteBillForPayment);

@@ -475,7 +475,7 @@ const buildActionCenter = async (role) => {
       severity: "medium",
       detail: "Approved contractor or supplier invoices not yet posted to expenses.",
       page: "contractors",
-      roles: ["admin", "accountant"]
+      roles: ["admin", "accountant", "business_viewer"]
     },
     {
       key: "overdue_supplier_invoices",
@@ -486,7 +486,7 @@ const buildActionCenter = async (role) => {
       severity: "high",
       detail: "Open contractor or supplier invoices past their due date.",
       page: "contractors",
-      roles: ["admin", "accountant"]
+      roles: ["admin", "accountant", "business_viewer"]
     },
     {
       key: "duplicate_open_payable_bills",

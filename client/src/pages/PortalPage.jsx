@@ -139,6 +139,16 @@ function PortalPage({ view = "overview" }) {
   const openBalance = useMemo(() => Number(data?.summary?.balance_due || 0), [data]);
   const activeRequests = useMemo(() => Number(data?.summary?.active_requests || 0), [data]);
   const consumptionPaymentTrend = data?.charts?.consumptionPaymentTrend || [];
+  const consumptionPaymentTrendMax = useMemo(
+    () =>
+      paddedChartMax(
+        consumptionPaymentTrend.reduce(
+          (max, row) => Math.max(max, Number(row.billed_amount || 0), Number(row.paid_amount || 0)),
+          0
+        )
+      ),
+    [consumptionPaymentTrend]
+  );
   const billTable = useTableControls(data?.bills || [], {
     searchFields: ["bill_number", "billing_period_name", "billing_month", "due_date", "status"]
   });
@@ -332,10 +342,10 @@ function PortalPage({ view = "overview" }) {
             {consumptionPaymentTrend.length ? (
               <div className="dashboard-chart">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={consumptionPaymentTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <LineChart data={consumptionPaymentTrend} margin={{ top: 18, right: 8, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
-                    <YAxis domain={[0, paddedChartMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
+                    <YAxis domain={[0, consumptionPaymentTrendMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
                     <Tooltip formatter={moneyTooltip} />
                     <Legend />
                     <Line type="monotone" dataKey="billed_amount" name="Billed" stroke="#0f766e" strokeWidth={2} dot={false} />

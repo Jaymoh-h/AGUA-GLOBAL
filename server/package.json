@@ -40,6 +40,7 @@
     "db:migrate:hold-source-backup-bills": "node src/db/runSqlFile.js database/migrations/038_hold_unallocated_source_backup_bills.sql",
     "db:migrate:supporting-documents": "node src/db/runSqlFile.js database/migrations/039_supporting_documents.sql",
     "db:migrate:contractor-invoices": "node src/db/runSqlFile.js database/migrations/040_contractor_invoices.sql",
+    "db:migrate:user-access-profiles": "node src/db/runSqlFile.js database/migrations/041_user_access_profiles.sql",
     "payment:check": "node src/db/paymentCheck.js",
     "db:seed": "node src/db/seed.js"
   },
