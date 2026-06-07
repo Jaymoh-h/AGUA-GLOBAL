@@ -741,6 +741,135 @@ const listSourceBillingRequests = asyncHandler(async (_req, res) => {
   res.json(rows);
 });
 
+const listSourceBillingWorkspace = asyncHandler(async (req, res) => {
+  const periodSeed = req.query.period_start || req.query.reading_date || new Date().toISOString().slice(0, 10);
+  const period = getMonthlyPeriodDates(periodSeed);
+  const { rows } = await pool.query(
+    `WITH selected_period AS (
+       SELECT $1::date AS period_start, $2::date AS period_end
+     ),
+     saved_period AS (
+       SELECT bp.*
+       FROM billing_periods bp, selected_period sp
+       WHERE bp.period_start = sp.period_start
+       LIMIT 1
+     )
+     SELECT c.id AS customer_id,
+            c.name AS customer_name,
+            c.acc_number,
+            z.name AS zone_name,
+            m.id AS source_meter_id,
+            m.meter_number AS source_meter_number,
+            source_reading.id AS source_reading_id,
+            source_reading.reading_date AS source_reading_date,
+            source_reading.reading_value AS source_reading_value,
+            source_prev.reading_date AS previous_source_reading_date,
+            source_prev.reading_value AS previous_source_reading_value,
+            CASE
+              WHEN source_reading.id IS NOT NULL AND source_prev.reading_value IS NOT NULL
+              THEN GREATEST(source_reading.reading_value - source_prev.reading_value, 0)
+              ELSE NULL
+            END AS source_units_used,
+            client_reading.id AS client_reading_id,
+            client_reading.meter_number AS client_meter_number,
+            client_reading.reading_date AS client_reading_date,
+            client_reading.reading_value AS client_reading_value,
+            client_bill.id AS client_bill_id,
+            client_bill.bill_number AS client_bill_number,
+            client_bill.bill_pay_status AS client_bill_pay_status,
+            client_bill.status AS client_bill_status,
+            COALESCE(NULLIF(client_bill.total_amount, 0), client_bill.amount) AS client_bill_total,
+            sbr.id AS source_billing_request_id,
+            sbr.status AS source_billing_request_status,
+            sbr.reason AS source_billing_reason,
+            sbr.bill_id AS source_bill_id,
+            source_bill.bill_number AS source_bill_number,
+            source_bill.bill_pay_status AS source_bill_pay_status,
+            source_bill.status AS source_bill_status,
+            COALESCE(NULLIF(source_bill.total_amount, 0), source_bill.amount) AS source_bill_total,
+            COALESCE(bill_options.bills, '[]'::json) AS bill_options
+     FROM selected_period sp
+     JOIN customers c ON c.status = 'active'
+     LEFT JOIN zones z ON z.id = c.zone_id
+     JOIN meters m ON m.customer_id = c.id
+                  AND m.status = 'active'
+                  AND m.meter_role = 'source_backup'
+     LEFT JOIN LATERAL (
+       SELECT mr.*
+       FROM meter_readings mr
+       WHERE mr.customer_id = c.id
+         AND mr.meter_id = m.id
+         AND mr.reading_date >= sp.period_start
+         AND mr.reading_date <= sp.period_end
+       ORDER BY mr.reading_date DESC, mr.id DESC
+       LIMIT 1
+     ) source_reading ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT mr.*
+       FROM meter_readings mr
+       WHERE mr.customer_id = c.id
+         AND mr.meter_id = m.id
+         AND (source_reading.id IS NULL OR mr.id <> source_reading.id)
+         AND mr.reading_date < COALESCE(source_reading.reading_date, sp.period_start)
+       ORDER BY mr.reading_date DESC, mr.id DESC
+       LIMIT 1
+     ) source_prev ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT mr.*, cm.meter_number
+       FROM meter_readings mr
+       JOIN meters cm ON cm.id = mr.meter_id
+       WHERE mr.customer_id = c.id
+         AND cm.meter_role = 'client_billing'
+         AND mr.reading_date >= sp.period_start
+         AND mr.reading_date <= sp.period_end
+       ORDER BY mr.reading_date DESC, mr.id DESC
+       LIMIT 1
+     ) client_reading ON TRUE
+     LEFT JOIN source_billing_requests sbr ON sbr.current_reading_id = source_reading.id
+     LEFT JOIN bills source_bill ON source_bill.id = sbr.bill_id
+     LEFT JOIN LATERAL (
+       SELECT b.*
+       FROM bills b
+       LEFT JOIN saved_period saved ON TRUE
+       WHERE b.customer_id = c.id
+         AND b.billing_source <> 'source_backup'
+         AND (
+           (saved.id IS NOT NULL AND b.billing_period_id = saved.id) OR
+           (saved.id IS NULL AND b.billing_month = sp.period_start)
+         )
+       ORDER BY b.bill_pay_status = 'payable' DESC, b.id DESC
+       LIMIT 1
+     ) client_bill ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT json_agg(
+         json_build_object(
+           'id', b.id,
+           'bill_number', b.bill_number,
+           'billing_source', b.billing_source,
+           'bill_pay_status', b.bill_pay_status,
+           'status', b.status,
+           'total_amount', COALESCE(NULLIF(b.total_amount, 0), b.amount),
+           'paid_amount', b.paid_amount,
+           'balance_amount', b.balance_amount,
+           'units_used', b.units_used
+         )
+         ORDER BY b.bill_pay_status = 'payable' DESC, b.billing_source ASC, b.id ASC
+       ) AS bills
+       FROM bills b
+       LEFT JOIN saved_period saved ON TRUE
+       WHERE b.customer_id = c.id
+         AND (
+           (saved.id IS NOT NULL AND b.billing_period_id = saved.id) OR
+           (saved.id IS NULL AND b.billing_month = sp.period_start)
+         )
+     ) bill_options ON TRUE
+     ORDER BY z.name ASC, c.acc_number ASC, m.installed_at DESC, m.id DESC`,
+    [period.periodStart, period.periodEnd]
+  );
+
+  res.json({ period, rows });
+});
+
 const reviewSourceBillingRequest = asyncHandler(async (req, res) => {
   const { action, review_notes } = req.body;
   const reviewAction = String(action || "").trim();
@@ -1262,6 +1391,7 @@ module.exports = {
   listPenaltyApplications,
   listBillingPeriods,
   listSourceBillingRequests,
+  listSourceBillingWorkspace,
   previewPenaltyApplications,
   reapplyPenaltyApplication,
   reviewSourceBillingRequest,

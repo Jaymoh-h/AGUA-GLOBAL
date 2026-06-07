@@ -7,6 +7,7 @@ const {
   listPenaltyApplications,
   listBillingPeriods,
   listSourceBillingRequests,
+  listSourceBillingWorkspace,
   previewPenaltyApplications,
   reapplyPenaltyApplication,
   reviewSourceBillingRequest,
@@ -27,6 +28,7 @@ router.get("/settings", authorize("admin", "accountant"), getBillingSettings);
 router.put("/settings", authorize("admin", "accountant"), updateBillingSettings);
 router.get("/penalties", authorize("admin", "accountant"), listPenaltyApplications);
 router.get("/source-billing-requests", authorize("admin", "accountant"), listSourceBillingRequests);
+router.get("/source-billing-workspace", authorize("admin", "accountant"), listSourceBillingWorkspace);
 router.patch("/source-billing-requests/:id/review", authorize("admin"), reviewSourceBillingRequest);
 router.get("/penalties/preview", authorize("admin", "accountant"), previewPenaltyApplications);
 router.post("/penalties/apply", authorize("admin", "accountant"), applyPenaltyApplications);

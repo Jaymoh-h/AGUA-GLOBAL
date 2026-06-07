@@ -25,7 +25,17 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [eligibleReadingCustomers, setEligibleReadingCustomers] = useState([]);
   const [meterEvents, setMeterEvents] = useState([]);
   const [sourceRequests, setSourceRequests] = useState([]);
+  const [sourceWorkspace, setSourceWorkspace] = useState({ period: null, rows: [] });
   const [form, setForm] = useState({
+    customer_id: "",
+    meter_id: "",
+    reading_value: "",
+    previous_reading_value: "",
+    reading_date: today(),
+    fallback_reason: "",
+    correction_reason: ""
+  });
+  const [sourceForm, setSourceForm] = useState({
     customer_id: "",
     meter_id: "",
     reading_value: "",
@@ -52,6 +62,7 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
   });
   const [replacementContext, setReplacementContext] = useState(null);
   const [readingContext, setReadingContext] = useState(null);
+  const [sourceContext, setSourceContext] = useState(null);
   const [csvText, setCsvText] = useState("acc_number,reading_date,reading_value,notes\n");
   const [importCorrectionReason, setImportCorrectionReason] = useState("");
   const [importPreview, setImportPreview] = useState(null);
@@ -71,12 +82,15 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [, setMessage] = useToastMessage();
 
   const load = async () => {
-    const [customerRows, readingRows, eligibility, eventRows, sourceRows] = await Promise.all([
+    const [customerRows, readingRows, eligibility, eventRows, sourceRows, sourceWorkspaceRows] = await Promise.all([
       api.customers.list(),
       api.readings.list(),
       api.readings.eligibleCustomers(form.reading_date),
       api.meters.events(),
-      ["admin", "accountant"].includes(user?.role) ? api.billing.sourceBillingRequests.list() : Promise.resolve([])
+      ["admin", "accountant"].includes(user?.role) ? api.billing.sourceBillingRequests.list() : Promise.resolve([]),
+      ["admin", "accountant"].includes(user?.role)
+        ? api.billing.sourceBillingRequests.workspace(sourceForm.reading_date)
+        : Promise.resolve({ period: null, rows: [] })
     ]);
     setCustomers(customerRows);
     setReadings(readingRows);
@@ -84,6 +98,7 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
     setEligibleReadingCustomers(eligibility.rows || []);
     setMeterEvents(eventRows);
     setSourceRequests(sourceRows);
+    setSourceWorkspace(sourceWorkspaceRows);
   };
 
   useEffect(() => {
@@ -115,7 +130,33 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
     };
   }, [form.reading_date, form.customer_id, editingId]);
 
+  useEffect(() => {
+    if (!["admin", "accountant"].includes(user?.role)) return undefined;
+    let ignore = false;
+    api.billing.sourceBillingRequests
+      .workspace(sourceForm.reading_date)
+      .then((workspace) => {
+        if (!ignore) {
+          setSourceWorkspace(workspace);
+          if (!sourceForm.customer_id && workspace.period?.periodEnd && sourceForm.reading_date !== workspace.period.periodEnd) {
+            setSourceForm((current) =>
+              current.customer_id || current.reading_date === workspace.period.periodEnd
+                ? current
+                : { ...current, reading_date: workspace.period.periodEnd }
+            );
+          }
+        }
+      })
+      .catch((err) => {
+        if (!ignore) setMessage(err.message);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [sourceForm.reading_date, user?.role]);
+
   const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  const setSourceField = (field, value) => setSourceForm((current) => ({ ...current, [field]: value }));
   const selectReadingCustomer = (customerId) => {
     const eligible = eligibleReadingCustomers.find((customer) => Number(customer.id) === Number(customerId));
     setForm((current) => ({
@@ -126,11 +167,21 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
       reading_date: eligible?.suggested_reading_date || current.reading_date
     }));
   };
+  const selectSourceWorkspaceRow = (row) => {
+    setSourceForm((current) => ({
+      ...current,
+      customer_id: String(row.customer_id),
+      meter_id: String(row.source_meter_id),
+      reading_date: sourceWorkspace.period?.periodEnd || current.reading_date,
+      fallback_reason: row.source_billing_reason || current.fallback_reason || ""
+    }));
+  };
   const setMeterField = (field, value) => setMeterForm((current) => ({ ...current, [field]: value }));
   const setReplacementField = (field, value) =>
     setReplacementForm((current) => ({ ...current, [field]: value }));
   const setEventField = (field, value) => setEventForm((current) => ({ ...current, [field]: value }));
   const restrictedReadingPeriod = ["closed", "locked"].includes(readingContext?.billingPeriod?.status);
+  const restrictedSourcePeriod = ["closed", "locked"].includes(sourceContext?.billingPeriod?.status);
   const restrictedReplacementPeriod = ["closed", "locked"].includes(replacementContext?.billingPeriod?.status);
 
   const importReady = useMemo(
@@ -167,6 +218,31 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
       ignore = true;
     };
   }, [form.customer_id, form.reading_date, form.meter_id]);
+
+  useEffect(() => {
+    let ignore = false;
+
+    if (!sourceForm.customer_id || !sourceForm.reading_date || !sourceForm.meter_id) {
+      setSourceContext(null);
+      return undefined;
+    }
+
+    api.readings
+      .context(sourceForm.customer_id, sourceForm.reading_date, sourceForm.meter_id)
+      .then((context) => {
+        if (!ignore) setSourceContext(context);
+      })
+      .catch((err) => {
+        if (!ignore) {
+          setSourceContext(null);
+          setMessage(err.message);
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [sourceForm.customer_id, sourceForm.reading_date, sourceForm.meter_id]);
 
   useEffect(() => {
     let ignore = false;
@@ -269,6 +345,40 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
       fallback_reason: "",
       correction_reason: ""
     });
+  };
+
+  const submitSourceReading = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    try {
+      const result = await api.readings.create({
+        customer_id: Number(sourceForm.customer_id),
+        meter_id: Number(sourceForm.meter_id || sourceContext?.activeMeter?.id),
+        reading_value: Number(sourceForm.reading_value),
+        previous_reading_value: sourceForm.previous_reading_value === "" ? null : Number(sourceForm.previous_reading_value),
+        reading_date: sourceForm.reading_date,
+        fallback_reason: sourceForm.fallback_reason,
+        correction_reason: sourceForm.correction_reason
+      });
+      setSourceForm({
+        customer_id: "",
+        meter_id: "",
+        reading_value: "",
+        previous_reading_value: "",
+        reading_date: sourceWorkspace?.period?.periodEnd || today(),
+        fallback_reason: "",
+        correction_reason: ""
+      });
+      setSourceContext(null);
+      await load();
+      setMessage(
+        result.sourceBillingRequest
+          ? "Source reading submitted for billing review."
+          : "Source reading submitted."
+      );
+    } catch (err) {
+      setMessage(err.message);
+    }
   };
 
   const submitMeter = async (event) => {
@@ -469,6 +579,12 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const showSourceReview = !hasReadingFocus || focusKey === "pending_source_billing";
   const showReadingRegisters = !hasReadingFocus;
   const selectedCustomer = customers.find((customer) => Number(customer.id) === Number(form.customer_id));
+  const selectedSourceWorkspaceRow = sourceWorkspace.rows?.find(
+    (row) =>
+      Number(row.customer_id) === Number(sourceForm.customer_id) &&
+      Number(row.source_meter_id) === Number(sourceForm.meter_id)
+  );
+  const sourceRowsMissingReading = (sourceWorkspace.rows || []).filter((row) => !row.source_reading_id);
   const readingCustomerOptions = editingId
     ? customers
     : selectedCustomer && !eligibleReadingCustomers.some((customer) => Number(customer.id) === Number(selectedCustomer.id))
@@ -501,6 +617,18 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
     : sourceRequests;
   const sourceRequestTable = useTableControls(focusedSourceRequests, {
     searchFields: ["customer_name", "acc_number", "meter_number", "status", "reason", "bill_number", "requested_by_name"]
+  });
+  const sourceWorkspaceTable = useTableControls(sourceWorkspace.rows || [], {
+    searchFields: [
+      "customer_name",
+      "acc_number",
+      "zone_name",
+      "source_meter_number",
+      "client_meter_number",
+      "source_billing_request_status",
+      "source_bill_number",
+      "client_bill_number"
+    ]
   });
   const exportReadings = () => {
     downloadCsvRows(
@@ -651,13 +779,12 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
             </label>
             {readingContext?.activeMeter?.meter_role === "source_backup" ? (
               <label>
-                Source fallback reason
+                Source review note
                 <textarea
                   value={form.fallback_reason}
                   onChange={(event) => setField("fallback_reason", event.target.value)}
                   rows="2"
-                  required
-                  placeholder="Why the client-side meter cannot be used for this bill"
+                  placeholder="Optional note for source-side billing review"
                 />
               </label>
             ) : null}
@@ -1009,6 +1136,198 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
           ) : null}
 
           {showSourceReview && ["admin", "accountant"].includes(user?.role) ? (
+          <>
+          <div className="panel">
+            <div className="panel-heading">
+              <div>
+                <h3>Source Meter Reading Entry</h3>
+                <p className="muted">
+                  {sourceWorkspace?.period?.name || "Selected period"} source meters. Normal route readings stay separate from this source-side workflow.
+                </p>
+              </div>
+              <Gauge size={18} />
+            </div>
+            <form className="form-grid" onSubmit={submitSourceReading}>
+              <label>
+                Source period date
+                <input
+                  value={sourceForm.reading_date}
+                  onChange={(event) => setSourceField("reading_date", event.target.value)}
+                  type="date"
+                  required
+                />
+              </label>
+              <label>
+                Source customer / meter
+                <select
+                  value={sourceForm.customer_id && sourceForm.meter_id ? `${sourceForm.customer_id}:${sourceForm.meter_id}` : ""}
+                  onChange={(event) => {
+                    if (!event.target.value) {
+                      setSourceForm((current) => ({
+                        ...current,
+                        customer_id: "",
+                        meter_id: "",
+                        reading_value: "",
+                        previous_reading_value: "",
+                        fallback_reason: "",
+                        correction_reason: ""
+                      }));
+                      return;
+                    }
+                    const [customerId, meterId] = event.target.value.split(":");
+                    const row = (sourceWorkspace.rows || []).find(
+                      (item) => Number(item.customer_id) === Number(customerId) && Number(item.source_meter_id) === Number(meterId)
+                    );
+                    if (row) selectSourceWorkspaceRow(row);
+                  }}
+                  required
+                >
+                  <option value="">Select source meter</option>
+                  {(sourceWorkspace.rows || []).map((row) => (
+                    <option key={`${row.customer_id}-${row.source_meter_id}`} value={`${row.customer_id}:${row.source_meter_id}`}>
+                      {row.acc_number} - {row.customer_name} ({row.source_meter_number})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Previous source reading
+                <input
+                  value={
+                    sourceContext?.previousReading?.reading_value ??
+                    selectedSourceWorkspaceRow?.previous_source_reading_value ??
+                    ""
+                  }
+                  readOnly
+                  placeholder="No earlier source reading"
+                />
+              </label>
+              <label>
+                Source end reading
+                <input
+                  value={sourceForm.reading_value}
+                  onChange={(event) => setSourceField("reading_value", event.target.value)}
+                  type="number"
+                  min={sourceContext?.previousReading?.reading_value || selectedSourceWorkspaceRow?.previous_source_reading_value || 0}
+                  required
+                />
+              </label>
+              <label>
+                Source review note
+                <textarea
+                  value={sourceForm.fallback_reason}
+                  onChange={(event) => setSourceField("fallback_reason", event.target.value)}
+                  rows="2"
+                  placeholder="Optional note for the billing review"
+                />
+              </label>
+              <label>
+                Correction reason
+                <textarea
+                  value={sourceForm.correction_reason}
+                  onChange={(event) => setSourceField("correction_reason", event.target.value)}
+                  rows="2"
+                  required={restrictedSourcePeriod}
+                  placeholder={restrictedSourcePeriod ? "Required for closed or locked periods" : ""}
+                />
+              </label>
+              {selectedSourceWorkspaceRow?.source_reading_id ? (
+                <p className="muted">
+                  This source meter already has a reading for the selected period. Use the review table below, or edit the reading from Recent Readings.
+                </p>
+              ) : null}
+              <button className="primary-button" type="submit" disabled={Boolean(selectedSourceWorkspaceRow?.source_reading_id)}>
+                <Send size={17} />
+                Submit source reading
+              </button>
+            </form>
+            <div className="reading-context">
+              <div>
+                <span>Source meters</span>
+                <strong>{Number(sourceWorkspace.rows?.length || 0).toLocaleString()}</strong>
+              </div>
+              <div>
+                <span>Missing source readings</span>
+                <strong>{Number(sourceRowsMissingReading.length || 0).toLocaleString()}</strong>
+              </div>
+              <div>
+                <span>Selected client reading</span>
+                <strong>{selectedSourceWorkspaceRow?.client_reading_id ? "Captured" : "-"}</strong>
+              </div>
+              <div>
+                <span>Selected source review</span>
+                <strong>{selectedSourceWorkspaceRow?.source_billing_request_status || "-"}</strong>
+              </div>
+            </div>
+            <TableControls table={sourceWorkspaceTable} label="source meters" placeholder="Search source workspace" />
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Customer</th>
+                    <th>Source Meter</th>
+                    <th>Source Reading</th>
+                    <th>Client Reading</th>
+                    <th>Bills</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sourceWorkspaceTable.visibleRows.length ? (
+                    sourceWorkspaceTable.visibleRows.map((row) => (
+                      <tr key={`${row.customer_id}-${row.source_meter_id}`}>
+                        <td>
+                          <strong>{row.customer_name}</strong>
+                          <small>{row.acc_number}{row.zone_name ? ` | ${row.zone_name}` : ""}</small>
+                        </td>
+                        <td>
+                          {row.source_meter_number}
+                          <small>{meterRoleLabels.source_backup}</small>
+                        </td>
+                        <td>
+                          {row.source_reading_id ? Number(row.source_reading_value || 0).toLocaleString() : "Missing"}
+                          <small>
+                            {row.source_reading_date?.slice(0, 10) ||
+                              (row.previous_source_reading_value === null || row.previous_source_reading_value === undefined
+                                ? "No earlier source reading"
+                                : `Previous ${Number(row.previous_source_reading_value).toLocaleString()}`)}
+                          </small>
+                        </td>
+                        <td>
+                          {row.client_reading_id ? Number(row.client_reading_value || 0).toLocaleString() : "Not captured"}
+                          <small>{row.client_meter_number || row.client_reading_date?.slice(0, 10) || ""}</small>
+                        </td>
+                        <td>
+                          {row.source_bill_number ? (
+                            <small>Source: {row.source_bill_number} | {row.source_bill_pay_status} | {money(row.source_bill_total)}</small>
+                          ) : (
+                            <small>Source: none</small>
+                          )}
+                          {row.client_bill_number ? (
+                            <small>Client: {row.client_bill_number} | {row.client_bill_pay_status} | {money(row.client_bill_total)}</small>
+                          ) : (
+                            <small>Client: none</small>
+                          )}
+                        </td>
+                        <td>
+                          <button type="button" onClick={() => selectSourceWorkspaceRow(row)}>
+                            {row.source_reading_id ? "Use meter" : "Enter reading"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <EmptyTableRow
+                      colSpan={6}
+                      title="No source meters found"
+                      detail="Customers with active source backup meters will appear here for source-side reading and bill review."
+                    />
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           <div className="panel">
             <div className="panel-heading">
               <h3>Source Billing Review</h3>
@@ -1104,6 +1423,7 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
               </table>
             </div>
           </div>
+          </>
           ) : null}
 
           {showReadingRegisters ? (

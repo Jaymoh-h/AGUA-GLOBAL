@@ -518,9 +518,16 @@ const getCustomerStatement = asyncHandler(async (req, res) => {
     ? await pool.query(
         `SELECT
            COALESCE((
-             SELECT SUM(COALESCE(NULLIF(total_amount, 0), amount))
-             FROM bills
-             WHERE customer_id = $1 AND billing_month < $2::date AND bill_pay_status = 'payable'
+             SELECT SUM(COALESCE(NULLIF(b.total_amount, 0), b.amount))
+             FROM bills b
+             LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
+             WHERE b.customer_id = $1
+               AND COALESCE(
+                 bp.period_end,
+                 (date_trunc('month', b.billing_month)::date + INTERVAL '1 month - 1 day')::date,
+                 b.billing_month
+               ) < $2::date
+               AND b.bill_pay_status = 'payable'
            ), 0) +
            CASE
              WHEN COALESCE(c.opening_balance_amount, 0) > 0
@@ -581,7 +588,11 @@ const getCustomerStatement = asyncHandler(async (req, res) => {
        SELECT
          'bill' AS transaction_type,
          b.id,
-         b.billing_month AS transaction_date,
+         COALESCE(
+           bp.period_end,
+           (date_trunc('month', b.billing_month)::date + INTERVAL '1 month - 1 day')::date,
+           b.billing_month
+         ) AS transaction_date,
          COALESCE(b.bill_number, 'Bill #' || b.id::text) AS reference,
          COALESCE(bp.name, to_char(b.billing_month, 'FMMonth YYYY')) AS description,
          COALESCE(NULLIF(b.total_amount, 0), b.amount) AS debit,
@@ -591,8 +602,22 @@ const getCustomerStatement = asyncHandler(async (req, res) => {
        LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
        WHERE b.customer_id = $1
          AND b.bill_pay_status = 'payable'
-         AND ($2::date IS NULL OR b.billing_month >= $2::date)
-         AND ($3::date IS NULL OR b.billing_month <= $3::date)
+         AND (
+           $2::date IS NULL OR
+           COALESCE(
+             bp.period_end,
+             (date_trunc('month', b.billing_month)::date + INTERVAL '1 month - 1 day')::date,
+             b.billing_month
+           ) >= $2::date
+         )
+         AND (
+           $3::date IS NULL OR
+           COALESCE(
+             bp.period_end,
+             (date_trunc('month', b.billing_month)::date + INTERVAL '1 month - 1 day')::date,
+             b.billing_month
+           ) <= $3::date
+         )
 
        UNION ALL
 

@@ -89,11 +89,7 @@ const normalizeOptionalReadingValue = (value, label) => {
 
 const billingSourceForMeter = (meter) => (meter?.meter_role === "source_backup" ? "source_backup" : "client_meter");
 
-const requireSourceFallbackReason = (meter, reason) => {
-  if (meter?.meter_role === "source_backup" && !String(reason || "").trim()) {
-    throw new ApiError(400, "A fallback reason is required when billing from a source-side meter.");
-  }
-};
+const defaultSourceReviewReason = "Source meter reading captured for billing review.";
 
 const upsertPendingSourceBillingRequest = async (
   client,
@@ -156,7 +152,7 @@ const upsertPendingSourceBillingRequest = async (
       charge.reconnectionFeeAmount,
       JSON.stringify(charge.tariffSnapshot),
       billingPeriod.due_date,
-      reason,
+      String(reason || "").trim() || defaultSourceReviewReason,
       requestedBy
     ]
   );
@@ -328,7 +324,6 @@ const createReadingWithBill = async (
     assertMeterBelongsToCustomer(activeMeter, customer_id);
   }
   assertMeterRole(activeMeter, ["client_billing", "source_backup"]);
-  requireSourceFallbackReason(activeMeter, fallback_reason || notes);
 
   const duplicateResult = await client.query(
     "SELECT id FROM meter_readings WHERE meter_id = $1 AND reading_date = $2",
@@ -548,7 +543,7 @@ const listEligibleReadingCustomers = asyncHandler(async (req, res) => {
        FROM meters m
        WHERE m.customer_id = c.id
          AND m.status = 'active'
-         AND m.meter_role IN ('client_billing', 'source_backup')
+         AND m.meter_role = 'client_billing'
      ) meter_counts ON TRUE
      LEFT JOIN LATERAL (
        SELECT mr.reading_date AS latest_reading_date,
@@ -556,7 +551,7 @@ const listEligibleReadingCustomers = asyncHandler(async (req, res) => {
        FROM meter_readings mr
        JOIN meters m ON m.id = mr.meter_id
        WHERE mr.customer_id = c.id
-         AND m.meter_role IN ('client_billing', 'source_backup')
+         AND m.meter_role = 'client_billing'
        ORDER BY mr.reading_date DESC, mr.id DESC
        LIMIT 1
      ) latest ON TRUE
@@ -580,7 +575,7 @@ const listEligibleReadingCustomers = asyncHandler(async (req, res) => {
          FROM meter_readings mr
          JOIN meters m ON m.id = mr.meter_id
          WHERE mr.customer_id = c.id
-           AND m.meter_role IN ('client_billing', 'source_backup')
+           AND m.meter_role = 'client_billing'
            AND mr.reading_date >= $1::date
            AND mr.reading_date <= $2::date
        )
@@ -863,7 +858,6 @@ const recalculateBillForReading = async (
   );
   const sourceRequest = sourceRequestResult.rows[0] || null;
   const sourceFallbackReason = sourceRequest?.reason || reading.notes || correctionReason || null;
-  requireSourceFallbackReason(activeMeter, sourceFallbackReason);
 
   if (activeMeter.meter_role === "source_backup" && !existingBill) {
     const request = await upsertPendingSourceBillingRequest(client, {

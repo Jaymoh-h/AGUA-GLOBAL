@@ -193,6 +193,8 @@ export const api = {
     },
     sourceBillingRequests: {
       list: () => request("/billing/source-billing-requests"),
+      workspace: (periodStart = "") =>
+        request(`/billing/source-billing-workspace${periodStart ? `?period_start=${periodStart}` : ""}`),
       review: (id, payload) =>
         request(`/billing/source-billing-requests/${id}/review`, { method: "PATCH", body: payload })
     }
