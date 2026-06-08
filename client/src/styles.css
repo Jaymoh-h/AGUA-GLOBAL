@@ -1322,6 +1322,12 @@ td button,
   text-align: center;
 }
 
+.user-email-cell {
+  max-width: 220px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .production-week-summary td {
   background: #f8fafc;
   font-weight: 800;

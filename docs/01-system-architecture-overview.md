@@ -15,7 +15,7 @@ AGUA Global is a full-stack water utility operations system for customer managem
 
 ```mermaid
 flowchart LR
-  User["Admin / Accountant / Meter Reader / Customer"] --> Client["React Client"]
+  User["Admin / Accountant / Meter Reader / Customer / Business Viewer"] --> Client["React Client"]
   Client --> API["Express API"]
   API --> Auth["JWT Auth And Role Guards"]
   API --> DB["PostgreSQL"]
@@ -29,7 +29,7 @@ flowchart LR
 Frontend:
 
 - Located in `client/`.
-- Provides operational pages for dashboard, customers, readings, bills, payments, reports, production, payroll, communications, maintenance, and portal access.
+- Provides operational pages for dashboard, customers, readings, bills, payments, reports, production, payroll, contractor invoices, communications, maintenance, and portal access.
 - Uses `VITE_API_URL` to call the backend API.
 
 Backend:
@@ -59,7 +59,9 @@ Database:
 - Dashboard and reports
 - Production source meters, weekly production readings, and electricity top-ups
 - Payroll payees, payroll runs, approvals, and expense posting
+- Contractor register, contractor invoices, approval, expense posting, and contractor reporting
 - Communications, invoice alerts, campaigns, reusable templates, and delivery logs
+- Supporting documents linked to maintenance requests, expenses, and contractor invoices
 - Audit trail
 
 ## Security Model
@@ -67,6 +69,8 @@ Database:
 - All operational API routes require authentication unless explicitly public.
 - Role authorization is handled at the route layer.
 - Customer accounts are restricted to `/api/portal` and their own statement/payment surfaces.
+- Business viewer accounts receive read-oriented visibility for dashboards, reports, audit, bills, payments, production, payroll, contractor invoices, and selected business settings.
+- Access profiles allow one user login to operate through a selected context/role when multiple profiles are active.
 - Admin-only routes include user management, backup report, some review actions, business settings updates, and destructive/high-risk operations.
 
 ## Key Deployment Shape

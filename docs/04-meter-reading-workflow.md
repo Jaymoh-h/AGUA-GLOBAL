@@ -92,3 +92,38 @@ Production workflow:
 5. Use dashboard and production reports for trend review.
 
 Electricity top-ups create linked expense records for finance tracking.
+
+## Production Reading Context
+
+The production weekly reading form loads context for the selected reading date:
+
+- Previous prepaid kWh balance.
+- Date that previous kWh balance was recorded.
+- Previous reading per active production meter.
+- Date of each previous meter reading.
+
+This is exposed through:
+
+```text
+GET /api/production/reading-context?reading_date=YYYY-MM-DD
+```
+
+The context is informational. It helps operators enter Monday weekly readings without changing the underlying calculation model.
+
+## Production Report Printing
+
+Production reports support two print modes:
+
+- Full production report: each week prints as a summary block followed by meter detail rows.
+- Weekly summary print: keeps the summary-only row layout.
+
+Full report meter detail rows include:
+
+- Week
+- Meter
+- Previous reading
+- Current reading
+- Consumption
+- Revenue
+
+The production print surface is hidden during normal screen use and only appears when printing.

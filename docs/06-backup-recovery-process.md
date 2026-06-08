@@ -8,9 +8,12 @@ This document defines the minimum operational process for protecting AGUA Global
 - Vercel environment variables.
 - GitHub repository.
 - Uploaded business logo data if using filesystem storage locally.
+- Supporting document files if using local filesystem document storage.
 - Provider configuration records and approved WhatsApp template names.
 
 In production, use `LOGO_STORAGE_MODE=data-url` so business logos are stored in PostgreSQL and included in database backups.
+
+Supporting documents are tracked in PostgreSQL metadata but stored as files. If production uses filesystem document storage, back up both the database and the document storage directory together so metadata and files stay consistent.
 
 ## Backup Frequency
 
@@ -82,6 +85,15 @@ After migration:
 - Run API health check.
 - Run affected workflow smoke test.
 - Record result in implementation records.
+
+## Supporting Document Recovery
+
+For maintenance, expense, and contractor invoice attachments:
+
+- Restore database rows from backup.
+- Restore matching stored files from the same backup point.
+- Confirm downloads work through `/api/documents/:id/download`.
+- Soft-deleted documents should remain deleted unless the business explicitly approves recovery.
 
 ## Incident Recovery Checklist
 

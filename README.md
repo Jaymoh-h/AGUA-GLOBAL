@@ -19,7 +19,8 @@ The project documentation suite lives in [`docs/`](docs/README.md). It includes 
 ## What Is Included
 
 - JWT login/logout flow
-- Roles: `admin`, `meter_reader`, `accountant`, `customer`
+- Roles: `admin`, `meter_reader`, `accountant`, `customer`, `business_viewer`
+- User access contexts so one login can operate through an assigned role/profile
 - Customer CRUD with account numbers and customer rates
 - Rate and zone/location management for customer dropdowns
 - Effective-dated tariff versions so billing uses the tariff active on the reading date
@@ -49,12 +50,16 @@ The project documentation suite lives in [`docs/`](docs/README.md). It includes 
 - Password reset by email when SMTP is configured
 - Dashboard summaries for billed water units, cash collected, bills due, and arrears
 - Customer portal with dashboard, bills, receipts, requests, and PDF statement download
+- Multi-account customer portal linking
 - Email/SMS/WhatsApp invoice and receipt delivery hooks with delivery history
 - Communications center for invoice alerts, saved templates, campaigns, and campaign results
 - WhatsApp sending through Twilio or Meta, including approved template metadata
+- Supporting document uploads for maintenance requests, expenses, and contractor invoices
 - Dual/source-side meter billing review and payability promotion
 - Weekly production monitoring with source meters and electricity top-ups
+- Production weekly reading context with previous prepaid kWh balance and previous meter readings
 - Payroll management and payroll expense posting
+- Contractor invoice management with approval, document attachments, expense posting, and reporting
 - Printable full or individual accountant reports with business profile header, logo, and footer notes
 - REST API routes for the main resources
 
@@ -98,6 +103,13 @@ Use these files in pgAdmin, DBeaver, TablePlus, or another PostgreSQL DBMS:
 - Communication campaign names migration path: `server/database/migrations/032_communication_campaign_names.sql`
 - Communication templates migration path: `server/database/migrations/033_communication_templates.sql`
 - WhatsApp template metadata migration path: `server/database/migrations/034_whatsapp_template_metadata.sql`
+- Production meter replacement migration path: `server/database/migrations/035_production_meter_replacement.sql`
+- Maintenance expense links migration path: `server/database/migrations/036_maintenance_expense_links.sql`
+- Portal user customer links migration path: `server/database/migrations/037_portal_user_customer_links.sql`
+- Source backup bill hold cleanup migration path: `server/database/migrations/038_hold_unallocated_source_backup_bills.sql`
+- Supporting documents migration path: `server/database/migrations/039_supporting_documents.sql`
+- Contractor invoices migration path: `server/database/migrations/040_contractor_invoices.sql`
+- User access profiles migration path: `server/database/migrations/041_user_access_profiles.sql`
 
 Run `schema.sql` first, then `seed.sql`.
 
@@ -212,6 +224,13 @@ npm.cmd run db:migrate:communications
 node src/db/runSqlFile.js database/migrations/032_communication_campaign_names.sql
 node src/db/runSqlFile.js database/migrations/033_communication_templates.sql
 node src/db/runSqlFile.js database/migrations/034_whatsapp_template_metadata.sql
+node src/db/runSqlFile.js database/migrations/035_production_meter_replacement.sql
+node src/db/runSqlFile.js database/migrations/036_maintenance_expense_links.sql
+node src/db/runSqlFile.js database/migrations/037_portal_user_customer_links.sql
+npm.cmd run db:migrate:hold-source-backup-bills
+npm.cmd run db:migrate:supporting-documents
+npm.cmd run db:migrate:contractor-invoices
+npm.cmd run db:migrate:user-access-profiles
 ```
 
 ## Local Setup
@@ -316,6 +335,13 @@ npm.cmd run db:migrate:communications
 node src/db/runSqlFile.js database/migrations/032_communication_campaign_names.sql
 node src/db/runSqlFile.js database/migrations/033_communication_templates.sql
 node src/db/runSqlFile.js database/migrations/034_whatsapp_template_metadata.sql
+node src/db/runSqlFile.js database/migrations/035_production_meter_replacement.sql
+node src/db/runSqlFile.js database/migrations/036_maintenance_expense_links.sql
+node src/db/runSqlFile.js database/migrations/037_portal_user_customer_links.sql
+npm.cmd run db:migrate:hold-source-backup-bills
+npm.cmd run db:migrate:supporting-documents
+npm.cmd run db:migrate:contractor-invoices
+npm.cmd run db:migrate:user-access-profiles
 ```
 
 ### 2. API Project
@@ -422,7 +448,7 @@ The Communications page can send invoice alerts by email, SMS, or WhatsApp to se
 
 Before sending:
 
-- Run migrations `028` through `034`.
+- Run migrations `028` through `034` for delivery logs, contact preferences, campaigns, templates, and WhatsApp template metadata.
 - Add customer email/phone details and enable the intended delivery channel on the customer record.
 - Configure SMTP for email, SMS provider variables for SMS, and WhatsApp provider variables for WhatsApp.
 - For WhatsApp free-form sends, provider policy may still reject messages outside the allowed customer-service window.
@@ -482,4 +508,5 @@ Most core modules are now implemented. The remaining work is mainly hardening, a
 - Add bank integration beyond the current PDF statement import trainer.
 - Add email/SMS/WhatsApp scheduling, retries, and opt-out handling if bulk messaging volume grows.
 - Add a formal migration runner/table so applied migrations are tracked automatically.
+- Decide long-term production storage and backup policy for supporting documents.
 - Finish production deployment checks, backups, restore drills, and role-by-role user acceptance testing.

@@ -11,6 +11,8 @@ Foundation:
 - PostgreSQL database.
 - JWT authentication.
 - Roles: admin, accountant, meter_reader, customer.
+- Business viewer role for read-oriented oversight.
+- User access profiles and login context selection.
 
 Customer and setup:
 
@@ -19,6 +21,7 @@ Customer and setup:
 - Effective-dated tariff versions and tariff blocks.
 - Customer deposits, opening balances, account closure, and adjustments.
 - Customer portal user links.
+- Multi-account customer portal links.
 
 Metering and billing:
 
@@ -47,6 +50,7 @@ Operations:
 - Dashboard with KPI cards and charts.
 - Reports, accountant reports, data quality checks, and backup report.
 - Maintenance requests and linked maintenance expenses.
+- Supporting documents for maintenance requests, expenses, and contractor invoices.
 - Audit trail.
 - Business settings and logo handling.
 
@@ -57,6 +61,8 @@ Production:
 - Electricity top-ups.
 - Top-ups post linked expenses.
 - Dashboard production chart compares revenue and electricity cost.
+- Weekly production form shows previous prepaid kWh balance and previous meter readings for the selected date.
+- Production reports show previous and current readings, and full print separates weekly summaries from meter details.
 
 Payroll:
 
@@ -67,6 +73,14 @@ Payroll:
 - Payroll runs.
 - Submit, approve, and paid lifecycle.
 - Payroll expense posting.
+
+Contractors:
+
+- Contractor register.
+- Contractor invoices with draft, submitted, approved, rejected, posted-to-expense, and paid states.
+- Contractor invoice document attachments.
+- Contractor invoice posting into expenses.
+- Contractor payables, balances, and invoice register reporting.
 
 Communications:
 
@@ -91,7 +105,7 @@ UX:
 Latest known migration chain reaches:
 
 ```text
-038_hold_unallocated_source_backup_bills.sql
+041_user_access_profiles.sql
 ```
 
 Important named scripts exist for many migrations, but not every numbered migration has a package script. Some are run directly through:
@@ -113,6 +127,7 @@ Recommended hardening task:
 - Complete role-by-role acceptance testing.
 - Establish backup schedule and run restore drill.
 - Decide scheduling, retries, and opt-out handling for bulk communications.
+- Decide long-term storage strategy for supporting documents in production.
 
 ## Release Log Template
 

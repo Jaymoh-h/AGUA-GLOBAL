@@ -57,14 +57,56 @@ export const downloadBlobFile = (blob, filename, extension = "") => {
   window.setTimeout(() => URL.revokeObjectURL(url), 60000);
 };
 
+const printablePageHeightPx = () => ((297 - 28) * 96) / 25.4;
+
+const clearPrintFooterSpacers = () => {
+  document.querySelectorAll(".print-footer-spacer").forEach((spacer) => spacer.remove());
+};
+
+const preparePrintFooterSpacing = () => {
+  clearPrintFooterSpacers();
+  const pageHeight = printablePageHeightPx();
+  const surfaces = document.querySelectorAll(".active-print-surface.report-print, .receipt-print");
+  surfaces.forEach((surface) => {
+    const footer = surface.querySelector(".report-print-footer, .receipt-footer");
+    if (!footer) return;
+
+    const previousDisplay = surface.style.display;
+    const previousVisibility = surface.style.visibility;
+    const wasHidden = window.getComputedStyle(surface).display === "none";
+    if (wasHidden) {
+      surface.style.display = "block";
+      surface.style.visibility = "hidden";
+    }
+
+    const spacer = document.createElement("div");
+    spacer.className = "print-footer-spacer";
+    spacer.setAttribute("aria-hidden", "true");
+    spacer.style.height = "0px";
+    footer.parentNode.insertBefore(spacer, footer);
+
+    const totalHeight = surface.scrollHeight;
+    const remainder = totalHeight % pageHeight;
+    const spacerHeight = remainder > 1 ? pageHeight - remainder : 0;
+    spacer.style.height = `${Math.max(0, spacerHeight)}px`;
+
+    if (wasHidden) {
+      surface.style.display = previousDisplay;
+      surface.style.visibility = previousVisibility;
+    }
+  });
+};
+
 export const withPrintTitle = (title, printCallback = () => window.print()) => {
   const previousTitle = document.title;
   document.title = slugifyFilenamePart(title, "print");
+  preparePrintFooterSpacing();
   let restored = false;
   const restore = () => {
     if (restored) return;
     restored = true;
     document.title = previousTitle;
+    clearPrintFooterSpacers();
     window.removeEventListener("afterprint", restore);
     window.removeEventListener("focus", delayedRestore);
     document.removeEventListener("visibilitychange", restoreWhenVisible);

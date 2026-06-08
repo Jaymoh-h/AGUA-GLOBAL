@@ -22,6 +22,9 @@ Use these checklists before demos, production deployments, and major commits.
 - Meter reader cannot access payments, reports, payroll, communications, or backup.
 - Customer can access portal only.
 - Customer cannot access internal `/api/dashboard`, `/api/customers`, `/api/bills`, `/api/rates`, or `/api/readings`.
+- Business viewer can view dashboard, reports, audit, bills, payments, production, payroll, and contractor invoice summaries.
+- Business viewer cannot create, update, approve, post, delete, import, or send records.
+- Multi-context user is prompted to select an access context after login.
 
 ## Customer Setup Test
 
@@ -86,6 +89,10 @@ Use these checklists before demos, production deployments, and major commits.
 - Add electricity top-up.
 - Confirm linked expense is created.
 - Confirm production dashboard compares revenue and electricity cost.
+- Confirm selected week loads previous prepaid kWh balance and previous meter readings.
+- Confirm production report shows previous and current readings.
+- Confirm full production print separates weekly summary blocks from meter detail rows.
+- Confirm weekly summary print remains summary-only.
 - Replace production meter.
 - Confirm event history remains visible.
 
@@ -101,6 +108,27 @@ Use these checklists before demos, production deployments, and major commits.
 - Confirm expenses are posted.
 - Terminate recurring payee as admin.
 - Confirm future run excludes terminated payee.
+
+## Contractor Invoice Test
+
+- Create contractor.
+- Create draft invoice.
+- Attach supporting document.
+- Submit invoice.
+- Approve invoice.
+- Post approved invoice to expense.
+- Confirm linked expense is created.
+- Confirm posted or paid invoice cannot be edited.
+- Confirm contractor payables reports show open, overdue, and posted amounts.
+
+## Supporting Documents Test
+
+- Upload document to maintenance request as meter reader.
+- Upload document to expense as accountant.
+- Upload document to contractor invoice as accountant.
+- Download each document.
+- Soft-delete a document.
+- Confirm deleted document no longer appears in active list.
 
 ## Communications Test
 

@@ -405,7 +405,7 @@ function UsersPage({ user: currentUser }) {
                         <strong>{account.name}</strong>
                         <small>{account.phone || "-"}</small>
                       </td>
-                      <td>{account.email}</td>
+                      <td className="user-email-cell">{account.email}</td>
                       <td>
                         {roleLabel(account.role)}
                         <small>

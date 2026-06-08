@@ -22,6 +22,7 @@ Admin typically:
 5. Promotes held source bills.
 6. Reviews adjustments.
 7. Accesses operational backup.
+8. Assigns user access contexts where one account needs multiple operating profiles.
 
 Admin should avoid routine payment posting unless acting as backup for finance.
 
@@ -38,6 +39,8 @@ Accountant typically:
 7. Runs accountant reports.
 8. Sends invoice alerts and receipts.
 9. Manages payroll runs.
+10. Manages contractors and contractor invoices.
+11. Posts approved contractor invoices to expenses.
 
 ## Meter Reader Workflow
 
@@ -60,6 +63,17 @@ Customer can:
 3. View bills and receipts.
 4. Download statement where enabled.
 5. Submit service request or complaint.
+
+## Business Viewer Workflow
+
+Business viewer typically:
+
+1. Logs in and selects the Business Viewer context if prompted.
+2. Reviews dashboard health.
+3. Reviews reports, audit trail, bills, payments, production, payroll, and contractor invoice summaries.
+4. Raises observations outside the system or through the responsible operational user.
+
+Business viewer should not be used for operational data entry.
 
 ## Customer Management
 
@@ -107,3 +121,26 @@ Use Communications to:
 - Review campaign history and recipient results.
 
 For WhatsApp, use approved templates when provider policy requires them.
+
+## Contractor Invoices
+
+Accountants and admins can:
+
+1. Create contractor records.
+2. Capture contractor invoices.
+3. Attach supporting documents.
+4. Submit, approve, or reject invoices.
+5. Post approved invoices to expenses.
+6. Review contractor payables reports.
+
+Posted or paid invoices are protected from normal editing.
+
+## Supporting Documents
+
+Supporting documents can be uploaded against:
+
+- Maintenance requests.
+- Expenses.
+- Contractor invoices.
+
+Use attachments for invoices, photos, receipts, work evidence, or approval support.

@@ -117,3 +117,23 @@ VITE_API_URL=https://<api-project>.vercel.app/api
 - Run `node --check` or targeted syntax checks on changed server files.
 - Apply database migrations before deploying code that depends on them.
 - Document every migration and behavior change in `docs/12-implementation-records.md`.
+
+## Current Late-Stage Migrations
+
+The late-stage operational migrations include:
+
+```powershell
+cd server
+npm.cmd run db:migrate:hold-source-backup-bills
+npm.cmd run db:migrate:supporting-documents
+npm.cmd run db:migrate:contractor-invoices
+npm.cmd run db:migrate:user-access-profiles
+```
+
+If a deployment database has not yet received production meter replacement, maintenance expense links, or portal customer links, also run:
+
+```powershell
+node src/db/runSqlFile.js database/migrations/035_production_meter_replacement.sql
+node src/db/runSqlFile.js database/migrations/036_maintenance_expense_links.sql
+node src/db/runSqlFile.js database/migrations/037_portal_user_customer_links.sql
+```

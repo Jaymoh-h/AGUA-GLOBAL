@@ -29,6 +29,7 @@ Authorization: Bearer <token>
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/auth/login` | Public | Login and receive token |
+| `POST` | `/auth/select-context` | Public with context token | Select an access context after login |
 | `POST` | `/auth/password-reset/request` | Public | Request password reset |
 | `POST` | `/auth/password-reset/confirm` | Public | Confirm password reset |
 | `GET` | `/auth/me` | Authenticated | Current user profile |
@@ -38,9 +39,9 @@ Authorization: Bearer <token>
 
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/customers` | admin, accountant, meter_reader | List customers |
-| `GET` | `/customers/:id` | admin, accountant, meter_reader | Get customer |
-| `GET` | `/customers/:id/statement` | admin, accountant, customer | Customer statement |
+| `GET` | `/customers` | admin, accountant, meter_reader, business_viewer | List customers |
+| `GET` | `/customers/:id` | admin, accountant, meter_reader, business_viewer | Get customer |
+| `GET` | `/customers/:id/statement` | admin, accountant, customer, business_viewer | Customer statement |
 | `POST` | `/customers` | admin, accountant | Create customer |
 | `PUT` | `/customers/:id` | admin, accountant | Update customer |
 | `DELETE` | `/customers/:id` | admin | Delete customer |
@@ -83,8 +84,8 @@ Authorization: Bearer <token>
 
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/bills` | admin, accountant | List bills |
-| `GET` | `/bills/:id` | admin, accountant | Get bill |
+| `GET` | `/bills` | admin, accountant, business_viewer | List bills |
+| `GET` | `/bills/:id` | admin, accountant, business_viewer | Get bill |
 | `PATCH` | `/bills/:id/status` | admin, accountant | Mark bill status |
 | `PATCH` | `/bills/:id/promote` | admin | Promote held bill |
 | `POST` | `/bills/:id/email` | admin, accountant | Email bill |
@@ -107,12 +108,12 @@ Authorization: Bearer <token>
 
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/payments` | admin, accountant | List payments |
-| `GET` | `/payments/:id` | admin, accountant | Get payment |
+| `GET` | `/payments` | admin, accountant, business_viewer | List payments |
+| `GET` | `/payments/:id` | admin, accountant, business_viewer | Get payment |
 | `POST` | `/payments` | admin, accountant | Create payment |
 | `PUT` | `/payments/:id` | admin, accountant | Edit payment |
 | `POST` | `/payments/:id/void` | admin, accountant | Void to suspense |
-| `GET` | `/payments/suspense` | admin, accountant | List suspense |
+| `GET` | `/payments/suspense` | admin, accountant, business_viewer | List suspense |
 | `POST` | `/payments/suspense/:id/reapply` | admin, accountant | Reapply suspense |
 | `POST` | `/payments/suspense/:id/discard` | admin | Discard suspense |
 | `POST` | `/payments/imports/preview` | admin, accountant | Preview payment import |
@@ -124,8 +125,8 @@ Authorization: Bearer <token>
 
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/dashboard` | admin, accountant, meter_reader | Dashboard data |
-| `GET` | `/expenses` | admin, accountant | List expenses |
+| `GET` | `/dashboard` | admin, accountant, meter_reader, business_viewer | Dashboard data |
+| `GET` | `/expenses` | admin, accountant, business_viewer | List expenses |
 | `POST` | `/expenses` | admin, accountant | Create expense |
 | `POST` | `/expenses/imports/preview` | admin, accountant | Preview expense import |
 | `POST` | `/expenses/imports/commit` | admin, accountant | Commit expense import |
@@ -139,45 +140,48 @@ Authorization: Bearer <token>
 
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/reports/summary` | admin, accountant | Report summary |
-| `GET` | `/reports/accountant` | admin, accountant | Accountant reports |
-| `GET` | `/reports/data-quality` | admin, accountant | Data quality checks |
+| `GET` | `/reports/summary` | admin, accountant, business_viewer | Report summary |
+| `GET` | `/reports/accountant` | admin, accountant, business_viewer | Accountant reports |
+| `GET` | `/reports/data-quality` | admin, accountant, business_viewer | Data quality checks |
 | `GET` | `/reports/backup` | admin | Operational backup |
-| `GET` | `/audit-events` | admin, accountant | Audit event list |
+| `GET` | `/audit-events` | admin, accountant, business_viewer | Audit event list |
 | `GET` | `/business-settings/public` | Public | Public business profile |
-| `GET` | `/business-settings` | admin, accountant | Business settings |
+| `GET` | `/business-settings` | admin, accountant, business_viewer | Business settings |
 | `PUT` | `/business-settings` | admin | Update settings |
 | `POST` | `/business-settings/logo` | admin | Upload logo |
 | `GET` | `/users` | admin | List users |
 | `POST` | `/users` | admin | Create user |
 | `PUT` | `/users/:id` | admin | Update user |
+| `POST` | `/users/:id/access-profiles` | admin | Create user access context |
+| `PATCH` | `/users/:id/access-profiles/:profileId` | admin | Update user access context |
 
 ## Production
 
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/production/meters` | admin, accountant, meter_reader | List production meters |
+| `GET` | `/production/meters` | admin, accountant, meter_reader, business_viewer | List production meters |
 | `POST` | `/production/meters` | admin, accountant | Create production meter |
 | `POST` | `/production/meters/:id/replace` | admin, accountant | Replace production meter |
-| `GET` | `/production/electricity-topups` | admin, accountant, meter_reader | List top-ups |
+| `GET` | `/production/electricity-topups` | admin, accountant, meter_reader, business_viewer | List top-ups |
 | `POST` | `/production/electricity-topups` | admin, accountant | Create top-up and expense |
-| `GET` | `/production/weekly-readings` | admin, accountant, meter_reader | List weekly readings |
+| `GET` | `/production/weekly-readings` | admin, accountant, meter_reader, business_viewer | List weekly readings |
+| `GET` | `/production/reading-context` | admin, accountant, meter_reader, business_viewer | Previous kWh and meter-reading context |
 | `POST` | `/production/weekly-readings` | admin, accountant, meter_reader | Create weekly reading |
-| `GET` | `/production/weekly-readings/:id` | admin, accountant, meter_reader | Get weekly reading |
+| `GET` | `/production/weekly-readings/:id` | admin, accountant, meter_reader, business_viewer | Get weekly reading |
 | `PUT` | `/production/weekly-readings/:id` | admin, accountant, meter_reader | Update weekly reading |
 | `DELETE` | `/production/weekly-readings/:id` | admin, accountant | Delete weekly reading |
-| `GET` | `/production/report` | admin, accountant, meter_reader | Production report |
+| `GET` | `/production/report` | admin, accountant, meter_reader, business_viewer | Production report |
 
 ## Payroll
 
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/payroll/payees` | admin, accountant | List payees |
+| `GET` | `/payroll/payees` | admin, accountant, business_viewer | List payees |
 | `POST` | `/payroll/payees` | admin, accountant | Create payee |
 | `PATCH` | `/payroll/payees/:id/terminate` | admin | Terminate payee |
-| `GET` | `/payroll/runs` | admin, accountant | List runs |
+| `GET` | `/payroll/runs` | admin, accountant, business_viewer | List runs |
 | `POST` | `/payroll/runs` | admin, accountant | Create run |
-| `GET` | `/payroll/runs/:id` | admin, accountant | Get run |
+| `GET` | `/payroll/runs/:id` | admin, accountant, business_viewer | Get run |
 | `POST` | `/payroll/runs/:id/line-items` | admin, accountant | Add period line item |
 | `PATCH` | `/payroll/runs/:id/status` | admin, accountant | Update run status |
 | `PATCH` | `/payroll/line-items/:lineId` | admin, accountant | Update line item |
@@ -197,3 +201,27 @@ Authorization: Bearer <token>
 | `GET` | `/portal/dashboard` | customer | Portal dashboard |
 | `GET` | `/portal/payments/:id` | customer | Portal receipt/payment |
 | `POST` | `/portal/service-requests` | customer | Create portal service request |
+
+## Documents
+
+| Method | Endpoint | Roles | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/documents?entity_type=&entity_id=` | admin, accountant, meter_reader | List supporting documents |
+| `POST` | `/documents` | admin, accountant, meter_reader | Upload supporting document |
+| `GET` | `/documents/:id/download` | admin, accountant, meter_reader | Download supporting document |
+| `DELETE` | `/documents/:id` | admin, accountant, meter_reader | Soft-delete supporting document |
+
+Documents can currently link to maintenance requests, expenses, and contractor invoices. Expense and contractor invoice documents are restricted to admin/accountant by controller-level checks.
+
+## Contractor Invoices
+
+| Method | Endpoint | Roles | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/contractor-invoices/contractors` | admin, accountant, business_viewer | List contractors |
+| `POST` | `/contractor-invoices/contractors` | admin, accountant | Create contractor |
+| `PUT` | `/contractor-invoices/contractors/:id` | admin, accountant | Update contractor |
+| `GET` | `/contractor-invoices/invoices` | admin, accountant, business_viewer | List contractor invoices |
+| `POST` | `/contractor-invoices/invoices` | admin, accountant | Create contractor invoice |
+| `PUT` | `/contractor-invoices/invoices/:id` | admin, accountant | Update contractor invoice |
+| `PATCH` | `/contractor-invoices/invoices/:id/status` | admin, accountant | Submit, approve, or reject invoice |
+| `POST` | `/contractor-invoices/invoices/:id/post-expense` | admin, accountant | Post approved invoice to expense |

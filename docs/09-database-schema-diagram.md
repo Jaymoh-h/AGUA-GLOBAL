@@ -16,6 +16,7 @@ erDiagram
   customers ||--o{ portal_user_customers : linked_to
 
   users ||--o{ portal_user_customers : links
+  users ||--o{ user_access_profiles : has
   users ||--o{ audit_events : acts
 
   billing_periods ||--o{ meter_readings : contains
@@ -37,6 +38,11 @@ erDiagram
 
   communication_campaigns ||--o{ communication_campaign_recipients : includes
   document_delivery_logs ||--o{ communication_campaign_recipients : logs
+  contractors ||--o{ contractor_invoices : issues
+  contractor_invoices ||--o| expenses : posts_to
+  contractor_invoices ||--o{ supporting_documents : attaches
+  expenses ||--o{ supporting_documents : attaches
+  maintenance_requests ||--o{ supporting_documents : attaches
 
   production_source_meters ||--o{ production_meter_readings : records
   production_weekly_readings ||--o{ production_meter_readings : aggregates
@@ -53,6 +59,7 @@ Customer and setup:
 - `tariff_blocks`
 - `zones`
 - `users`
+- `user_access_profiles`
 - `portal_user_customers`
 - `password_reset_tokens`
 
@@ -82,6 +89,7 @@ Operations:
 - `business_settings`
 - `audit_events`
 - `document_delivery_logs`
+- `supporting_documents`
 - `communication_campaigns`
 - `communication_campaign_recipients`
 - `communication_templates`
@@ -100,6 +108,11 @@ Payroll, from migrations:
 - `payroll_runs`
 - `payroll_line_items`
 
+Contractors, from migrations:
+
+- `contractors`
+- `contractor_invoices`
+
 ## Important Relationships
 
 - A customer belongs to one rate and one zone.
@@ -113,7 +126,10 @@ Payroll, from migrations:
 - Production electricity top-ups create linked expenses.
 - Communication campaigns store bulk-send history and recipient results.
 - Portal users are linked to customer records through `portal_user_customers`.
+- Access profiles give a user one or more selectable operating contexts.
+- Supporting documents attach files to maintenance requests, expenses, and contractor invoices.
+- Contractor invoices can be reviewed and posted into expenses.
 
 ## Migration Note
 
-The project currently uses numbered SQL files instead of a formal migration tracking table. This means production operators must know which migration files have been applied. Adding a migration ledger is a recommended hardening task.
+The project currently uses numbered SQL files instead of a formal migration tracking table. This means production operators must know which migration files have been applied. The latest known migration is `041_user_access_profiles.sql`. Adding a migration ledger is a recommended hardening task.
