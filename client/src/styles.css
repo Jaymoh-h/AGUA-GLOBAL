@@ -1274,6 +1274,10 @@ td button,
   gap: 14px;
 }
 
+.production-report-print.report-print {
+  display: none;
+}
+
 .report-print-header {
   display: grid;
   grid-template-columns: 74px minmax(0, 1fr) minmax(144px, auto);
@@ -1325,6 +1329,20 @@ td button,
 
 .production-week-summary small {
   font-weight: 600;
+}
+
+.production-print-week-list {
+  display: grid;
+  gap: 14px;
+}
+
+.production-print-week {
+  display: grid;
+  gap: 6px;
+}
+
+.production-meter-detail-table {
+  margin-top: 0;
 }
 
 .report-print-actions {

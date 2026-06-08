@@ -382,6 +382,37 @@ const getPreviousProductionReading = async (client, productionMeterId, readingDa
   return baselineResult.rows[0] || null;
 };
 
+const getProductionReadingContext = asyncHandler(async (req, res) => {
+  const readingDate = isDateOnly(req.query.reading_date)
+    ? req.query.reading_date
+    : new Date().toISOString().slice(0, 10);
+
+  const previousWeekResult = await pool.query(
+    `SELECT id, reading_date, prepaid_kwh_balance
+     FROM production_weekly_readings
+     WHERE reading_date < $1
+     ORDER BY reading_date DESC
+     LIMIT 1`,
+    [readingDate]
+  );
+  const meters = await resolveProductionMeters(pool);
+  const readings = [];
+  for (const meter of meters) {
+    const previous = await getPreviousProductionReading(pool, meter.id, readingDate);
+    readings.push({
+      production_meter_id: meter.id,
+      previous_reading_value: previous?.reading_value ?? null,
+      previous_reading_date: previous?.reading_date ?? null
+    });
+  }
+
+  res.json({
+    reading_date: readingDate,
+    previous_week: previousWeekResult.rows[0] || null,
+    readings
+  });
+});
+
 const calculateProductionReading = async (client, meter, readingDate, readingValue, previousReadingValue) => {
   if (previousReadingValue !== null && previousReadingValue !== undefined && readingValue < toNumber(previousReadingValue)) {
     throw new ApiError(400, `Reading for ${meter.meter_number} cannot be lower than its previous reading.`);
@@ -870,6 +901,7 @@ module.exports = {
   createProductionMeter,
   createWeeklyReading,
   deleteWeeklyReading,
+  getProductionReadingContext,
   getProductionReport,
   getWeeklyReading,
   listElectricityTopups,

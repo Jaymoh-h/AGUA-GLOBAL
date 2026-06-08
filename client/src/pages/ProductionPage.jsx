@@ -9,6 +9,8 @@ import { withPrintTitle } from "../utils/exportNames";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const number = (value) => Number(value || 0).toLocaleString();
+const optionalNumber = (value) =>
+  value === null || value === undefined || value === "" ? "-" : Number(value || 0).toLocaleString();
 const dateOnly = (value) => value?.slice(0, 10) || "";
 const dateTime = (value) => (value ? new Date(value).toLocaleString() : "");
 const meterTypeLabels = {
@@ -81,6 +83,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [weeklyCorrectionReason, setWeeklyCorrectionReason] = useState("");
   const [weeklyDateChanged, setWeeklyDateChanged] = useState(false);
   const [readingRows, setReadingRows] = useState([]);
+  const [weeklyContext, setWeeklyContext] = useState(null);
   const [reportFilters, setReportFilters] = useState({
     from: "",
     to: new Date().toISOString().slice(0, 10)
@@ -133,11 +136,44 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
           production_meter_id: meter.id,
           meter_number: meter.meter_number,
           label: meter.customer_name || meter.name || meter.meter_number,
+          previous_reading_value: existing.get(Number(meter.id))?.previous_reading_value ?? null,
+          previous_reading_date: existing.get(Number(meter.id))?.previous_reading_date ?? null,
           reading_value: existing.get(Number(meter.id))?.reading_value || "",
           notes: existing.get(Number(meter.id))?.notes || ""
         }));
     });
   }, [editingWeeklyId, meters]);
+
+  useEffect(() => {
+    if (!weeklyForm.reading_date) return undefined;
+    let ignore = false;
+    api.production
+      .readingContext(weeklyForm.reading_date)
+      .then((context) => {
+        if (ignore) return;
+        setWeeklyContext(context);
+        const contextRows = new Map(
+          (context.readings || []).map((row) => [Number(row.production_meter_id), row])
+        );
+        setReadingRows((current) =>
+          current.map((row) => {
+            const match = contextRows.get(Number(row.production_meter_id));
+            if (!match) return row;
+            return {
+              ...row,
+              previous_reading_value: match.previous_reading_value,
+              previous_reading_date: match.previous_reading_date
+            };
+          })
+        );
+      })
+      .catch((err) => {
+        if (!ignore) setMessage(err.message);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [weeklyForm.reading_date]);
 
   useEffect(() => {
     if (!meterForm.customer_id) {
@@ -381,6 +417,8 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
             production_meter_id: meter.id,
             meter_number: meter.meter_number,
             label: meter.customer_name || meter.name || meter.meter_number,
+            previous_reading_value: saved?.previous_reading_value ?? "",
+            previous_reading_date: saved?.previous_reading_date ?? "",
             reading_value: saved?.reading_value ?? "",
             notes: saved?.notes || ""
           };
@@ -392,6 +430,8 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
           production_meter_id: row.production_meter_id,
           meter_number: row.meter_number,
           label: row.customer_name || row.meter_name || meterTypeLabels[row.meter_type] || "Inactive meter",
+          previous_reading_value: row.previous_reading_value ?? "",
+          previous_reading_date: row.previous_reading_date ?? "",
           reading_value: row.reading_value ?? "",
           notes: row.notes || ""
         }));
@@ -647,6 +687,15 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 <input value={weeklyForm.reading_date} onChange={(event) => setWeeklyField("reading_date", event.target.value)} type="date" required />
               </label>
               <label>
+                Previous kWh balance
+                <input value={optionalNumber(weeklyContext?.previous_week?.prepaid_kwh_balance)} readOnly />
+                <small>
+                  {weeklyContext?.previous_week?.reading_date
+                    ? `Recorded ${dateOnly(weeklyContext.previous_week.reading_date)}`
+                    : "No prior weekly balance"}
+                </small>
+              </label>
+              <label>
                 Current prepaid kWh balance
                 <input
                   value={weeklyForm.prepaid_kwh_balance}
@@ -678,6 +727,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 <thead>
                   <tr>
                     <th>Meter</th>
+                    <th>Previous</th>
                     <th>Reading</th>
                     <th>Notes</th>
                   </tr>
@@ -689,6 +739,10 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                         <td>
                           {row.meter_number}
                           <small>{row.label}</small>
+                        </td>
+                        <td>
+                          {optionalNumber(row.previous_reading_value)}
+                          <small>{row.previous_reading_date ? dateOnly(row.previous_reading_date) : "No prior reading"}</small>
                         </td>
                         <td>
                           <input
@@ -720,7 +774,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                       </tr>
                     ))
                   ) : (
-                    <EmptyTableRow colSpan={3} title="No production meters" detail="Register production meters before entering weekly readings." />
+                    <EmptyTableRow colSpan={4} title="No production meters" detail="Register production meters before entering weekly readings." />
                   )}
                 </tbody>
               </table>
@@ -789,6 +843,8 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                   <tr>
                     <th>Week</th>
                     <th>Meter</th>
+                    <th>Previous</th>
+                    <th>Current</th>
                     <th>Consumption</th>
                     <th>Revenue</th>
                   </tr>
@@ -803,13 +859,15 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                             {row.meter_number}
                             <small>{row.customer_name || row.meter_name || meterTypeLabels[row.meter_type]}</small>
                           </td>
+                          <td>{optionalNumber(row.previous_reading_value)}</td>
+                          <td>{optionalNumber(row.reading_value)}</td>
                           <td>{Number(row.consumption || 0).toLocaleString()}</td>
                           <td>{money(row.revenue_amount)}</td>
                         </tr>
                       ))
                     )
                   ) : (
-                    <EmptyTableRow colSpan={4} title="No production report data" detail="Save weekly readings to generate monitoring results." />
+                    <EmptyTableRow colSpan={6} title="No production report data" detail="Save weekly readings to generate monitoring results." />
                   )}
                 </tbody>
               </table>
@@ -1026,23 +1084,23 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
           </div>
         </div>
 
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Week</th>
-                <th>kWh Used</th>
-                <th>Electricity Cost</th>
-                <th>Cost basis</th>
-                <th>Meter</th>
-                <th>Consumption</th>
-                <th>Revenue</th>
-              </tr>
-            </thead>
-            <tbody>
-              {report.weeks?.length ? (
-                report.weeks.flatMap((week) => {
-                  const summaryRow = (
+        {printMode === "summary" ? (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Week</th>
+                  <th>kWh Used</th>
+                  <th>Electricity Cost</th>
+                  <th>Cost basis</th>
+                  <th>Meter</th>
+                  <th>Consumption</th>
+                  <th>Revenue</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.weeks?.length ? (
+                  report.weeks.map((week) => (
                     <tr className="production-week-summary" key={`print-week-${week.id}`}>
                       <td>{dateOnly(week.reading_date)}</td>
                       <td>{number(week.electricity_used)} kWh</td>
@@ -1055,32 +1113,87 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                       <td>{number(week.total_consumption)}</td>
                       <td>{money(week.total_revenue)}</td>
                     </tr>
-                  );
-                  if (printMode === "summary") return [summaryRow];
-                  return [
-                    summaryRow,
-                    ...week.rows.map((row) => (
-                      <tr key={`print-${week.id}-${row.id}`}>
-                        <td>{dateOnly(week.reading_date)}</td>
-                        <td></td>
-                        <td></td>
-                        <td></td>
-                        <td>
-                          {row.meter_number}
-                          <small>{row.customer_name || row.meter_name || meterTypeLabels[row.meter_type]}</small>
-                        </td>
-                        <td>{number(row.consumption)}</td>
-                        <td>{money(row.revenue_amount)}</td>
-                      </tr>
-                    ))
-                  ];
-                })
-              ) : (
-                <EmptyTableRow colSpan={7} title="No production report data" detail="Save weekly readings to generate monitoring results." />
-              )}
-            </tbody>
-          </table>
-        </div>
+                  ))
+                ) : (
+                  <EmptyTableRow colSpan={7} title="No production report data" detail="Save weekly readings to generate monitoring results." />
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="production-print-week-list">
+            {report.weeks?.length ? (
+              report.weeks.map((week) => (
+                <div className="production-print-week" key={`full-print-week-${week.id}`}>
+                  <div className="table-wrap">
+                    <table className="production-week-summary-table">
+                      <thead>
+                        <tr>
+                          <th>Week</th>
+                          <th>kWh Used</th>
+                          <th>Electricity Cost</th>
+                          <th>Cost basis</th>
+                          <th>Consumption</th>
+                          <th>Revenue</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr className="production-week-summary">
+                          <td>{dateOnly(week.reading_date)}</td>
+                          <td>{number(week.electricity_used)} kWh</td>
+                          <td>{money(week.electricity_cost_used)}</td>
+                          <td>
+                            {money(week.electricity_cost_per_unit)} / kWh
+                            <small>{electricityCostSourceLabel(week)}</small>
+                          </td>
+                          <td>{number(week.total_consumption)}</td>
+                          <td>{money(week.total_revenue)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="table-wrap">
+                    <table className="production-meter-detail-table">
+                      <thead>
+                        <tr>
+                          <th>Week</th>
+                          <th>Meter</th>
+                          <th>Previous</th>
+                          <th>Current</th>
+                          <th>Consumption</th>
+                          <th>Revenue</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {week.rows.map((row) => (
+                          <tr key={`print-${week.id}-${row.id}`}>
+                            <td>{dateOnly(week.reading_date)}</td>
+                            <td>
+                              {row.meter_number}
+                              <small>{row.customer_name || row.meter_name || meterTypeLabels[row.meter_type]}</small>
+                            </td>
+                            <td>{optionalNumber(row.previous_reading_value)}</td>
+                            <td>{optionalNumber(row.reading_value)}</td>
+                            <td>{number(row.consumption)}</td>
+                            <td>{money(row.revenue_amount)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <tbody>
+                    <EmptyTableRow colSpan={6} title="No production report data" detail="Save weekly readings to generate monitoring results." />
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
         <div className="report-print-footer">
           {businessSettings?.report_footer_note ? <p>{businessSettings.report_footer_note}</p> : null}
           <small>

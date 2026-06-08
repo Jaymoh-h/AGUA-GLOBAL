@@ -301,6 +301,7 @@ export const api = {
     topups: () => request("/production/electricity-topups"),
     createTopup: (payload) => request("/production/electricity-topups", { method: "POST", body: payload }),
     weeklyReadings: () => request("/production/weekly-readings"),
+    readingContext: (readingDate) => request(`/production/reading-context?reading_date=${readingDate}`),
     getWeeklyReading: (id) => request(`/production/weekly-readings/${id}`),
     createWeeklyReading: (payload) => request("/production/weekly-readings", { method: "POST", body: payload }),
     updateWeeklyReading: (id, payload) => request(`/production/weekly-readings/${id}`, { method: "PUT", body: payload }),

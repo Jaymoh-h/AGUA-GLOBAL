@@ -4,6 +4,7 @@ const {
   createProductionMeter,
   createWeeklyReading,
   deleteWeeklyReading,
+  getProductionReadingContext,
   getProductionReport,
   getWeeklyReading,
   listElectricityTopups,
@@ -23,6 +24,7 @@ router.post("/meters/:id/replace", authorize("admin", "accountant"), replaceProd
 router.get("/electricity-topups", authorize("admin", "accountant", "meter_reader", "business_viewer"), listElectricityTopups);
 router.post("/electricity-topups", authorize("admin", "accountant"), createElectricityTopup);
 router.get("/weekly-readings", authorize("admin", "accountant", "meter_reader", "business_viewer"), listWeeklyReadings);
+router.get("/reading-context", authorize("admin", "accountant", "meter_reader", "business_viewer"), getProductionReadingContext);
 router.post("/weekly-readings", authorize("admin", "accountant", "meter_reader"), createWeeklyReading);
 router.get("/weekly-readings/:id", authorize("admin", "accountant", "meter_reader", "business_viewer"), getWeeklyReading);
 router.put("/weekly-readings/:id", authorize("admin", "accountant", "meter_reader"), updateWeeklyReading);
