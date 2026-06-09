@@ -12,7 +12,7 @@ const passwordIsStrong = (password) => {
   return password.length >= 8 && categories >= 3;
 };
 
-function LoginPage({ appName, onLogin, sessionMessage = "" }) {
+function LoginPage({ appName, onLogin, sessionMessage = "", variant = "page" }) {
   const resetToken = new URLSearchParams(window.location.search).get("reset_token") || "";
   const [mode, setMode] = useState(resetToken ? "reset" : "login");
   const [email, setEmail] = useState("");
@@ -105,9 +105,8 @@ function LoginPage({ appName, onLogin, sessionMessage = "" }) {
     }
   };
 
-  return (
-    <main className="login-page">
-      <section className="login-panel" aria-label="Login form">
+  const panel = (
+    <section className={`login-panel ${variant === "modal" ? "login-panel-modal" : ""}`} aria-label="Login form">
         <div className="login-brand">
           <span className="brand-mark">
             <Droplets size={24} />
@@ -134,6 +133,7 @@ function LoginPage({ appName, onLogin, sessionMessage = "" }) {
                 type="password"
                 autoComplete="new-password"
                 minLength="8"
+                autoFocus
                 required
               />
               <small>Use at least 8 characters with three of uppercase, lowercase, numbers, and symbols.</small>
@@ -169,6 +169,7 @@ function LoginPage({ appName, onLogin, sessionMessage = "" }) {
                 onChange={(event) => setEmail(event.target.value)}
                 type="email"
                 autoComplete="username"
+                autoFocus
                 required
               />
             </label>
@@ -225,6 +226,7 @@ function LoginPage({ appName, onLogin, sessionMessage = "" }) {
                 onChange={(event) => setEmail(event.target.value)}
                 type="email"
                 autoComplete="username"
+                autoFocus
                 required
               />
             </label>
@@ -247,9 +249,14 @@ function LoginPage({ appName, onLogin, sessionMessage = "" }) {
             </button>
           </form>
         ) : null}
-      </section>
-    </main>
+    </section>
   );
+
+  if (variant === "modal") {
+    return panel;
+  }
+
+  return <main className="login-page">{panel}</main>;
 }
 
 export default LoginPage;

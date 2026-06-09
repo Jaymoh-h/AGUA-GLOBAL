@@ -83,7 +83,10 @@ const getPublicBusinessSettings = asyncHandler(async (_req, res) => {
   const client = await pool.connect();
   try {
     const settings = await getBusinessSettingsRow(client);
-    res.json({ business_name: settings.business_name });
+    res.json({
+      business_name: settings.business_name,
+      email: settings.email
+    });
   } finally {
     client.release();
   }

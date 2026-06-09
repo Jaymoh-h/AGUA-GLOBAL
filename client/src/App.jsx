@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import Layout, { pageAccess as access } from "./components/Layout";
 import ToastProvider from "./components/ToastProvider";
-import LoginPage from "./pages/LoginPage";
+import LandingPage from "./pages/LandingPage";
 import PasswordChangePage from "./pages/PasswordChangePage";
 import { api, setFutureDateOverrideHandler } from "./services/api";
 
@@ -46,6 +46,7 @@ function App() {
   const [currentPage, setCurrentPage] = useState(() => (getSavedUser()?.role === "customer" ? "portal" : "dashboard"));
   const [navigationIntent, setNavigationIntent] = useState(null);
   const [appName, setAppName] = useState("Water Billing");
+  const [businessSettings, setBusinessSettings] = useState({});
   const [sessionMessage, setSessionMessage] = useState("");
   const [futureDateOverride, setFutureDateOverride] = useState(null);
 
@@ -66,6 +67,7 @@ function App() {
     api.businessSettings
       .public()
       .then((settings) => {
+        setBusinessSettings(settings || {});
         const businessName = settings?.business_name?.trim();
         if (businessName) {
           setAppName(businessName);
@@ -152,7 +154,7 @@ function App() {
   };
 
   if (!user) {
-    return <LoginPage appName={appName} onLogin={handleLogin} sessionMessage={sessionMessage} />;
+    return <LandingPage appName={appName} businessSettings={businessSettings} onLogin={handleLogin} sessionMessage={sessionMessage} />;
   }
 
   if (user.must_change_password) {
