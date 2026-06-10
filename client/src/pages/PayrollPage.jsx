@@ -1,4 +1,18 @@
-import { Banknote, CalendarDays, CheckCircle2, Download, Lock, Pencil, Plus, Save, Send, UserMinus, Users, X } from "lucide-react";
+import {
+  Banknote,
+  CalendarDays,
+  CheckCircle2,
+  Download,
+  FileText,
+  Lock,
+  Pencil,
+  Plus,
+  Save,
+  Send,
+  UserMinus,
+  Users,
+  X
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
@@ -8,7 +22,7 @@ import TableControls, { useTableControls } from "../components/TableControls";
 import { useToastMessage } from "../components/ToastProvider";
 import { api } from "../services/api";
 import { downloadCsvRows } from "../utils/csvTemplate";
-import { namedExport } from "../utils/exportNames";
+import { downloadBlobFile, namedExport } from "../utils/exportNames";
 
 const payeeTypes = ["employee", "casual", "contractor", "subscription"];
 const recurringPayeeTypes = ["employee", "subscription"];
@@ -343,6 +357,17 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
       setLineDraft(null);
       await load(selectedRun.id);
       setMessage("Payroll line updated.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const downloadPayslip = async (line) => {
+    setMessage("");
+    try {
+      const blob = await api.payroll.downloadPayslip(line.id);
+      downloadBlobFile(blob, namedExport("payslip", "pdf", [selectedRun?.name || selectedRun?.id, line.name || line.id]), "pdf");
+      setMessage(`Payslip downloaded for ${line.name}.`);
     } catch (err) {
       setMessage(err.message);
     }
@@ -735,6 +760,10 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
                         <td>
                           <button type="button" onClick={() => editLine(line)} disabled={!["draft", "pending_approval"].includes(selectedRun.status)}>
                             Edit
+                          </button>
+                          <button type="button" onClick={() => downloadPayslip(line)}>
+                            <FileText size={15} />
+                            Payslip
                           </button>
                         </td>
                       </tr>

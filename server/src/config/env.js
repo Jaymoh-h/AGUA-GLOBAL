@@ -1,6 +1,12 @@
 require("dotenv").config();
 
 const required = ["DATABASE_URL", "JWT_SECRET"];
+const defaultClientOrigin = "http://localhost:5173";
+const clientOrigins = String(process.env.CLIENT_ORIGIN || defaultClientOrigin)
+  .split(",")
+  .map((origin) => origin.trim())
+  .map((origin) => origin.replace(/\/+$/, ""))
+  .filter(Boolean);
 
 for (const key of required) {
   if (!process.env[key]) {
@@ -18,8 +24,22 @@ module.exports = {
   databaseSslRejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === "true",
   jwtSecret: process.env.JWT_SECRET,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "8h",
+  reminderCronSecret: process.env.REMINDER_CRON_SECRET || process.env.CRON_SECRET,
+  monitoringCronSecret: process.env.MONITORING_CRON_SECRET || process.env.CRON_SECRET,
+  monitoringAlertEmails: String(process.env.MONITORING_ALERT_EMAILS || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean),
+  monitoringAlertPhones: String(process.env.MONITORING_ALERT_PHONES || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean),
+  monitoringAlertWindowMinutes: Number(process.env.MONITORING_ALERT_WINDOW_MINUTES || 15),
+  monitoringAlertCooldownMinutes: Number(process.env.MONITORING_ALERT_COOLDOWN_MINUTES || 60),
+  publicStatusUrl: process.env.PUBLIC_STATUS_URL || process.env.MONITORING_STATUS_URL || "",
   passwordResetMinutes: Number(process.env.PASSWORD_RESET_MINUTES || 60),
-  clientOrigin: process.env.CLIENT_ORIGIN || "http://localhost:5173",
+  clientOrigin: clientOrigins[0] || defaultClientOrigin,
+  clientOrigins: clientOrigins.length ? clientOrigins : [defaultClientOrigin],
   logoStorageMode: process.env.LOGO_STORAGE_MODE || (process.env.VERCEL ? "data-url" : "filesystem"),
   smtp: {
     host: process.env.SMTP_HOST,

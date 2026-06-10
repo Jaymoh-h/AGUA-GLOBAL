@@ -1,4 +1,37 @@
+const fs = require("fs");
+const path = require("path");
+const zlib = require("zlib");
+
 const currency = (business) => business.default_currency || "KES";
+const pdfPageSizes = {
+  A4: [595.28, 841.89],
+  A5: [419.53, 595.28],
+  Letter: [612, 792],
+  Legal: [612, 1008]
+};
+const mmToPoints = (value) => Number(value || 0) * 2.8346456693;
+
+const clampNumber = (value, min, max, fallback) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+};
+
+const normalizePdfPrintSettings = (settings = {}) => {
+  const pageSize = pdfPageSizes[settings.print_page_size] ? settings.print_page_size : "A4";
+  const orientation = settings.print_orientation === "landscape" ? "landscape" : "portrait";
+  const marginMm = clampNumber(settings.print_margin_mm, 5, 30, 14);
+  const scale = clampNumber(settings.print_scale_percent, 75, 120, 100) / 100;
+  const base = pdfPageSizes[pageSize];
+  const [width, height] = orientation === "landscape" ? [base[1], base[0]] : base;
+  return {
+    width,
+    height,
+    margin: mmToPoints(marginMm),
+    bottomMargin: mmToPoints(marginMm) + 4,
+    scale
+  };
+};
 
 const money = (value, business = {}) => `${currency(business)} ${Number(value || 0).toLocaleString()}`;
 const dateOnly = (value) => {
@@ -32,14 +65,321 @@ const hexToRgb = (hex) => {
   return [0, 2, 4].map((index) => parseInt(value.slice(index, index + 2), 16) / 255);
 };
 
+const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+const inferMimeType = (logoUrl = "") => {
+  const extension = path.extname(String(logoUrl).split("?")[0]).toLowerCase();
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".png") return "image/png";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".gif") return "image/gif";
+  return "";
+};
+
+const readLogoBuffer = (logoUrl) => {
+  const value = String(logoUrl || "").trim();
+  if (!value) return null;
+
+  const dataMatch = value.match(/^data:([^;]+);base64,(.+)$/i);
+  if (dataMatch) {
+    return {
+      mimeType: dataMatch[1].toLowerCase(),
+      buffer: Buffer.from(dataMatch[2], "base64")
+    };
+  }
+
+  if (/^https?:\/\//i.test(value)) return null;
+
+  const relativePath = value.startsWith("/") ? value.slice(1) : value;
+  const publicRoot = path.resolve(__dirname, "..", "..", "public");
+  const filePath = path.resolve(publicRoot, relativePath);
+  if (filePath !== publicRoot && !filePath.startsWith(`${publicRoot}${path.sep}`)) return null;
+  if (!fs.existsSync(filePath)) return null;
+
+  return {
+    mimeType: inferMimeType(value),
+    buffer: fs.readFileSync(filePath)
+  };
+};
+
+const parseJpegImage = (buffer) => {
+  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) return null;
+  let offset = 2;
+  while (offset + 4 < buffer.length) {
+    if (buffer[offset] !== 0xff) break;
+    const marker = buffer[offset + 1];
+    const length = buffer.readUInt16BE(offset + 2);
+    if (length < 2 || offset + 2 + length > buffer.length) break;
+    if ((marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7) || (marker >= 0xc9 && marker <= 0xcb)) {
+      const components = buffer[offset + 9];
+      const colorSpace = components === 1 ? "/DeviceGray" : components === 4 ? "/DeviceCMYK" : "/DeviceRGB";
+      return {
+        width: buffer.readUInt16BE(offset + 7),
+        height: buffer.readUInt16BE(offset + 5),
+        colorSpace,
+        bitsPerComponent: 8,
+        filter: "/DCTDecode",
+        data: buffer
+      };
+    }
+    offset += 2 + length;
+  }
+  return null;
+};
+
+const paeth = (left, up, upperLeft) => {
+  const p = left + up - upperLeft;
+  const pa = Math.abs(p - left);
+  const pb = Math.abs(p - up);
+  const pc = Math.abs(p - upperLeft);
+  if (pa <= pb && pa <= pc) return left;
+  return pb <= pc ? up : upperLeft;
+};
+
+const unfilterPngRows = ({ data, width, height, channels }) => {
+  const rowLength = width * channels;
+  const rows = [];
+  let offset = 0;
+  let previous = Buffer.alloc(rowLength);
+
+  for (let y = 0; y < height; y += 1) {
+    const filter = data[offset];
+    if (filter > 4) throw new Error("Unsupported PNG row filter.");
+    offset += 1;
+    const source = data.subarray(offset, offset + rowLength);
+    offset += rowLength;
+    const row = Buffer.alloc(rowLength);
+
+    for (let x = 0; x < rowLength; x += 1) {
+      const left = x >= channels ? row[x - channels] : 0;
+      const up = previous[x] || 0;
+      const upperLeft = x >= channels ? previous[x - channels] || 0 : 0;
+      let value = source[x];
+      if (filter === 1) value += left;
+      else if (filter === 2) value += up;
+      else if (filter === 3) value += Math.floor((left + up) / 2);
+      else if (filter === 4) value += paeth(left, up, upperLeft);
+      row[x] = value & 0xff;
+    }
+
+    rows.push(row);
+    previous = row;
+  }
+
+  return rows;
+};
+
+const encodePdfPngRows = (rows, width, channels) => {
+  const rowLength = width * channels;
+  const output = Buffer.alloc((rowLength + 1) * rows.length);
+  rows.forEach((row, index) => {
+    const offset = index * (rowLength + 1);
+    output[offset] = 0;
+    row.copy(output, offset + 1);
+  });
+  return zlib.deflateSync(output);
+};
+
+const splitAlphaRows = ({ rows, width, channels }) => {
+  const colorChannels = channels - 1;
+  const colorRows = [];
+  const alphaRows = [];
+
+  rows.forEach((row) => {
+    const colors = Buffer.alloc(width * colorChannels);
+    const alpha = Buffer.alloc(width);
+    for (let pixel = 0; pixel < width; pixel += 1) {
+      const sourceOffset = pixel * channels;
+      const colorOffset = pixel * colorChannels;
+      for (let channel = 0; channel < colorChannels; channel += 1) {
+        colors[colorOffset + channel] = row[sourceOffset + channel];
+      }
+      alpha[pixel] = row[sourceOffset + channels - 1];
+    }
+    colorRows.push(colors);
+    alphaRows.push(alpha);
+  });
+
+  return { colorRows, alphaRows };
+};
+
+const parsePngImage = (buffer) => {
+  if (buffer.length < 33 || !buffer.subarray(0, 8).equals(pngSignature)) return null;
+
+  let offset = 8;
+  let ihdr = null;
+  let palette = null;
+  let transparency = null;
+  const idatChunks = [];
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    if (offset + 12 + length > buffer.length) return null;
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    const data = buffer.subarray(offset + 8, offset + 8 + length);
+    if (type === "IHDR") {
+      ihdr = {
+        width: data.readUInt32BE(0),
+        height: data.readUInt32BE(4),
+        bitDepth: data[8],
+        colorType: data[9],
+        compression: data[10],
+        filter: data[11],
+        interlace: data[12]
+      };
+    } else if (type === "IDAT") {
+      idatChunks.push(data);
+    } else if (type === "PLTE") {
+      palette = data;
+    } else if (type === "tRNS") {
+      transparency = data;
+    } else if (type === "IEND") {
+      break;
+    }
+    offset += 12 + length;
+  }
+
+  if (!ihdr || ihdr.bitDepth !== 8 || ihdr.compression !== 0 || ihdr.filter !== 0 || ihdr.interlace !== 0 || !idatChunks.length) {
+    return null;
+  }
+
+  const idat = Buffer.concat(idatChunks);
+  if (ihdr.colorType === 2) {
+    return {
+      width: ihdr.width,
+      height: ihdr.height,
+      colorSpace: "/DeviceRGB",
+      bitsPerComponent: 8,
+      filter: "/FlateDecode",
+      decodeParms: `<< /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns ${ihdr.width} >>`,
+      data: idat
+    };
+  }
+  if (ihdr.colorType === 0) {
+    return {
+      width: ihdr.width,
+      height: ihdr.height,
+      colorSpace: "/DeviceGray",
+      bitsPerComponent: 8,
+      filter: "/FlateDecode",
+      decodeParms: `<< /Predictor 15 /Colors 1 /BitsPerComponent 8 /Columns ${ihdr.width} >>`,
+      data: idat
+    };
+  }
+
+  if (ihdr.colorType === 3) {
+    if (!palette?.length || palette.length % 3 !== 0 || ihdr.bitDepth !== 8) return null;
+    const hasAlpha = transparency && Array.from(transparency).some((alpha) => alpha < 255);
+    if (!hasAlpha) {
+      return {
+        width: ihdr.width,
+        height: ihdr.height,
+        colorSpace: `[/Indexed /DeviceRGB ${palette.length / 3 - 1} <${palette.toString("hex")}>]`,
+        bitsPerComponent: 8,
+        filter: "/FlateDecode",
+        decodeParms: `<< /Predictor 15 /Colors 1 /BitsPerComponent 8 /Columns ${ihdr.width} >>`,
+        data: idat
+      };
+    }
+
+    const indexRows = unfilterPngRows({
+      data: zlib.inflateSync(idat),
+      width: ihdr.width,
+      height: ihdr.height,
+      channels: 1
+    });
+    const colorRows = [];
+    const alphaRows = [];
+    indexRows.forEach((row) => {
+      const colors = Buffer.alloc(ihdr.width * 3);
+      const alpha = Buffer.alloc(ihdr.width);
+      for (let pixel = 0; pixel < ihdr.width; pixel += 1) {
+        const paletteIndex = row[pixel];
+        const paletteOffset = paletteIndex * 3;
+        colors[pixel * 3] = palette[paletteOffset] || 0;
+        colors[pixel * 3 + 1] = palette[paletteOffset + 1] || 0;
+        colors[pixel * 3 + 2] = palette[paletteOffset + 2] || 0;
+        alpha[pixel] = transparency[paletteIndex] ?? 255;
+      }
+      colorRows.push(colors);
+      alphaRows.push(alpha);
+    });
+
+    return {
+      width: ihdr.width,
+      height: ihdr.height,
+      colorSpace: "/DeviceRGB",
+      bitsPerComponent: 8,
+      filter: "/FlateDecode",
+      decodeParms: `<< /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns ${ihdr.width} >>`,
+      data: encodePdfPngRows(colorRows, ihdr.width, 3),
+      smask: {
+        width: ihdr.width,
+        height: ihdr.height,
+        colorSpace: "/DeviceGray",
+        bitsPerComponent: 8,
+        filter: "/FlateDecode",
+        decodeParms: `<< /Predictor 15 /Colors 1 /BitsPerComponent 8 /Columns ${ihdr.width} >>`,
+        data: encodePdfPngRows(alphaRows, ihdr.width, 1)
+      }
+    };
+  }
+
+  if (ihdr.colorType !== 6 && ihdr.colorType !== 4) return null;
+
+  const channels = ihdr.colorType === 6 ? 4 : 2;
+  const rows = unfilterPngRows({
+    data: zlib.inflateSync(idat),
+    width: ihdr.width,
+    height: ihdr.height,
+    channels
+  });
+  const { colorRows, alphaRows } = splitAlphaRows({ rows, width: ihdr.width, channels });
+  const colorChannels = channels - 1;
+
+  return {
+    width: ihdr.width,
+    height: ihdr.height,
+    colorSpace: colorChannels === 3 ? "/DeviceRGB" : "/DeviceGray",
+    bitsPerComponent: 8,
+    filter: "/FlateDecode",
+    decodeParms: `<< /Predictor 15 /Colors ${colorChannels} /BitsPerComponent 8 /Columns ${ihdr.width} >>`,
+    data: encodePdfPngRows(colorRows, ihdr.width, colorChannels),
+    smask: {
+      width: ihdr.width,
+      height: ihdr.height,
+      colorSpace: "/DeviceGray",
+      bitsPerComponent: 8,
+      filter: "/FlateDecode",
+      decodeParms: `<< /Predictor 15 /Colors 1 /BitsPerComponent 8 /Columns ${ihdr.width} >>`,
+      data: encodePdfPngRows(alphaRows, ihdr.width, 1)
+    }
+  };
+};
+
+const resolveLogoImage = (logoUrl) => {
+  try {
+    const logo = readLogoBuffer(logoUrl);
+    if (!logo?.buffer?.length) return null;
+    if (logo.mimeType === "image/jpeg" || logo.mimeType === "image/jpg") return parseJpegImage(logo.buffer);
+    if (logo.mimeType === "image/png") return parsePngImage(logo.buffer);
+    return null;
+  } catch (error) {
+    console.warn("Business logo could not be embedded in PDF attachment.", error.message);
+    return null;
+  }
+};
+
 class PdfDocument {
-  constructor() {
-    this.width = 595;
-    this.height = 842;
-    this.margin = 42;
-    this.bottomMargin = 46;
+  constructor(settings = {}) {
+    const print = normalizePdfPrintSettings(settings);
+    this.width = print.width;
+    this.height = print.height;
+    this.margin = print.margin;
+    this.bottomMargin = print.bottomMargin;
+    this.scale = print.scale;
     this.contentWidth = this.width - this.margin * 2;
     this.pages = [];
+    this.images = [];
     this.addPage();
   }
 
@@ -73,6 +413,17 @@ class PdfDocument {
 
   line(x1, y1, x2, y2, color = "#dde3ea", lineWidth = 0.6) {
     this.push(`q ${this.rgb(color)} RG ${lineWidth} w ${x1} ${this.pdfY(y1)} m ${x2} ${this.pdfY(y2)} l S Q`);
+  }
+
+  registerImage(image) {
+    const name = `Im${this.images.length + 1}`;
+    this.images.push({ ...image, name });
+    return name;
+  }
+
+  image(image, x, y, width, height) {
+    const name = this.registerImage(image);
+    this.push(`q ${width} 0 0 ${height} ${x} ${this.pdfY(y, height)} cm /${name} Do Q`);
   }
 
   textWidth(value, size = 10, font = "F1") {
@@ -131,8 +482,19 @@ class PdfDocument {
       .join("")
       .toUpperCase() || "AG";
 
-    this.rect(x, this.y, 74, 58, { fill: "#0f766e", stroke: "#0f766e" });
-    this.text(initials, x + 21, this.y + 19, { size: 18, font: "F2", color: "#ffffff" });
+    const logo = resolveLogoImage(business.logo_url);
+    if (logo) {
+      const boxWidth = 74;
+      const boxHeight = 58;
+      const scale = Math.min(boxWidth / logo.width, boxHeight / logo.height);
+      const imageWidth = Math.max(1, logo.width * scale);
+      const imageHeight = Math.max(1, logo.height * scale);
+      this.rect(x, this.y, boxWidth, boxHeight, { fill: "#ffffff", stroke: "#dde3ea" });
+      this.image(logo, x + (boxWidth - imageWidth) / 2, this.y + (boxHeight - imageHeight) / 2, imageWidth, imageHeight);
+    } else {
+      this.rect(x, this.y, 74, 58, { fill: "#0f766e", stroke: "#0f766e" });
+      this.text(initials, x + 21, this.y + 19, { size: 18, font: "F2", color: "#ffffff" });
+    }
     this.text(name, x + 88, this.y + 2, { size: 17, font: "F2", color: "#172033", maxWidth: this.contentWidth - 88 });
     let infoY = this.y + 24;
     [business.legal_name, business.physical_address, [business.phone, business.email].filter(Boolean).join(" | "), business.tax_pin ? `PIN: ${business.tax_pin}` : null]
@@ -264,15 +626,48 @@ class PdfDocument {
       objects.push(body);
       return objects.length;
     };
+    const toBuffer = (value) => (Buffer.isBuffer(value) ? value : Buffer.from(String(value), "utf8"));
     const fontRegularId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
     const fontBoldId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
+    const imageObjectIds = new Map();
+
+    const addImageObject = (image) => {
+      let smaskId = null;
+      if (image.smask) {
+        smaskId = addImageObject(image.smask);
+      }
+      const dict = [
+        "<< /Type /XObject",
+        "/Subtype /Image",
+        `/Width ${Math.round(image.width)}`,
+        `/Height ${Math.round(image.height)}`,
+        `/ColorSpace ${image.colorSpace}`,
+        `/BitsPerComponent ${image.bitsPerComponent}`,
+        `/Filter ${image.filter}`,
+        image.decodeParms ? `/DecodeParms ${image.decodeParms}` : "",
+        smaskId ? `/SMask ${smaskId} 0 R` : "",
+        `/Length ${image.data.length}`,
+        ">>\nstream\n"
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return addObject(Buffer.concat([Buffer.from(dict, "utf8"), image.data, Buffer.from("\nendstream", "utf8")]));
+    };
+
+    this.images.forEach((image) => {
+      imageObjectIds.set(image.name, addImageObject(image));
+    });
+
+    const xobjectResource = this.images.length
+      ? ` /XObject << ${this.images.map((image) => `/${image.name} ${imageObjectIds.get(image.name)} 0 R`).join(" ")} >>`
+      : "";
     const pageIds = [];
 
     this.pages.forEach((commands) => {
       const content = commands.join("\n");
       const contentId = addObject(`<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`);
       const pageId = addObject(
-        `<< /Type /Page /Parent 0 0 R /MediaBox [0 0 ${this.width} ${this.height}] /Resources << /Font << /F1 ${fontRegularId} 0 R /F2 ${fontBoldId} 0 R >> >> /Contents ${contentId} 0 R >>`
+        `<< /Type /Page /Parent 0 0 R /MediaBox [0 0 ${Number(this.width.toFixed(2))} ${Number(this.height.toFixed(2))}] /Resources << /Font << /F1 ${fontRegularId} 0 R /F2 ${fontBoldId} 0 R >>${xobjectResource} >> /Contents ${contentId} 0 R >>`
       );
       pageIds.push(pageId);
     });
@@ -282,17 +677,17 @@ class PdfDocument {
       objects[pageId - 1] = objects[pageId - 1].replace("/Parent 0 0 R", `/Parent ${pagesId} 0 R`);
     });
     const catalogId = addObject(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
-    const chunks = ["%PDF-1.4\n"];
+    const chunks = [Buffer.from("%PDF-1.4\n", "utf8")];
     const offsets = [0];
     objects.forEach((body, index) => {
-      offsets.push(Buffer.byteLength(chunks.join("")));
-      chunks.push(`${index + 1} 0 obj\n${body}\nendobj\n`);
+      offsets.push(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
+      chunks.push(Buffer.from(`${index + 1} 0 obj\n`, "utf8"), toBuffer(body), Buffer.from("\nendobj\n", "utf8"));
     });
-    const xrefOffset = Buffer.byteLength(chunks.join(""));
-    chunks.push(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`);
-    offsets.slice(1).forEach((offset) => chunks.push(`${String(offset).padStart(10, "0")} 00000 n \n`));
-    chunks.push(`trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
-    return Buffer.from(chunks.join(""), "utf8");
+    const xrefOffset = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    chunks.push(Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`, "utf8"));
+    offsets.slice(1).forEach((offset) => chunks.push(Buffer.from(`${String(offset).padStart(10, "0")} 00000 n \n`, "utf8")));
+    chunks.push(Buffer.from(`trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`, "utf8"));
+    return Buffer.concat(chunks);
   }
 }
 
@@ -314,7 +709,7 @@ const buildBillPdfAttachment = ({ bill, business = {} }) => {
   const tariff = parseJson(bill.tariff_snapshot);
   const tariffBlocks = Array.isArray(tariff.blocks) ? tariff.blocks : [];
   const penalties = Array.isArray(bill.penalty_applications) ? bill.penalty_applications : [];
-  const document = new PdfDocument();
+  const document = new PdfDocument(business);
 
   document.brandHeader(business);
   document.titleBoxes(
@@ -434,7 +829,7 @@ const buildBillPdfAttachment = ({ bill, business = {} }) => {
 };
 
 const buildReceiptPdfAttachment = ({ payment, allocations = [], customerBalance = 0, business = {} }) => {
-  const document = new PdfDocument();
+  const document = new PdfDocument(business);
   const positionIsCredit = Number(customerBalance || 0) < 0;
 
   document.brandHeader(business);
@@ -485,7 +880,85 @@ const buildReceiptPdfAttachment = ({ payment, allocations = [], customerBalance 
   };
 };
 
+const buildPayslipPdfAttachment = ({ payrollLine, business = {} }) => {
+  const document = new PdfDocument(business);
+  const payslipNumber = `PAYSLIP-${payrollLine.payroll_run_id}-${payrollLine.id}`;
+  const grossPay = Number(payrollLine.gross_amount || 0) + Number(payrollLine.additions || 0);
+
+  document.brandHeader(business);
+  document.titleBoxes(
+    { label: "Payslip", value: payslipNumber },
+    { label: "Period", value: `${dateOnly(payrollLine.period_start)} to ${dateOnly(payrollLine.period_end)}` }
+  );
+  document.infoGrid([
+    { label: "Payee", value: payrollLine.name || "-", subtext: payrollLine.code || "" },
+    { label: "Role / Title", value: payrollLine.title || label(payrollLine.payee_type) },
+    { label: "Pay Run", value: payrollLine.run_name || `Run ${payrollLine.payroll_run_id}` },
+    { label: "Status", value: label(payrollLine.status) },
+    { label: "Payment Channel", value: label(payrollLine.payment_channel) },
+    { label: "Payment Date", value: payrollLine.paid_at ? dateOnly(payrollLine.paid_at) : "-" }
+  ]);
+
+  document.sectionTitle("Earnings And Deductions");
+  document.table(
+    [
+      { header: "Item", value: "item", weight: 1.5 },
+      { header: "Basis", value: "basis" },
+      { header: "Amount", value: "amount", align: "right" }
+    ],
+    [
+      {
+        item: "Basic pay",
+        basis: `${Number(payrollLine.source_units || 0).toLocaleString()} ${label(payrollLine.rate_basis)}`,
+        amount: money(payrollLine.gross_amount, business)
+      },
+      {
+        item: "Additions",
+        basis: payrollLine.notes || "-",
+        amount: money(payrollLine.additions, business)
+      },
+      {
+        item: "Deductions",
+        basis: "-",
+        amount: `-${money(payrollLine.deductions, business)}`
+      }
+    ]
+  );
+
+  document.totals([
+    { label: "Gross earnings", value: money(grossPay, business) },
+    { label: "Total deductions", value: money(payrollLine.deductions, business) },
+    { label: "Net pay", value: money(payrollLine.net_amount, business), primary: true }
+  ]);
+
+  document.sectionTitle("Payment Record");
+  document.table(
+    [
+      { header: "Field", value: "field" },
+      { header: "Value", value: "value", weight: 2 }
+    ],
+    [
+      { field: "Run status", value: label(payrollLine.run_status) },
+      { field: "Line status", value: label(payrollLine.status) },
+      { field: "Expense reference", value: payrollLine.expense_reference || (payrollLine.expense_id ? `Expense #${payrollLine.expense_id}` : "-") },
+      { field: "Paid by", value: payrollLine.paid_by_name || "-" }
+    ]
+  );
+
+  document.footer([
+    business.report_footer_note || business.receipt_footer_note || "This payslip was generated from the payroll register.",
+    `${business.business_name || "Water Billing"} payroll document`
+  ]);
+
+  return {
+    filename: sanitizeFilename(`${payslipNumber}-${payrollLine.name || payrollLine.payee_id}.pdf`),
+    content: document.render(),
+    contentType: "application/pdf"
+  };
+};
+
 module.exports = {
   buildBillPdfAttachment,
+  buildPayslipPdfAttachment,
   buildReceiptPdfAttachment
 };

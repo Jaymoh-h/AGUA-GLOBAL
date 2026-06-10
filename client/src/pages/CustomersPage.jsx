@@ -85,7 +85,7 @@ function CustomersPage({ user }) {
       api.customers.list(),
       api.rates.list(),
       api.zones.list(),
-      canWrite ? api.businessSettings.get().catch(() => null) : Promise.resolve(null)
+      api.businessSettings.get().catch(() => null)
     ]);
     setCustomers(customerRows);
     setRates(rateRows);
@@ -213,8 +213,10 @@ function CustomersPage({ user }) {
 
   const printStatement = () => {
     if (!statement) return;
-    withPrintTitle(`customer statement ${statement.customer.acc_number} ${statement.period.lifetime ? "lifetime" : `${statement.period.start_date || "start"} to ${statement.period.end_date || "end"}`}`, () =>
-      window.print()
+    withPrintTitle(
+      `customer statement ${statement.customer.acc_number} ${statement.period.lifetime ? "lifetime" : `${statement.period.start_date || "start"} to ${statement.period.end_date || "end"}`}`,
+      () => window.print(),
+      business
     );
   };
 

@@ -22,7 +22,10 @@ Admin typically:
 5. Promotes held source bills.
 6. Reviews adjustments.
 7. Accesses operational backup.
-8. Assigns user access contexts where one account needs multiple operating profiles.
+8. Records backup restore drills and reviews backup readiness.
+9. Reviews monitoring events and sends monitoring test alerts.
+10. Publishes controlled internal documents in the Knowledge Base.
+11. Assigns user access contexts where one account needs multiple operating profiles.
 
 Admin should avoid routine payment posting unless acting as backup for finance.
 
@@ -41,6 +44,8 @@ Accountant typically:
 9. Manages payroll runs.
 10. Manages contractors and contractor invoices.
 11. Posts approved contractor invoices to expenses.
+12. Publishes finance or operations documents in the Knowledge Base.
+13. Previews and sends operational reminders.
 
 ## Meter Reader Workflow
 
@@ -53,6 +58,7 @@ Meter reader typically:
 5. Submits reading.
 6. Raises maintenance request if a meter or line issue is observed.
 7. Records production weekly readings where assigned.
+8. Uses the Knowledge Base for shared SOPs, manuals, and field instructions.
 
 ## Customer Portal Workflow
 
@@ -70,8 +76,9 @@ Business viewer typically:
 
 1. Logs in and selects the Business Viewer context if prompted.
 2. Reviews dashboard health.
-3. Reviews reports, audit trail, bills, payments, production, payroll, and contractor invoice summaries.
-4. Raises observations outside the system or through the responsible operational user.
+3. Reviews reports, audit trail, monitoring, bills, payments, production, payroll, and contractor invoice summaries.
+4. Uses shared Knowledge Base documents for reference.
+5. Raises observations outside the system or through the responsible operational user.
 
 Business viewer should not be used for operational data entry.
 
@@ -121,6 +128,67 @@ Use Communications to:
 - Review campaign history and recipient results.
 
 For WhatsApp, use approved templates when provider policy requires them.
+
+## Knowledge Base
+
+Use the Knowledge Base for controlled internal documents such as SOPs, deployment notes, test checklists, manuals, policy references, and implementation records.
+
+Admins and accountants can:
+
+- Upload a document.
+- Set category, sensitivity, version label, and summary.
+- Choose which roles can view and download it.
+- Update metadata when a document changes.
+- Archive or remove outdated documents.
+
+Meter readers and business viewers can only see documents shared with their role. Downloads are recorded in the audit trail.
+
+## Operational Reminders
+
+Admins and accountants can preview and send reminders for operational work such as pending tasks, end-month meter readings, weekly production readings, billing preparation, contractor invoices, and payroll preparation.
+
+Recommended routine:
+
+1. Open the reminders area from the operational/settings surface.
+2. Preview pending reminders before sending.
+3. Send only the relevant reminder type.
+4. Review reminder logs to confirm delivery attempts and avoid duplicates.
+
+Scheduled reminder runs are handled by cron routes when deployed.
+
+## Monitoring And Public Status
+
+Admins can review the monitoring alert snapshot and send test alerts. Admins, accountants, and business viewers can review monitoring summaries and event logs where exposed in Reports.
+
+Monitoring tracks:
+
+- API and database status.
+- Failed logins.
+- Server-side errors.
+- Client-side page crashes reported by the app.
+- Alert send and cooldown history.
+
+The public status page shows API and database reachability without exposing operational records. It is intended for uptime checks and lightweight external visibility.
+
+## Backup And Restore Drills
+
+Admins should use the backup area in Business Settings to review backup readiness and record restore drills.
+
+For each drill, record:
+
+- Drill date.
+- Backup reference.
+- Target environment.
+- Duration.
+- Dataset count.
+- Status.
+- Findings and follow-up actions.
+
+Provider-native database backups and point-in-time recovery are still configured with the database host. The application restore drill ledger records the business evidence that recovery has been practiced.
+
+## Print And PDF Defaults
+
+Admins can set business print defaults such as page size, orientation, margin, scale, fit-to-page behavior, and wide-report compression. Use these settings to make bills, receipts, reports, and production prints consistent across browsers and printers.
 
 ## Contractor Invoices
 

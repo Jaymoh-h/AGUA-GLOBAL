@@ -74,7 +74,8 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
     if (!selectedBill) return;
     withPrintTitle(
       `bill ${selectedBill.bill_number || selectedBill.id} ${selectedBill.acc_number || selectedBill.customer_name || ""}`,
-      () => window.print()
+      () => window.print(),
+      businessSettings
     );
   };
   const sendBillEmail = async (id) => {

@@ -57,15 +57,60 @@ export const downloadBlobFile = (blob, filename, extension = "") => {
   window.setTimeout(() => URL.revokeObjectURL(url), 60000);
 };
 
-const printablePageHeightPx = () => ((297 - 28) * 96) / 25.4;
+const printPageSizesMm = {
+  A4: { width: 210, height: 297 },
+  A5: { width: 148, height: 210 },
+  Letter: { width: 215.9, height: 279.4 },
+  Legal: { width: 215.9, height: 355.6 }
+};
+
+const clampNumber = (value, min, max, fallback) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+};
+
+export const normalizePrintSettings = (settings = {}) => {
+  const pageSize = printPageSizesMm[settings.print_page_size] ? settings.print_page_size : "A4";
+  const orientation = settings.print_orientation === "landscape" ? "landscape" : "portrait";
+  const marginMm = clampNumber(settings.print_margin_mm, 5, 30, 14);
+  const scalePercent = Math.round(clampNumber(settings.print_scale_percent, 75, 120, 100));
+  return {
+    print_page_size: pageSize,
+    print_orientation: orientation,
+    print_margin_mm: marginMm,
+    print_scale_percent: scalePercent,
+    print_fit_to_page: Boolean(settings.print_fit_to_page)
+  };
+};
+
+export const getPrintPageDimensionsMm = (settings = {}) => {
+  const normalized = normalizePrintSettings(settings);
+  const base = printPageSizesMm[normalized.print_page_size];
+  return normalized.print_orientation === "landscape"
+    ? { width: base.height, height: base.width }
+    : base;
+};
+
+const effectivePrintScale = (settings = {}) => {
+  const normalized = normalizePrintSettings(settings);
+  return (normalized.print_fit_to_page ? Math.min(normalized.print_scale_percent, 95) : normalized.print_scale_percent) / 100;
+};
+
+const printablePageHeightPx = (settings = {}) => {
+  const normalized = normalizePrintSettings(settings);
+  const page = getPrintPageDimensionsMm(normalized);
+  const scale = effectivePrintScale(normalized);
+  return (((page.height - normalized.print_margin_mm * 2) * 96) / 25.4) / scale;
+};
 
 const clearPrintFooterSpacers = () => {
   document.querySelectorAll(".print-footer-spacer").forEach((spacer) => spacer.remove());
 };
 
-const preparePrintFooterSpacing = () => {
+const preparePrintFooterSpacing = (settings = {}) => {
   clearPrintFooterSpacers();
-  const pageHeight = printablePageHeightPx();
+  const pageHeight = printablePageHeightPx(settings);
   const surfaces = document.querySelectorAll(".active-print-surface.report-print, .receipt-print");
   surfaces.forEach((surface) => {
     const footer = surface.querySelector(".report-print-footer, .receipt-footer");
@@ -97,15 +142,42 @@ const preparePrintFooterSpacing = () => {
   });
 };
 
-export const withPrintTitle = (title, printCallback = () => window.print()) => {
+const applyBrowserPrintSettings = (settings = {}) => {
+  const normalized = normalizePrintSettings(settings);
+  const style = document.createElement("style");
+  style.id = "dynamic-print-settings";
+  const scale = effectivePrintScale(normalized);
+  style.textContent = `
+    @media print {
+      @page {
+        size: ${normalized.print_page_size} ${normalized.print_orientation};
+        margin: ${normalized.print_margin_mm}mm;
+      }
+      body {
+        --print-scale-factor: ${scale};
+      }
+    }
+  `;
+  document.head.appendChild(style);
+  document.body.classList.toggle("print-fit-page", normalized.print_fit_to_page);
+  document.body.classList.toggle("print-scaled-page", scale !== 1);
+  return () => {
+    style.remove();
+    document.body.classList.remove("print-fit-page", "print-scaled-page");
+  };
+};
+
+export const withPrintTitle = (title, printCallback = () => window.print(), printSettings = {}) => {
   const previousTitle = document.title;
+  const clearDynamicPrintSettings = applyBrowserPrintSettings(printSettings);
   document.title = slugifyFilenamePart(title, "print");
-  preparePrintFooterSpacing();
+  preparePrintFooterSpacing(printSettings);
   let restored = false;
   const restore = () => {
     if (restored) return;
     restored = true;
     document.title = previousTitle;
+    clearDynamicPrintSettings();
     clearPrintFooterSpacers();
     window.removeEventListener("afterprint", restore);
     window.removeEventListener("focus", delayedRestore);

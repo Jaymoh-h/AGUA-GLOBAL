@@ -4,6 +4,8 @@ const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
 const { assertNoFutureDates } = require("../services/dateGuard.service");
 const { createExpenseRecord } = require("./expense.controller");
+const { getBusinessSettings } = require("../services/documentDelivery.service");
+const { buildPayslipPdfAttachment } = require("../services/styledPdf.service");
 
 const payeeTypes = ["employee", "casual", "contractor", "subscription"];
 const recurringPayeeTypes = ["employee", "subscription"];
@@ -709,6 +711,65 @@ const updateLineItem = asyncHandler(async (req, res) => {
   }
 });
 
+const downloadPayslip = asyncHandler(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const lineResult = await client.query(
+      `SELECT pli.*,
+              pr.name AS run_name,
+              pr.period_start,
+              pr.period_end,
+              pr.status AS run_status,
+              pr.approved_at,
+              pr.paid_at AS run_paid_at,
+              pp.name,
+              pp.code,
+              pp.title,
+              pp.rate_amount,
+              pp.rate_basis,
+              pp.payment_channel,
+              pp.recurrence_type,
+              e.reference AS expense_reference,
+              e.expense_date,
+              payer.name AS paid_by_name
+       FROM payroll_line_items pli
+       JOIN payroll_runs pr ON pr.id = pli.payroll_run_id
+       JOIN payroll_payees pp ON pp.id = pli.payee_id
+       LEFT JOIN expenses e ON e.id = pli.expense_id
+       LEFT JOIN users payer ON payer.id = pli.paid_by
+       WHERE pli.id = $1`,
+      [req.params.lineId]
+    );
+    const payrollLine = lineResult.rows[0];
+    if (!payrollLine) throw new ApiError(404, "Payroll line item not found.");
+
+    const business = await getBusinessSettings(client);
+    const attachment = buildPayslipPdfAttachment({ payrollLine, business });
+
+    try {
+      await recordAuditEvent(client, {
+        req,
+        action: "payroll_payslip.downloaded",
+        entityType: "payroll_line_item",
+        entityId: payrollLine.id,
+        afterData: {
+          payroll_run_id: payrollLine.payroll_run_id,
+          payee_id: payrollLine.payee_id,
+          filename: attachment.filename
+        }
+      });
+    } catch (error) {
+      console.error("Payslip download audit event could not be recorded.", error);
+    }
+
+    res.setHeader("Content-Type", attachment.contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${attachment.filename.replace(/"/g, "")}"`);
+    res.send(attachment.content);
+  } finally {
+    client.release();
+  }
+});
+
 const updateRunStatus = asyncHandler(async (req, res) => {
   const { status, notes = "" } = req.body;
   if (!runStatuses.includes(status)) throw new ApiError(400, "Payroll status is invalid.");
@@ -810,6 +871,7 @@ module.exports = {
   addRunLineItem,
   createPayee,
   createRun,
+  downloadPayslip,
   getRun,
   listPayees,
   listRuns,

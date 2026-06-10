@@ -971,7 +971,8 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
       () =>
         withPrintTitle(
           `receipt ${receipt.receipt_number || receipt.id || "payment"} ${receipt.acc_number || receipt.customer_name || ""}`,
-          () => window.print()
+          () => window.print(),
+          businessSettings
         ),
       50
     );

@@ -1,13 +1,36 @@
-const errorHandler = (err, _req, res, _next) => {
+const { recordSystemEvent } = require("../services/systemEvent.service");
+
+const logError = (err, req, statusCode, message) => {
+  const databaseCodes = new Set(["28P01", "3D000", "ECONNREFUSED", "57P01", "08006", "53300"]);
+  recordSystemEvent({
+    eventType: statusCode >= 500 ? "server.error" : "server.request_error",
+    severity: statusCode >= 500 ? "error" : "warning",
+    source: databaseCodes.has(err.code) ? "database" : "server",
+    message,
+    statusCode,
+    details: {
+      name: err.name,
+      code: err.code,
+      constraint: err.constraint,
+      stack: statusCode >= 500 ? err.stack : undefined
+    },
+    req
+  });
+};
+
+const errorHandler = (err, req, res, _next) => {
   if (err.code === "28P01") {
+    logError(err, req, 500, "Database login failed.");
     return res.status(500).json({ message: "Database login failed. Check server/.env DATABASE_URL." });
   }
 
   if (err.code === "3D000") {
+    logError(err, req, 500, "Database not found.");
     return res.status(500).json({ message: "Database not found. Create or correct the database in server/.env." });
   }
 
   if (err.code === "ECONNREFUSED") {
+    logError(err, req, 500, "Cannot reach PostgreSQL.");
     return res.status(500).json({ message: "Cannot reach PostgreSQL. Confirm the database service is running." });
   }
 
@@ -34,6 +57,7 @@ const errorHandler = (err, _req, res, _next) => {
 
   if (statusCode === 500) {
     console.error(err);
+    logError(err, req, statusCode, err.message || "Unhandled server error.");
   }
 
   res.status(statusCode).json({

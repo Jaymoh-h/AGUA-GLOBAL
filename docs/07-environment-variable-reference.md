@@ -22,11 +22,27 @@ Defined in `server/.env`.
 | `DATABASE_SSL_REJECT_UNAUTHORIZED` | No | `false` | Controls certificate validation for SSL connections |
 | `JWT_SECRET` | Yes | `<long-random-secret>` | Token signing secret |
 | `JWT_EXPIRES_IN` | No | `8h` | JWT lifetime |
-| `CLIENT_ORIGIN` | Yes | `http://localhost:5173` | Allowed CORS origin |
+| `CRON_SECRET` | Required for Vercel Cron schedules | `<long-random-secret>` | Secret Vercel sends in the cron `Authorization` header |
+| `REMINDER_CRON_SECRET` | Optional | `<long-random-secret>` | App-specific alias for non-Vercel schedulers |
+| `MONITORING_CRON_SECRET` | Optional | `<long-random-secret>` | App-specific alias for monitoring alert cron; falls back to `CRON_SECRET` |
+| `MONITORING_ALERT_EMAILS` | Optional | `admin@example.com,ops@example.com` | Email recipients for monitoring alerts |
+| `MONITORING_ALERT_PHONES` | Optional | `+2547...,+2547...` | SMS recipients for monitoring alerts |
+| `MONITORING_ALERT_WINDOW_MINUTES` | No | `15` | Recent error window checked by the monitoring alert runner |
+| `MONITORING_ALERT_COOLDOWN_MINUTES` | No | `60` | Minimum time before repeating the same monitoring alert to the same recipient |
+| `PUBLIC_STATUS_URL` | Optional | `https://status.example.com` | Status page URL included in monitoring alert messages |
+| `CLIENT_ORIGIN` | Yes | `http://localhost:5173` | Allowed CORS origin or comma-separated origins |
 | `PASSWORD_RESET_MINUTES` | No | `60` | Password reset token lifetime |
 | `LOGO_STORAGE_MODE` | No | `filesystem` or `data-url` | Logo storage strategy |
+| `BACKUP_DIR` | No | `backups` | Local directory for scripted operational backup exports |
+| `BACKUP_RETENTION_DAYS` | No | `180` | Retention window used by `db:backup:prune` and `db:backup:monthly` |
 
 Production note: set `LOGO_STORAGE_MODE=data-url` on Vercel so uploaded logos survive serverless deployments.
+
+If the client project serves public subdomains, include each browser origin in `CLIENT_ORIGIN`:
+
+```text
+CLIENT_ORIGIN=https://www.example.com,https://status.example.com,https://docs.example.com
+```
 
 ## Email Variables
 

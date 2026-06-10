@@ -1,8 +1,11 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import AppErrorBoundary from "./components/AppErrorBoundary";
 import Layout, { pageAccess as access } from "./components/Layout";
 import ToastProvider from "./components/ToastProvider";
 import LandingPage from "./pages/LandingPage";
 import PasswordChangePage from "./pages/PasswordChangePage";
+import PublicDocsPage from "./pages/PublicDocsPage";
+import PublicStatusPage from "./pages/PublicStatusPage";
 import { api, setFutureDateOverrideHandler } from "./services/api";
 
 const AuditTrailPage = lazy(() => import("./pages/AuditTrailPage"));
@@ -14,6 +17,7 @@ const ContractorInvoicesPage = lazy(() => import("./pages/ContractorInvoicesPage
 const CustomersPage = lazy(() => import("./pages/CustomersPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
 const ExpensesPage = lazy(() => import("./pages/ExpensesPage"));
+const KnowledgeBasePage = lazy(() => import("./pages/KnowledgeBasePage"));
 const MaintenancePage = lazy(() => import("./pages/MaintenancePage"));
 const PaymentsPage = lazy(() => import("./pages/PaymentsPage"));
 const PayrollPage = lazy(() => import("./pages/PayrollPage"));
@@ -40,6 +44,14 @@ const getSavedUser = () => {
 };
 
 const IDLE_LOGOUT_MS = 30 * 60 * 1000;
+
+const publicSurface = () => {
+  const hostname = window.location.hostname.toLowerCase();
+  const pathname = window.location.pathname.replace(/\/+$/, "") || "/";
+  if (hostname.startsWith("status.") || pathname === "/status" || pathname.startsWith("/status/")) return "status";
+  if (hostname.startsWith("docs.") || pathname === "/docs" || pathname.startsWith("/docs/")) return "docs";
+  return "";
+};
 
 function App() {
   const [user, setUser] = useState(getSavedUser);
@@ -116,6 +128,27 @@ function App() {
     };
   }, [user]);
 
+  useEffect(() => {
+    if (!user) return undefined;
+    const report = (event) => {
+      const error = event.error || event.reason || {};
+      api.monitoring
+        .reportClientEvent({
+          message: error.message || event.message || "Client runtime error",
+          stack: error.stack || "",
+          url: window.location.href,
+          user_agent: navigator.userAgent
+        })
+        .catch(() => {});
+    };
+    window.addEventListener("error", report);
+    window.addEventListener("unhandledrejection", report);
+    return () => {
+      window.removeEventListener("error", report);
+      window.removeEventListener("unhandledrejection", report);
+    };
+  }, [user]);
+
   const handleLogin = ({ token, user: nextUser }) => {
     localStorage.setItem("agua_token", token);
     localStorage.setItem("agua_user", JSON.stringify(nextUser));
@@ -153,6 +186,14 @@ function App() {
     setCurrentPage(nextUser.role === "customer" ? "portal" : "dashboard");
   };
 
+  const surface = publicSurface();
+  if (surface === "status") {
+    return <PublicStatusPage appName={appName} />;
+  }
+  if (surface === "docs") {
+    return <PublicDocsPage appName={appName} />;
+  }
+
   if (!user) {
     return <LandingPage appName={appName} businessSettings={businessSettings} onLogin={handleLogin} sessionMessage={sessionMessage} />;
   }
@@ -180,6 +221,7 @@ function App() {
     maintenance: <MaintenancePage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
     production: <ProductionPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
     reports: <ReportsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
+    knowledge: <KnowledgeBasePage user={user} />,
     rates: <RatesPage user={user} />,
     zones: <ZonesPage user={user} />,
     users: <UsersPage user={user} />
@@ -188,15 +230,17 @@ function App() {
   return (
     <ToastProvider>
       <Layout appName={appName} user={user} currentPage={currentPage} onNavigate={handleNavigate} onLogout={handleLogout}>
-        <Suspense
-          fallback={
-            <div className="panel">
-              <EmptyPageMessage />
-            </div>
-          }
-        >
-          {pages[currentPage] || pages.dashboard}
-        </Suspense>
+        <AppErrorBoundary key={currentPage}>
+          <Suspense
+            fallback={
+              <div className="panel">
+                <EmptyPageMessage />
+              </div>
+            }
+          >
+            {pages[currentPage] || pages.dashboard}
+          </Suspense>
+        </AppErrorBoundary>
         {futureDateOverride ? (
           <FutureDateOverrideDialog
             message={futureDateOverride.message}

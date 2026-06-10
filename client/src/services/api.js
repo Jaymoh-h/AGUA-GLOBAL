@@ -1,5 +1,6 @@
 const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 const ASSET_BASE = API_BASE.replace(/\/api\/?$/, "");
+export const apiBaseUrl = API_BASE;
 
 const getToken = () => localStorage.getItem("agua_token");
 let futureDateOverrideHandler = null;
@@ -88,6 +89,16 @@ export const assetUrl = (path) => {
 };
 
 export const api = {
+  status: async () => {
+    const response = await fetch(`${API_BASE}/status`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(data.message || "API status check failed.");
+      error.data = data;
+      throw error;
+    }
+    return data;
+  },
   login: (email, password) => request("/auth/login", { method: "POST", body: { email, password } }),
   selectContext: (contextSelectionToken, accessProfileId) =>
     request("/auth/select-context", {
@@ -110,6 +121,16 @@ export const api = {
     remove: (id) => request(`/documents/${id}`, { method: "DELETE" }),
     download: (id) => requestBlob(`/documents/${id}/download`)
   },
+  knowledgeDocuments: {
+    list: (params = {}) => {
+      const query = new URLSearchParams(params);
+      return request(`/knowledge-documents${query.toString() ? `?${query}` : ""}`);
+    },
+    upload: (payload) => request("/knowledge-documents", { method: "POST", body: payload }),
+    update: (id, payload) => request(`/knowledge-documents/${id}`, { method: "PUT", body: payload }),
+    remove: (id, reason = "") => request(`/knowledge-documents/${id}`, { method: "DELETE", body: { reason } }),
+    download: (id) => requestBlob(`/knowledge-documents/${id}/download`)
+  },
   reports: {
     summary: () => request("/reports/summary"),
     accountant: (params = {}) => {
@@ -117,7 +138,22 @@ export const api = {
       return request(`/reports/accountant${query.toString() ? `?${query}` : ""}`);
     },
     dataQuality: () => request("/reports/data-quality"),
+    backupStatus: () => request("/reports/backup-status"),
+    backupRestoreDrills: () => request("/reports/backup-restore-drills"),
+    createBackupRestoreDrill: (payload) => request("/reports/backup-restore-drills", { method: "POST", body: payload }),
     backup: () => request("/reports/backup")
+  },
+  reminders: {
+    preview: () => request("/reminders/operational/preview"),
+    sendOperational: (payload = {}) => request("/reminders/operational/send", { method: "POST", body: payload }),
+    logs: (limit = 50) => request(`/reminders/operational/logs?limit=${limit}`)
+  },
+  monitoring: {
+    summary: () => request("/monitoring/summary"),
+    events: (limit = 100) => request(`/monitoring/events?limit=${limit}`),
+    alertSnapshot: () => request("/monitoring/alert-snapshot"),
+    sendTestAlert: () => request("/monitoring/test-alert", { method: "POST" }),
+    reportClientEvent: (payload) => request("/monitoring/client-events", { method: "POST", body: payload })
   },
   portal: {
     dashboard: (customerId = "") => request(`/portal/dashboard${customerId ? `?customer_id=${customerId}` : ""}`),
@@ -284,6 +320,7 @@ export const api = {
     getRun: (id) => request(`/payroll/runs/${id}`),
     addRunLineItem: (id, payload) => request(`/payroll/runs/${id}/line-items`, { method: "POST", body: payload }),
     updateRunStatus: (id, payload) => request(`/payroll/runs/${id}/status`, { method: "PATCH", body: payload }),
+    downloadPayslip: (lineId) => requestBlob(`/payroll/line-items/${lineId}/payslip`),
     updateLineItem: (id, payload) => request(`/payroll/line-items/${id}`, { method: "PATCH", body: payload })
   },
   maintenance: {

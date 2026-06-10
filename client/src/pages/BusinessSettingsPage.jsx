@@ -1,4 +1,4 @@
-import { Building2, Download, Save, Settings2, Upload } from "lucide-react";
+import { Bell, Building2, Download, MailCheck, RefreshCw, Save, Send, Settings2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useToastMessage } from "../components/ToastProvider";
 import { api, assetUrl } from "../services/api";
@@ -19,19 +19,45 @@ const blankSettings = {
   bank_details: "",
   receipt_footer_note: "",
   report_footer_note: "",
-  default_currency: "KES"
+  default_currency: "KES",
+  print_page_size: "A4",
+  print_orientation: "portrait",
+  print_margin_mm: 14,
+  print_scale_percent: 100,
+  print_fit_to_page: false
+};
+
+const blankRestoreDrill = {
+  drill_date: new Date().toISOString().slice(0, 10),
+  environment: "staging",
+  backup_reference: "",
+  restore_target: "",
+  status: "passed",
+  duration_minutes: "",
+  dataset_count: "",
+  findings: "",
+  follow_up_actions: ""
 };
 
 const valueOrEmpty = (value) => value ?? "";
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
+const shortDateTime = (value) => (value ? new Date(value).toLocaleString() : "Never");
 
 function BusinessSettingsPage({ user }) {
   const [settings, setSettings] = useState(blankSettings);
   const [billingSettings, setBillingSettings] = useState(null);
+  const [backupStatus, setBackupStatus] = useState(null);
+  const [restoreDrills, setRestoreDrills] = useState([]);
+  const [restoreDrillForm, setRestoreDrillForm] = useState(blankRestoreDrill);
+  const [reminderPreview, setReminderPreview] = useState(null);
+  const [reminderLogs, setReminderLogs] = useState([]);
+  const [reminderLoading, setReminderLoading] = useState(false);
+  const [reminderSending, setReminderSending] = useState(false);
   const [, setMessage] = useToastMessage();
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [backupLoading, setBackupLoading] = useState(false);
   const canEdit = user.role === "admin";
+  const canSendReminders = ["admin", "accountant"].includes(user.role);
 
   useEffect(() => {
     api.businessSettings
@@ -51,14 +77,27 @@ function BusinessSettingsPage({ user }) {
           bank_details: valueOrEmpty(row.bank_details),
           receipt_footer_note: valueOrEmpty(row.receipt_footer_note),
           report_footer_note: valueOrEmpty(row.report_footer_note),
-          default_currency: valueOrEmpty(row.default_currency) || "KES"
+          default_currency: valueOrEmpty(row.default_currency) || "KES",
+          print_page_size: valueOrEmpty(row.print_page_size) || "A4",
+          print_orientation: valueOrEmpty(row.print_orientation) || "portrait",
+          print_margin_mm: row.print_margin_mm ?? 14,
+          print_scale_percent: row.print_scale_percent ?? 100,
+          print_fit_to_page: Boolean(row.print_fit_to_page)
         })
       )
       .catch((err) => setMessage(err.message));
     api.billing.settings.get().then(setBillingSettings).catch(() => {});
+    if (canEdit) {
+      api.reports.backupStatus().then(setBackupStatus).catch(() => {});
+      api.reports.backupRestoreDrills().then(setRestoreDrills).catch(() => {});
+    }
+    if (canSendReminders) {
+      loadOperationalReminders();
+    }
   }, []);
 
   const setField = (field, value) => setSettings((current) => ({ ...current, [field]: value }));
+  const setRestoreDrillField = (field, value) => setRestoreDrillForm((current) => ({ ...current, [field]: value }));
 
   const save = async (event) => {
     event.preventDefault();
@@ -117,10 +156,55 @@ function BusinessSettingsPage({ user }) {
       const datasetCount = Object.keys(backup.dataset_counts || {}).length;
       downloadJson(namedExport("operational-backup-pack", "json", [localDateStamp()]), backup);
       setMessage(`Backup downloaded with ${datasetCount.toLocaleString()} dataset(s).`);
+      api.reports.backupStatus().then(setBackupStatus).catch(() => {});
     } catch (err) {
       setMessage(err.message);
     } finally {
       setBackupLoading(false);
+    }
+  };
+
+  const recordRestoreDrill = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    try {
+      const created = await api.reports.createBackupRestoreDrill(restoreDrillForm);
+      setRestoreDrills((current) => [created, ...current].slice(0, 50));
+      setRestoreDrillForm(blankRestoreDrill);
+      api.reports.backupStatus().then(setBackupStatus).catch(() => {});
+      setMessage("Restore drill recorded.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const loadOperationalReminders = async () => {
+    setReminderLoading(true);
+    try {
+      const [preview, logs] = await Promise.all([api.reminders.preview(), api.reminders.logs(12)]);
+      setReminderPreview(preview);
+      setReminderLogs(logs || []);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setReminderLoading(false);
+    }
+  };
+
+  const sendOperationalReminders = async () => {
+    setReminderSending(true);
+    setMessage("");
+    try {
+      const result = await api.reminders.sendOperational();
+      const sent = result.results?.filter((row) => row.status === "sent").length || 0;
+      const skipped = result.results?.filter((row) => row.status === "skipped").length || 0;
+      const failed = result.results?.filter((row) => row.status === "failed").length || 0;
+      setMessage(`Operational reminders processed. Sent ${sent}, skipped ${skipped}, failed ${failed}.`);
+      await loadOperationalReminders();
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setReminderSending(false);
     }
   };
 
@@ -229,6 +313,107 @@ function BusinessSettingsPage({ user }) {
         </form>
 
         <div className="page-stack wide-panel">
+          {canSendReminders ? (
+            <div className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h3>Operational Reminders</h3>
+                  <p className="muted">Email nudges for pending work, meter readings, billing, and payroll preparation.</p>
+                </div>
+                <div className="row-actions">
+                  <button type="button" onClick={loadOperationalReminders} disabled={reminderLoading}>
+                    <RefreshCw size={17} />
+                    {reminderLoading ? "Loading..." : "Refresh"}
+                  </button>
+                  <button type="button" onClick={sendOperationalReminders} disabled={reminderSending}>
+                    <Send size={17} />
+                    {reminderSending ? "Sending..." : "Send due"}
+                  </button>
+                </div>
+              </div>
+              {reminderPreview?.reminders?.length ? (
+                <>
+                  <div className="reading-context">
+                    <div>
+                      <span>Due groups</span>
+                      <strong>
+                        {reminderPreview.reminders.filter((item) => item.hasWork && item.dueToday).length.toLocaleString()}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Total items</span>
+                      <strong>
+                        {reminderPreview.reminders
+                          .reduce((sum, item) => sum + Number(item.count || 0), 0)
+                          .toLocaleString()}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Last checked</span>
+                      <strong>{shortDateTime(reminderPreview.generated_at)}</strong>
+                    </div>
+                  </div>
+                  <div className="reminder-card-grid">
+                    {reminderPreview.reminders.map((item) => (
+                      <div className={`reminder-card ${item.hasWork && item.dueToday ? "active" : ""}`} key={item.type}>
+                        <div>
+                          <Bell size={16} />
+                          <strong>{item.label}</strong>
+                        </div>
+                        <span>{Number(item.count || 0).toLocaleString()} due</span>
+                        <small>{item.lines?.[0] || "No pending detail."}</small>
+                        <small>{item.dueToday ? "Scheduled today" : item.schedule?.cadence || "Not scheduled today"}</small>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p className="empty-state">Refresh to preview current reminder work.</p>
+              )}
+              <div className="panel-heading compact-heading">
+                <div>
+                  <h3>Recent Reminder Emails</h3>
+                  <p className="muted">Daily duplicate sends are skipped per reminder type and recipient.</p>
+                </div>
+                <MailCheck size={18} />
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Reminder</th>
+                      <th>Recipient</th>
+                      <th>Status</th>
+                      <th>Sent</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reminderLogs.length ? (
+                      reminderLogs.map((log) => (
+                        <tr key={log.id}>
+                          <td>
+                            {log.reminder_type}
+                            <small>{log.subject}</small>
+                          </td>
+                          <td>
+                            {log.recipient_name || log.recipient_email}
+                            <small>{log.recipient_email}</small>
+                          </td>
+                          <td>{log.status}</td>
+                          <td>{shortDateTime(log.sent_at)}</td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan="4">No reminder emails have been recorded yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+
           {canEdit ? (
             <div className="panel">
               <div className="panel-heading">
@@ -236,10 +421,202 @@ function BusinessSettingsPage({ user }) {
                   <h3>Data Backup Pack</h3>
                   <p className="muted">Server-generated operational export. Password hashes and reset tokens are excluded.</p>
                 </div>
-                <button type="button" onClick={downloadBackupPack} disabled={backupLoading}>
-                  <Download size={17} />
-                  {backupLoading ? "Preparing..." : "Download"}
+                <div className="row-actions">
+                  <button type="button" onClick={() => api.reports.backupStatus().then(setBackupStatus).catch((err) => setMessage(err.message))}>
+                    <RefreshCw size={17} />
+                    Status
+                  </button>
+                  <button type="button" onClick={downloadBackupPack} disabled={backupLoading}>
+                    <Download size={17} />
+                    {backupLoading ? "Preparing..." : "Download"}
+                  </button>
+                </div>
+              </div>
+              {backupStatus ? (
+                <>
+                  <div className="reading-context">
+                    <div>
+                      <span>Backup status</span>
+                      <strong>{backupStatus.status}</strong>
+                    </div>
+                    <div>
+                      <span>Datasets</span>
+                      <strong>{Number(backupStatus.dataset_count || 0).toLocaleString()}</strong>
+                    </div>
+                    <div>
+                      <span>Last export</span>
+                      <strong>{backupStatus.last_export?.created_at?.slice(0, 10) || "None"}</strong>
+                    </div>
+                    <div>
+                      <span>Missing optional</span>
+                      <strong>{Number(backupStatus.missing_optional_datasets?.length || 0).toLocaleString()}</strong>
+                    </div>
+                    <div>
+                      <span>Restore drill</span>
+                      <strong>{backupStatus.restore_drill_status || "missing"}</strong>
+                    </div>
+                    <div>
+                      <span>Next drill due</span>
+                      <strong>{backupStatus.next_restore_drill_due || "Schedule now"}</strong>
+                    </div>
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <tbody>
+                        <tr>
+                          <td>Daily retention</td>
+                          <td>{backupStatus.retention_policy?.daily || "30 days"}</td>
+                        </tr>
+                        <tr>
+                          <td>Weekly retention</td>
+                          <td>{backupStatus.retention_policy?.weekly || "12 weeks"}</td>
+                        </tr>
+                        <tr>
+                          <td>Monthly retention</td>
+                          <td>{backupStatus.retention_policy?.monthly || "24 months"}</td>
+                        </tr>
+                        <tr>
+                          <td>Restore drill</td>
+                          <td>
+                            {backupStatus.retention_policy?.restore_drill || "Quarterly"}
+                            <small>
+                              {backupStatus.last_restore_drill
+                                ? `Last ${backupStatus.last_restore_drill.status} on ${backupStatus.last_restore_drill.drill_date?.slice(0, 10)}`
+                                : "No restore drill has been recorded."}
+                            </small>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : null}
+              <form className="form-grid compact-form" onSubmit={recordRestoreDrill}>
+                <div className="panel-heading compact-heading">
+                  <h3>Record Restore Drill</h3>
+                </div>
+                <label>
+                  Drill date
+                  <input
+                    type="date"
+                    value={restoreDrillForm.drill_date}
+                    onChange={(event) => setRestoreDrillField("drill_date", event.target.value)}
+                  />
+                </label>
+                <label>
+                  Environment
+                  <select
+                    value={restoreDrillForm.environment}
+                    onChange={(event) => setRestoreDrillField("environment", event.target.value)}
+                  >
+                    <option value="local">Local</option>
+                    <option value="staging">Staging</option>
+                    <option value="production">Production</option>
+                  </select>
+                </label>
+                <label>
+                  Status
+                  <select value={restoreDrillForm.status} onChange={(event) => setRestoreDrillField("status", event.target.value)}>
+                    <option value="passed">Passed</option>
+                    <option value="partial">Partial</option>
+                    <option value="failed">Failed</option>
+                    <option value="planned">Planned</option>
+                  </select>
+                </label>
+                <label>
+                  Duration minutes
+                  <input
+                    type="number"
+                    min="0"
+                    value={restoreDrillForm.duration_minutes}
+                    onChange={(event) => setRestoreDrillField("duration_minutes", event.target.value)}
+                  />
+                </label>
+                <label>
+                  Dataset count
+                  <input
+                    type="number"
+                    min="0"
+                    value={restoreDrillForm.dataset_count}
+                    onChange={(event) => setRestoreDrillField("dataset_count", event.target.value)}
+                  />
+                </label>
+                <label>
+                  Backup reference
+                  <input
+                    value={restoreDrillForm.backup_reference}
+                    onChange={(event) => setRestoreDrillField("backup_reference", event.target.value)}
+                    placeholder="Backup filename, Neon restore point, or pg_dump file"
+                    required
+                  />
+                </label>
+                <label>
+                  Restore target
+                  <input
+                    value={restoreDrillForm.restore_target}
+                    onChange={(event) => setRestoreDrillField("restore_target", event.target.value)}
+                    placeholder="Local DB, staging branch, or verification database"
+                  />
+                </label>
+                <label>
+                  Findings
+                  <textarea
+                    value={restoreDrillForm.findings}
+                    onChange={(event) => setRestoreDrillField("findings", event.target.value)}
+                    rows="3"
+                  />
+                </label>
+                <label>
+                  Follow-up actions
+                  <textarea
+                    value={restoreDrillForm.follow_up_actions}
+                    onChange={(event) => setRestoreDrillField("follow_up_actions", event.target.value)}
+                    rows="3"
+                  />
+                </label>
+                <button className="primary-button" type="submit">
+                  <Save size={17} />
+                  Record drill
                 </button>
+              </form>
+              <div className="panel-heading compact-heading">
+                <h3>Restore Drill History</h3>
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Environment</th>
+                      <th>Status</th>
+                      <th>Backup</th>
+                      <th>Findings</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {restoreDrills.length ? (
+                      restoreDrills.slice(0, 8).map((drill) => (
+                        <tr key={drill.id}>
+                          <td>{drill.drill_date?.slice(0, 10)}</td>
+                          <td>{drill.environment}</td>
+                          <td><span className={`status status-${drill.status}`}>{drill.status}</span></td>
+                          <td>
+                            {drill.backup_reference}
+                            <small>{drill.restore_target || ""}</small>
+                          </td>
+                          <td>
+                            {drill.findings || "-"}
+                            <small>{drill.follow_up_actions || ""}</small>
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan="5">No restore drills have been recorded yet.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           ) : null}
@@ -338,6 +715,66 @@ function BusinessSettingsPage({ user }) {
                 disabled={!canEdit}
                 rows="3"
               />
+            </label>
+            <div className="panel-heading compact-heading">
+              <h3>Print Page Defaults</h3>
+            </div>
+            <label>
+              Page size
+              <select
+                value={settings.print_page_size}
+                onChange={(event) => setField("print_page_size", event.target.value)}
+                disabled={!canEdit}
+              >
+                <option value="A4">A4</option>
+                <option value="A5">A5</option>
+                <option value="Letter">Letter</option>
+                <option value="Legal">Legal</option>
+              </select>
+            </label>
+            <label>
+              Orientation
+              <select
+                value={settings.print_orientation}
+                onChange={(event) => setField("print_orientation", event.target.value)}
+                disabled={!canEdit}
+              >
+                <option value="portrait">Portrait</option>
+                <option value="landscape">Landscape</option>
+              </select>
+            </label>
+            <label>
+              Margin (mm)
+              <input
+                type="number"
+                min="5"
+                max="30"
+                step="1"
+                value={settings.print_margin_mm}
+                onChange={(event) => setField("print_margin_mm", event.target.value)}
+                disabled={!canEdit}
+              />
+            </label>
+            <label>
+              Print scale (%)
+              <input
+                type="number"
+                min="75"
+                max="120"
+                step="1"
+                value={settings.print_scale_percent}
+                onChange={(event) => setField("print_scale_percent", event.target.value)}
+                disabled={!canEdit}
+              />
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={settings.print_fit_to_page}
+                onChange={(event) => setField("print_fit_to_page", event.target.checked)}
+                disabled={!canEdit}
+              />
+              Compress wide/long printouts
             </label>
             {canEdit ? (
               <button className="primary-button" type="submit">

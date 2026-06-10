@@ -18,6 +18,10 @@ erDiagram
   users ||--o{ portal_user_customers : links
   users ||--o{ user_access_profiles : has
   users ||--o{ audit_events : acts
+  users ||--o{ knowledge_documents : uploads
+  users ||--o{ operational_reminder_logs : receives
+  users ||--o{ system_event_logs : acts
+  users ||--o{ backup_restore_drills : performs
 
   billing_periods ||--o{ meter_readings : contains
   billing_periods ||--o{ bills : contains
@@ -88,11 +92,16 @@ Operations:
 - `maintenance_requests`
 - `business_settings`
 - `audit_events`
+- `system_event_logs`
 - `document_delivery_logs`
 - `supporting_documents`
 - `communication_campaigns`
 - `communication_campaign_recipients`
 - `communication_templates`
+- `knowledge_documents`
+- `operational_reminder_logs`
+- `backup_restore_drills`
+- `monitoring_alert_logs`
 
 Production:
 
@@ -113,6 +122,10 @@ Contractors, from migrations:
 - `contractors`
 - `contractor_invoices`
 
+Migration and operations ledger:
+
+- `schema_migrations`
+
 ## Important Relationships
 
 - A customer belongs to one rate and one zone.
@@ -129,7 +142,22 @@ Contractors, from migrations:
 - Access profiles give a user one or more selectable operating contexts.
 - Supporting documents attach files to maintenance requests, expenses, and contractor invoices.
 - Contractor invoices can be reviewed and posted into expenses.
+- Knowledge documents store private SOP/manual/deployment files, role visibility, sensitivity, file metadata, and binary file data.
+- Operational reminder logs record reminder sends by type, reminder key, recipient, channel, and due date to prevent duplicate sends.
+- System event logs record operational errors, client events, failed logins, monitoring signals, and resolution state.
+- Monitoring alert logs record alert send attempts, channel, recipients, payload snapshot, and cooldown history.
+- Backup restore drills record quarterly recovery exercises, backup reference, target environment, duration, dataset count, findings, and follow-up actions.
+- `business_settings` also stores print/PDF defaults such as page size, orientation, margin, scale, and fit-to-page behavior.
+- `schema_migrations` records applied numbered SQL migrations with checksum, runtime, timestamp, and operator metadata.
 
 ## Migration Note
 
-The project currently uses numbered SQL files instead of a formal migration tracking table. This means production operators must know which migration files have been applied. The latest known migration is `041_user_access_profiles.sql`. Adding a migration ledger is a recommended hardening task.
+The project now uses numbered SQL files plus the `schema_migrations` ledger created by `042_schema_migrations.sql`. Use the tracked migration runner instead of manually guessing production state:
+
+```powershell
+cd server
+npm.cmd run db:migrate:status
+npm.cmd run db:migrate
+```
+
+The latest known migration is `048_operational_hardening.sql`.

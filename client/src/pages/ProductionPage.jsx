@@ -386,7 +386,8 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
       () =>
         withPrintTitle(
           `${mode === "summary" ? "Production Weekly Summary" : "Production Report"} ${reportPeriodLabel}`,
-          () => window.print()
+          () => window.print(),
+          businessSettings
         ),
       80
     );

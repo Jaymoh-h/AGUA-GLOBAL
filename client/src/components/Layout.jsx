@@ -1,6 +1,7 @@
 import {
   BarChart3,
   Banknote,
+  BookOpen,
   Building2,
   ClipboardList,
   Droplets,
@@ -41,6 +42,7 @@ export const navItems = [
   { key: "maintenance", label: "Maintenance", icon: Wrench, roles: ["admin", "accountant", "meter_reader"] },
   { key: "production", label: "Production", icon: PlugZap, roles: ["admin", "accountant", "meter_reader"] },
   { key: "reports", label: "Reports", icon: FileSpreadsheet, roles: ["admin", "accountant", "business_viewer"] },
+  { key: "knowledge", label: "Knowledge Base", icon: BookOpen, roles: ["admin", "accountant", "meter_reader", "business_viewer"] },
   { key: "audit", label: "Audit Trail", icon: History, roles: ["admin", "accountant", "business_viewer"] },
   { key: "rates", label: "Rates", icon: Tags, roles: ["admin", "accountant"] },
   { key: "zones", label: "Zones", icon: MapPinned, roles: ["admin", "accountant"] },

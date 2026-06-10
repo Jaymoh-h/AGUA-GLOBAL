@@ -16,7 +16,7 @@ import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { useToastMessage } from "../components/ToastProvider";
 import { api, assetUrl } from "../services/api";
-import { downloadBlobFile, namedExport, withPrintTitle } from "../utils/exportNames";
+import { downloadBlobFile, getPrintPageDimensionsMm, namedExport, normalizePrintSettings, withPrintTitle } from "../utils/exportNames";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const moneyAbs = (value) => `KES ${Math.abs(Number(value || 0)).toLocaleString()}`;
@@ -55,8 +55,24 @@ const blankRequest = {
 };
 
 const pdfEscape = (value) => String(value ?? "").replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+const mmToPoints = (value) => Number(value || 0) * 2.8346456693;
 
-const downloadTextPdf = (filename, pages) => {
+const statementPdfConfig = (settings = {}) => {
+  const normalized = normalizePrintSettings(settings);
+  const page = getPrintPageDimensionsMm(normalized);
+  const scale = (normalized.print_fit_to_page ? Math.min(normalized.print_scale_percent, 95) : normalized.print_scale_percent) / 100;
+  const width = mmToPoints(page.width);
+  const height = mmToPoints(page.height);
+  const margin = mmToPoints(normalized.print_margin_mm);
+  const fontSize = Math.max(8, 10 * scale);
+  const lineHeight = Math.max(11, 14 * scale);
+  const charsPerLine = Math.max(70, Math.floor((width - margin * 2) / (fontSize * 0.52)));
+  const linesPerPage = Math.max(20, Math.floor((height - margin * 2) / lineHeight) - 1);
+  return { width, height, margin, fontSize, lineHeight, charsPerLine, linesPerPage };
+};
+
+const downloadTextPdf = (filename, pages, printSettings = {}) => {
+  const config = statementPdfConfig(printSettings);
   const objects = [];
   const addObject = (body) => {
     objects.push(body);
@@ -68,13 +84,18 @@ const downloadTextPdf = (filename, pages) => {
   pages.forEach((lines) => {
     const content = [
       "BT",
-      "/F1 10 Tf",
-      "14 TL",
-      ...lines.map((line, index) => `1 0 0 1 50 ${790 - index * 14} Tm (${pdfEscape(line).slice(0, 110)}) Tj`),
+      `/F1 ${config.fontSize.toFixed(2)} Tf`,
+      `${config.lineHeight.toFixed(2)} TL`,
+      ...lines.map(
+        (line, index) =>
+          `1 0 0 1 ${config.margin.toFixed(2)} ${(config.height - config.margin - config.fontSize - index * config.lineHeight).toFixed(2)} Tm (${pdfEscape(line).slice(0, config.charsPerLine)}) Tj`
+      ),
       "ET"
     ].join("\n");
     const contentId = addObject(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
-    const pageId = addObject(`<< /Type /Page /Parent 0 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentId} 0 R >>`);
+    const pageId = addObject(
+      `<< /Type /Page /Parent 0 0 R /MediaBox [0 0 ${config.width.toFixed(2)} ${config.height.toFixed(2)}] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentId} 0 R >>`
+    );
     pageIds.push(pageId);
   });
 
@@ -98,7 +119,8 @@ const downloadTextPdf = (filename, pages) => {
   downloadBlobFile(blob, filename, "pdf");
 };
 
-const buildStatementPdfPages = (statement) => {
+const buildStatementPdfPages = (statement, printSettings = {}) => {
+  const { linesPerPage } = statementPdfConfig(printSettings);
   const header = [
     `${statement.customer.name} Statement`,
     `Account: ${statement.customer.acc_number} | Zone: ${statement.customer.zone_name}`,
@@ -118,8 +140,8 @@ const buildStatementPdfPages = (statement) => {
   ];
   const allLines = [...header, ...rows, ...footer];
   const pages = [];
-  for (let index = 0; index < allLines.length; index += 52) {
-    pages.push(allLines.slice(index, index + 52));
+  for (let index = 0; index < allLines.length; index += linesPerPage) {
+    pages.push(allLines.slice(index, index + linesPerPage));
   }
   return pages.length ? pages : [header];
 };
@@ -246,7 +268,7 @@ function PortalPage({ view = "overview" }) {
 
   const printDocument = (target = "") => {
     setPrintTarget(target);
-    setTimeout(() => withPrintTitle(printDocumentTitle(target), () => window.print()), 50);
+    setTimeout(() => withPrintTitle(printDocumentTitle(target), () => window.print(), data?.business), 50);
   };
 
   const fetchStatement = async () => {
@@ -277,7 +299,8 @@ function PortalPage({ view = "overview" }) {
           nextStatement.customer.acc_number,
           nextStatement.period.lifetime ? "lifetime" : `${nextStatement.period.start_date || "start"} to ${nextStatement.period.end_date || "end"}`
         ]),
-        buildStatementPdfPages(nextStatement)
+        buildStatementPdfPages(nextStatement, data?.business),
+        data?.business
       );
       setMessage("Statement PDF downloaded.");
     } catch (err) {

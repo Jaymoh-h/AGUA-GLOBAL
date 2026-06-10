@@ -50,6 +50,7 @@ const buildStatement = ({ basis, revenueLines, expenseLines, notes = [] }) => {
 };
 
 const backupQueries = [
+  ["schema_migrations", "SELECT * FROM schema_migrations ORDER BY version"],
   ["customers", "SELECT * FROM customers ORDER BY id"],
   ["meters", "SELECT * FROM meters ORDER BY id"],
   ["meter_readings", "SELECT * FROM meter_readings ORDER BY id"],
@@ -79,12 +80,29 @@ const backupQueries = [
   ["payroll_payees", "SELECT * FROM payroll_payees ORDER BY id"],
   ["payroll_runs", "SELECT * FROM payroll_runs ORDER BY id"],
   ["payroll_line_items", "SELECT * FROM payroll_line_items ORDER BY id"],
+  ["contractors", "SELECT * FROM contractors ORDER BY id"],
+  ["contractor_invoices", "SELECT * FROM contractor_invoices ORDER BY id"],
+  ["supporting_documents", "SELECT * FROM supporting_documents ORDER BY id"],
   ["business_settings", "SELECT * FROM business_settings ORDER BY id"],
   ["portal_user_customers", "SELECT * FROM portal_user_customers ORDER BY id"],
+  ["user_access_profiles", "SELECT * FROM user_access_profiles ORDER BY id"],
   ["document_delivery_logs", "SELECT * FROM document_delivery_logs ORDER BY id"],
+  ["operational_reminder_logs", "SELECT * FROM operational_reminder_logs ORDER BY id"],
+  ["system_event_logs", "SELECT * FROM system_event_logs ORDER BY id"],
+  ["monitoring_alert_logs", "SELECT * FROM monitoring_alert_logs ORDER BY id"],
+  ["backup_restore_drills", "SELECT * FROM backup_restore_drills ORDER BY id"],
   ["communication_templates", "SELECT * FROM communication_templates ORDER BY id"],
   ["communication_campaigns", "SELECT * FROM communication_campaigns ORDER BY id"],
   ["communication_campaign_recipients", "SELECT * FROM communication_campaign_recipients ORDER BY id"],
+  [
+    "knowledge_documents",
+    `SELECT id, title, category, sensitivity, allowed_roles, version_label, summary,
+            original_name, stored_name, storage_path, mime_type, file_size,
+            encode(file_data, 'base64') AS file_data_base64,
+            status, uploaded_by, updated_by, deleted_at, deleted_by, created_at, updated_at
+     FROM knowledge_documents
+     ORDER BY id`
+  ],
   [
     "users",
     `SELECT id, customer_id, name, email, phone, role, is_active,
@@ -112,6 +130,129 @@ const buildOperationalBackup = async () => {
 
   return { datasets, counts, skipped };
 };
+
+const getBackupManifest = async () => {
+  const lastExportResult = await pool.query(
+    `SELECT created_at, actor_user_id, after_data
+     FROM audit_events
+     WHERE action = 'reports.operational_backup_exported'
+     ORDER BY created_at DESC
+     LIMIT 1`
+  );
+  const installed = [];
+  const missing = [];
+  for (const [key] of backupQueries) {
+    if (await relationExists(key)) installed.push(key);
+    else missing.push(key);
+  }
+  const latestDrillResult = await pool.query(
+    `SELECT brd.*, u.name AS performed_by_name
+     FROM backup_restore_drills brd
+     LEFT JOIN users u ON u.id = brd.performed_by
+     ORDER BY brd.drill_date DESC, brd.id DESC
+     LIMIT 1`
+  ).catch(() => ({ rows: [] }));
+  const latestDrill = latestDrillResult.rows[0] || null;
+  const nextRestoreDrillDue = latestDrill?.drill_date
+    ? new Date(new Date(latestDrill.drill_date).getTime() + 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    : null;
+
+  return {
+    generated_at: new Date().toISOString(),
+    export_endpoint: "/api/reports/backup",
+    status: missing.length ? "review" : "ready",
+    installed_datasets: installed,
+    missing_optional_datasets: missing,
+    dataset_count: installed.length,
+    last_export: lastExportResult.rows[0] || null,
+    last_restore_drill: latestDrill,
+    next_restore_drill_due: nextRestoreDrillDue,
+    restore_drill_status: !latestDrill
+      ? "missing"
+      : nextRestoreDrillDue && nextRestoreDrillDue < new Date().toISOString().slice(0, 10)
+        ? "due"
+        : latestDrill.status,
+    retention_policy: {
+      daily: "30 days",
+      weekly: "12 weeks",
+      monthly: "24 months",
+      before_migration: "Keep until the next successful month-end close",
+      restore_drill: "At least quarterly"
+    },
+    notes: [
+      "Operational backup exports exclude password hashes, reset tokens, and environment secrets.",
+      "Knowledge documents are included as base64 file data and should be stored securely.",
+      "Use managed PostgreSQL provider backups for point-in-time disaster recovery."
+    ]
+  };
+};
+
+const nullableText = (value) => {
+  const text = String(value || "").trim();
+  return text || null;
+};
+
+const normalizeDate = (value, fallback = new Date().toISOString().slice(0, 10)) =>
+  isoDatePattern.test(String(value || "")) ? value : fallback;
+
+const listBackupRestoreDrills = asyncHandler(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT brd.*, u.name AS performed_by_name
+     FROM backup_restore_drills brd
+     LEFT JOIN users u ON u.id = brd.performed_by
+     ORDER BY brd.drill_date DESC, brd.id DESC
+     LIMIT 50`
+  );
+  res.json(rows);
+});
+
+const createBackupRestoreDrill = asyncHandler(async (req, res) => {
+  const environment = ["local", "staging", "production"].includes(req.body.environment) ? req.body.environment : "staging";
+  const status = ["planned", "passed", "partial", "failed"].includes(req.body.status) ? req.body.status : "planned";
+  const backupReference = nullableText(req.body.backup_reference);
+  if (!backupReference) {
+    res.status(400).json({ message: "Backup reference is required." });
+    return;
+  }
+
+  const durationMinutes = req.body.duration_minutes === "" || req.body.duration_minutes === undefined ? null : Number(req.body.duration_minutes);
+  const datasetCount = req.body.dataset_count === "" || req.body.dataset_count === undefined ? null : Number(req.body.dataset_count);
+
+  const { rows } = await pool.query(
+    `INSERT INTO backup_restore_drills (
+       drill_date, environment, backup_reference, restore_target, status,
+       started_at, completed_at, duration_minutes, dataset_count,
+       findings, follow_up_actions, performed_by
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     RETURNING *`,
+    [
+      normalizeDate(req.body.drill_date),
+      environment,
+      backupReference,
+      nullableText(req.body.restore_target),
+      status,
+      nullableText(req.body.started_at),
+      nullableText(req.body.completed_at),
+      Number.isFinite(durationMinutes) ? durationMinutes : null,
+      Number.isFinite(datasetCount) ? datasetCount : null,
+      nullableText(req.body.findings),
+      nullableText(req.body.follow_up_actions),
+      req.user.id
+    ]
+  );
+
+  await recordAuditEvent(pool, {
+    req,
+    action: "reports.restore_drill_recorded",
+    entityType: "backup_restore_drill",
+    entityId: rows[0].id,
+    afterData: rows[0],
+    reason: "Admin recorded backup restore drill"
+  });
+
+  res.status(201).json(rows[0]);
+});
 
 const getPayrollProfitAndLossLines = async (startDate, endDate) => {
   if (!(await relationExists("payroll_runs"))) {
@@ -1075,6 +1216,7 @@ const getDataQualityChecks = asyncHandler(async (_req, res) => {
 
 const getOperationalBackup = asyncHandler(async (req, res) => {
   const backup = await buildOperationalBackup();
+  const manifest = await getBackupManifest();
   const payload = {
     export_type: "operational_backup",
     exported_at: new Date().toISOString(),
@@ -1086,8 +1228,10 @@ const getOperationalBackup = asyncHandler(async (req, res) => {
     },
     notes: [
       "This export includes operational business records for review and continuity.",
-      "Password hashes, reset tokens, and environment secrets are intentionally excluded."
+      "Password hashes, reset tokens, and environment secrets are intentionally excluded.",
+      "Knowledge document files are included as base64 and must be stored securely."
     ],
+    retention_policy: manifest.retention_policy,
     dataset_counts: backup.counts,
     skipped_datasets: backup.skipped,
     datasets: backup.datasets
@@ -1108,9 +1252,17 @@ const getOperationalBackup = asyncHandler(async (req, res) => {
   res.json(payload);
 });
 
+const getBackupStatus = asyncHandler(async (_req, res) => {
+  res.json(await getBackupManifest());
+});
+
 module.exports = {
+  buildOperationalBackup,
+  createBackupRestoreDrill,
   getReportsSummary,
   getAccountantReports,
   getDataQualityChecks,
+  listBackupRestoreDrills,
+  getBackupStatus,
   getOperationalBackup
 };

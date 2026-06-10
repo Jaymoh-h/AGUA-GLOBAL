@@ -14,11 +14,44 @@ const logoMimeTypes = {
   "image/gif": "gif"
 };
 const maxLogoBytes = 2 * 1024 * 1024;
+const printPageSizes = new Set(["A4", "A5", "Letter", "Legal"]);
+const printOrientations = new Set(["portrait", "landscape"]);
 
 const nullableText = (value) => {
   if (value === undefined) return undefined;
   const trimmed = String(value || "").trim();
   return trimmed || null;
+};
+
+const normalizePrintPageSize = (value) => {
+  const raw = String(value || "A4").trim().toLowerCase();
+  const match = [...printPageSizes].find((item) => item.toLowerCase() === raw);
+  if (!match) throw new ApiError(400, "Print page size must be A4, A5, Letter, or Legal.");
+  return match;
+};
+
+const normalizePrintOrientation = (value) => {
+  const orientation = String(value || "portrait").trim().toLowerCase();
+  if (!printOrientations.has(orientation)) {
+    throw new ApiError(400, "Print orientation must be portrait or landscape.");
+  }
+  return orientation;
+};
+
+const normalizePrintMargin = (value) => {
+  const margin = Number(value ?? 14);
+  if (!Number.isFinite(margin) || margin < 5 || margin > 30) {
+    throw new ApiError(400, "Print margin must be between 5mm and 30mm.");
+  }
+  return margin;
+};
+
+const normalizePrintScale = (value) => {
+  const scale = Number(value ?? 100);
+  if (!Number.isInteger(scale) || scale < 75 || scale > 120) {
+    throw new ApiError(400, "Print scale must be a whole number between 75 and 120.");
+  }
+  return scale;
 };
 
 const parseLogoUpload = ({ data, mime_type }) => {
@@ -95,6 +128,11 @@ const getPublicBusinessSettings = asyncHandler(async (_req, res) => {
 const updateBusinessSettings = asyncHandler(async (req, res) => {
   const businessName = nullableText(req.body.business_name);
   const defaultCurrency = nullableText(req.body.default_currency) || "KES";
+  const printPageSize = normalizePrintPageSize(req.body.print_page_size);
+  const printOrientation = normalizePrintOrientation(req.body.print_orientation);
+  const printMarginMm = normalizePrintMargin(req.body.print_margin_mm);
+  const printScalePercent = normalizePrintScale(req.body.print_scale_percent);
+  const printFitToPage = Boolean(req.body.print_fit_to_page);
 
   if (!businessName) {
     throw new ApiError(400, "Business name is required.");
@@ -126,7 +164,12 @@ const updateBusinessSettings = asyncHandler(async (req, res) => {
            receipt_footer_note = $12,
            report_footer_note = $13,
            default_currency = $14,
-           updated_by = $15,
+           print_page_size = $15,
+           print_orientation = $16,
+           print_margin_mm = $17,
+           print_scale_percent = $18,
+           print_fit_to_page = $19,
+           updated_by = $20,
            updated_at = NOW()
        WHERE id = 1
        RETURNING *`,
@@ -145,6 +188,11 @@ const updateBusinessSettings = asyncHandler(async (req, res) => {
         nullableText(req.body.receipt_footer_note),
         nullableText(req.body.report_footer_note),
         defaultCurrency.toUpperCase(),
+        printPageSize,
+        printOrientation,
+        printMarginMm,
+        printScalePercent,
+        printFitToPage,
         req.user.id
       ]
     );

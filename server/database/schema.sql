@@ -1,5 +1,11 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+DROP TABLE IF EXISTS schema_migrations CASCADE;
+DROP TABLE IF EXISTS system_event_logs CASCADE;
+DROP TABLE IF EXISTS monitoring_alert_logs CASCADE;
+DROP TABLE IF EXISTS backup_restore_drills CASCADE;
+DROP TABLE IF EXISTS operational_reminder_logs CASCADE;
+DROP TABLE IF EXISTS knowledge_documents CASCADE;
 DROP TABLE IF EXISTS payments CASCADE;
 DROP TABLE IF EXISTS production_meter_readings CASCADE;
 DROP TABLE IF EXISTS production_weekly_readings CASCADE;
@@ -27,6 +33,18 @@ DROP TABLE IF EXISTS rate_version_blocks CASCADE;
 DROP TABLE IF EXISTS rate_versions CASCADE;
 DROP TABLE IF EXISTS tariff_blocks CASCADE;
 DROP TABLE IF EXISTS rates CASCADE;
+
+CREATE TABLE schema_migrations (
+  version VARCHAR(20) PRIMARY KEY,
+  filename VARCHAR(255) UNIQUE NOT NULL,
+  checksum VARCHAR(64) NOT NULL,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  execution_ms INTEGER NOT NULL DEFAULT 0,
+  applied_by VARCHAR(120)
+);
+
+CREATE INDEX idx_schema_migrations_applied_at
+  ON schema_migrations(applied_at DESC);
 
 CREATE TABLE rates (
   id SERIAL PRIMARY KEY,
@@ -187,6 +205,139 @@ CREATE INDEX idx_document_delivery_logs_document
 CREATE INDEX idx_document_delivery_logs_customer
   ON document_delivery_logs(customer_id, created_at DESC);
 
+CREATE TABLE operational_reminder_logs (
+  id SERIAL PRIMARY KEY,
+  reminder_type VARCHAR(60) NOT NULL,
+  reminder_key VARCHAR(160) NOT NULL,
+  recipient_email VARCHAR(255) NOT NULL,
+  recipient_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  subject VARCHAR(255) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'sent'
+    CHECK (status IN ('sent', 'skipped', 'failed')),
+  summary JSONB,
+  error_message TEXT,
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_operational_reminder_logs_unique_send
+  ON operational_reminder_logs(reminder_type, reminder_key, recipient_email);
+
+CREATE INDEX idx_operational_reminder_logs_sent_at
+  ON operational_reminder_logs(sent_at DESC);
+
+CREATE INDEX idx_operational_reminder_logs_recipient
+  ON operational_reminder_logs(recipient_user_id, sent_at DESC);
+
+CREATE TABLE system_event_logs (
+  id SERIAL PRIMARY KEY,
+  event_type VARCHAR(60) NOT NULL,
+  severity VARCHAR(20) NOT NULL DEFAULT 'info'
+    CHECK (severity IN ('info', 'warning', 'error', 'critical')),
+  source VARCHAR(40) NOT NULL DEFAULT 'server'
+    CHECK (source IN ('server', 'client', 'database', 'auth', 'scheduler')),
+  message TEXT NOT NULL,
+  details JSONB,
+  actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  method VARCHAR(12),
+  path TEXT,
+  status_code INTEGER,
+  ip_address VARCHAR(80),
+  user_agent TEXT,
+  resolved_at TIMESTAMPTZ,
+  resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  resolution_notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_system_event_logs_created_at
+  ON system_event_logs(created_at DESC);
+
+CREATE INDEX idx_system_event_logs_type_created
+  ON system_event_logs(event_type, created_at DESC);
+
+CREATE INDEX idx_system_event_logs_severity_created
+  ON system_event_logs(severity, created_at DESC);
+
+CREATE INDEX idx_system_event_logs_unresolved
+  ON system_event_logs(severity, created_at DESC)
+  WHERE resolved_at IS NULL;
+
+CREATE TABLE backup_restore_drills (
+  id SERIAL PRIMARY KEY,
+  drill_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  environment VARCHAR(40) NOT NULL DEFAULT 'staging' CHECK (environment IN ('local', 'staging', 'production')),
+  backup_reference TEXT NOT NULL,
+  restore_target TEXT,
+  status VARCHAR(30) NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'passed', 'partial', 'failed')),
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  duration_minutes INTEGER CHECK (duration_minutes IS NULL OR duration_minutes >= 0),
+  dataset_count INTEGER CHECK (dataset_count IS NULL OR dataset_count >= 0),
+  findings TEXT,
+  follow_up_actions TEXT,
+  performed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_backup_restore_drills_date
+  ON backup_restore_drills(drill_date DESC, id DESC);
+
+CREATE TABLE monitoring_alert_logs (
+  id SERIAL PRIMARY KEY,
+  alert_key VARCHAR(160) NOT NULL,
+  channel VARCHAR(30) NOT NULL CHECK (channel IN ('email', 'sms')),
+  recipient VARCHAR(180) NOT NULL,
+  status VARCHAR(30) NOT NULL DEFAULT 'sent' CHECK (status IN ('sent', 'skipped', 'failed')),
+  subject TEXT,
+  message TEXT,
+  error_message TEXT,
+  event_count INTEGER NOT NULL DEFAULT 0,
+  sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_monitoring_alert_logs_key_sent
+  ON monitoring_alert_logs(alert_key, sent_at DESC);
+
+CREATE TABLE knowledge_documents (
+  id SERIAL PRIMARY KEY,
+  title VARCHAR(180) NOT NULL,
+  category VARCHAR(80) NOT NULL DEFAULT 'General',
+  sensitivity VARCHAR(30) NOT NULL DEFAULT 'internal'
+    CHECK (sensitivity IN ('internal', 'confidential', 'restricted')),
+  allowed_roles TEXT[] NOT NULL DEFAULT ARRAY['admin']::TEXT[],
+  version_label VARCHAR(40) NOT NULL DEFAULT 'v1',
+  summary TEXT,
+  original_name VARCHAR(255) NOT NULL,
+  stored_name VARCHAR(255) NOT NULL,
+  storage_path TEXT NOT NULL UNIQUE,
+  mime_type VARCHAR(160) NOT NULL,
+  file_size INTEGER NOT NULL CHECK (file_size > 0),
+  file_data BYTEA NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'archived')),
+  uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  deleted_at TIMESTAMPTZ,
+  deleted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_knowledge_documents_category
+  ON knowledge_documents(category, created_at DESC)
+  WHERE deleted_at IS NULL;
+
+CREATE INDEX idx_knowledge_documents_allowed_roles
+  ON knowledge_documents USING GIN (allowed_roles)
+  WHERE deleted_at IS NULL;
+
+CREATE INDEX idx_knowledge_documents_status
+  ON knowledge_documents(status)
+  WHERE deleted_at IS NULL;
+
 CREATE TABLE communication_campaigns (
   id SERIAL PRIMARY KEY,
   campaign_name VARCHAR(160) NOT NULL DEFAULT 'Invoice alert',
@@ -338,6 +489,11 @@ CREATE TABLE business_settings (
   receipt_footer_note TEXT,
   report_footer_note TEXT,
   default_currency VARCHAR(10) NOT NULL DEFAULT 'KES',
+  print_page_size VARCHAR(20) NOT NULL DEFAULT 'A4' CHECK (print_page_size IN ('A4', 'A5', 'Letter', 'Legal')),
+  print_orientation VARCHAR(20) NOT NULL DEFAULT 'portrait' CHECK (print_orientation IN ('portrait', 'landscape')),
+  print_margin_mm NUMERIC(5, 2) NOT NULL DEFAULT 14 CHECK (print_margin_mm BETWEEN 5 AND 30),
+  print_scale_percent INTEGER NOT NULL DEFAULT 100 CHECK (print_scale_percent BETWEEN 75 AND 120),
+  print_fit_to_page BOOLEAN NOT NULL DEFAULT FALSE,
   updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

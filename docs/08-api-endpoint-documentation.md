@@ -23,6 +23,7 @@ Authorization: Bearer <token>
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/health` | Public | API health check |
+| `GET` | `/status` | Public | API and database status check |
 
 ## Authentication
 
@@ -143,12 +144,27 @@ Authorization: Bearer <token>
 | `GET` | `/reports/summary` | admin, accountant, business_viewer | Report summary |
 | `GET` | `/reports/accountant` | admin, accountant, business_viewer | Accountant reports |
 | `GET` | `/reports/data-quality` | admin, accountant, business_viewer | Data quality checks |
+| `GET` | `/reports/backup-status` | admin | Backup manifest, retention policy, and export readiness |
+| `GET` | `/reports/backup-restore-drills` | admin | Restore drill history |
+| `POST` | `/reports/backup-restore-drills` | admin | Record backup restore drill result |
 | `GET` | `/reports/backup` | admin | Operational backup |
 | `GET` | `/audit-events` | admin, accountant, business_viewer | Audit event list |
+| `GET` | `/monitoring/summary` | admin, accountant, business_viewer | Application monitoring summary and recent events |
+| `GET` | `/monitoring/events` | admin, accountant, business_viewer | Recent application monitoring events |
+| `GET` | `/monitoring/alert-snapshot` | admin | Current monitoring alert evaluation window |
+| `POST` | `/monitoring/test-alert` | admin | Force a monitoring alert delivery test |
+| `GET` | `/monitoring/cron` | Secret protected | Scheduled monitoring alert runner |
+| `POST` | `/monitoring/client-events` | Authenticated | Record client-side page/runtime errors |
 | `GET` | `/business-settings/public` | Public | Public business profile |
 | `GET` | `/business-settings` | admin, accountant, business_viewer | Business settings |
 | `PUT` | `/business-settings` | admin | Update settings |
 | `POST` | `/business-settings/logo` | admin | Upload logo |
+| `GET` | `/reminders/operational/preview` | admin, accountant | Preview operational reminders |
+| `POST` | `/reminders/operational/send` | admin, accountant | Send due operational reminder emails; accepts optional `types` |
+| `GET` | `/reminders/operational/logs` | admin, accountant | List recent operational reminder logs |
+| `GET` | `/reminders/operational/cron` | Secret protected | Scheduled operational reminder run; accepts optional `types` |
+| `GET` | `/reminders/operational/cron/operations` | Secret protected | Scheduled morning operational reminder run |
+| `GET` | `/reminders/operational/cron/readings` | Secret protected | Scheduled midday readings reminder run |
 | `GET` | `/users` | admin | List users |
 | `POST` | `/users` | admin | Create user |
 | `PUT` | `/users/:id` | admin | Update user |
@@ -184,6 +200,7 @@ Authorization: Bearer <token>
 | `GET` | `/payroll/runs/:id` | admin, accountant, business_viewer | Get run |
 | `POST` | `/payroll/runs/:id/line-items` | admin, accountant | Add period line item |
 | `PATCH` | `/payroll/runs/:id/status` | admin, accountant | Update run status |
+| `GET` | `/payroll/line-items/:lineId/payslip` | admin, accountant, business_viewer | Download payslip PDF |
 | `PATCH` | `/payroll/line-items/:lineId` | admin, accountant | Update line item |
 
 ## Communications And Portal
@@ -210,8 +227,15 @@ Authorization: Bearer <token>
 | `POST` | `/documents` | admin, accountant, meter_reader | Upload supporting document |
 | `GET` | `/documents/:id/download` | admin, accountant, meter_reader | Download supporting document |
 | `DELETE` | `/documents/:id` | admin, accountant, meter_reader | Soft-delete supporting document |
+| `GET` | `/knowledge-documents` | admin, accountant, meter_reader, business_viewer | List visible knowledge documents |
+| `POST` | `/knowledge-documents` | admin, accountant | Upload private SOP/manual document |
+| `PUT` | `/knowledge-documents/:id` | admin, accountant | Update metadata/access |
+| `GET` | `/knowledge-documents/:id/download` | admin, accountant, meter_reader, business_viewer | Download and audit access |
+| `DELETE` | `/knowledge-documents/:id` | admin, accountant | Archive private document |
 
 Documents can currently link to maintenance requests, expenses, and contractor invoices. Expense and contractor invoice documents are restricted to admin/accountant by controller-level checks.
+
+Knowledge documents are separate from public `/docs`. Admins can see and manage all records; non-admin staff can only see active records whose `allowed_roles` includes their current access role. Restricted knowledge documents are admin-managed.
 
 ## Contractor Invoices
 

@@ -10,9 +10,10 @@ Foundation:
 - Express API.
 - PostgreSQL database.
 - JWT authentication.
-- Roles: admin, accountant, meter_reader, customer.
+- Roles: admin, accountant, meter_reader, customer, business_viewer.
 - Business viewer role for read-oriented oversight.
 - User access profiles and login context selection.
+- Tracked SQL migration runner with `schema_migrations` checksums and status output.
 
 Customer and setup:
 
@@ -49,10 +50,23 @@ Operations:
 
 - Dashboard with KPI cards and charts.
 - Reports, accountant reports, data quality checks, and backup report.
+- Backup manifest, operational backup export, and local retention scripts.
+- Restore drill ledger with latest drill status and next quarterly due date.
+- Backup exports include operational logs, monitoring logs, restore drills, and knowledge documents where the tables exist.
+- Public status endpoint and status page for API/database checks.
+- Application monitoring for API errors, database failures, failed logins, and client page crashes.
+- Monitoring alert runner with email/SMS delivery, cooldown logging, and Vercel Cron path.
+- Public documentation hub for a docs subdomain.
+- Authenticated knowledge base for private SOPs, manuals, and controlled documents.
+- Knowledge document downloads are recorded in the audit trail.
+- Operational email reminders for pending work, end-month meter readings, weekly production readings, billing preparation, contractor invoices, and payroll preparation.
+- Reminder schedules gate sends by due window and support `types` filtering for separate morning and midday cron runs.
+- Reminder logs are recorded and included in operational backup exports.
 - Maintenance requests and linked maintenance expenses.
 - Supporting documents for maintenance requests, expenses, and contractor invoices.
 - Audit trail.
 - Business settings and logo handling.
+- Business print/PDF defaults for page size, orientation, margins, scale, and wide-print compression.
 
 Production:
 
@@ -73,6 +87,7 @@ Payroll:
 - Payroll runs.
 - Submit, approve, and paid lifecycle.
 - Payroll expense posting.
+- Downloadable payslip PDFs from payroll line items.
 
 Contractors:
 
@@ -105,18 +120,16 @@ UX:
 Latest known migration chain reaches:
 
 ```text
-041_user_access_profiles.sql
+048_operational_hardening.sql
 ```
 
-Important named scripts exist for many migrations, but not every numbered migration has a package script. Some are run directly through:
+Use the tracked migration runner for ongoing upgrades:
 
 ```powershell
-node src/db/runSqlFile.js database/migrations/<file>.sql
+cd server
+npm.cmd run db:migrate:status
+npm.cmd run db:migrate
 ```
-
-Recommended hardening task:
-
-- Add a formal migration tracking table and migration runner.
 
 ## Current Remaining Work
 
@@ -125,8 +138,9 @@ Recommended hardening task:
 - Expand bank integration beyond PDF statement training.
 - Add automated tests for high-risk billing, reading, payment, payroll, production, import, and correction flows.
 - Complete role-by-role acceptance testing.
-- Establish backup schedule and run restore drill.
-- Decide scheduling, retries, and opt-out handling for bulk communications.
+- Enable provider-native PostgreSQL point-in-time recovery/read replicas where the production database plan supports it.
+- Consider third-party uptime checks that call `/api/status` from outside Vercel.
+- Decide retries and opt-out handling for bulk communications.
 - Decide long-term storage strategy for supporting documents in production.
 
 ## Release Log Template

@@ -14,11 +14,11 @@ Permissions are enforced mainly in route files under `server/src/routes/` using 
 
 | Role | Primary Purpose | Typical Access |
 | --- | --- | --- |
-| `admin` | System owner and operations controller | Full operational access, user management, high-risk approvals |
-| `accountant` | Finance and billing operator | Customers, billing, payments, expenses, reports, payroll, communications |
-| `meter_reader` | Field operations user | Customers, readings, meters, maintenance, production readings, dashboard |
+| `admin` | System owner and operations controller | Full operational access, user management, high-risk approvals, monitoring, restore drills |
+| `accountant` | Finance and billing operator | Customers, billing, payments, expenses, reports, payroll, communications, reminders |
+| `meter_reader` | Field operations user | Customers, readings, meters, maintenance, production readings, dashboard, shared knowledge documents |
 | `customer` | Self-service portal user | Portal dashboard, own payments, service requests, linked customer statement |
-| `business_viewer` | Read-only business observer | Dashboard, reports, audit, bills, payments, production, payroll, contractor invoice views |
+| `business_viewer` | Read-only business observer | Dashboard, reports, audit, monitoring, bills, payments, production, payroll, contractor invoice views |
 
 ## Access Contexts
 
@@ -43,6 +43,10 @@ Admin can:
 - Promote held bills for payment.
 - Review customer adjustments.
 - Access operational backup reports.
+- Record restore drill results and review backup readiness.
+- Manage private knowledge base documents.
+- View monitoring snapshots, event logs, and send monitoring test alerts.
+- Preview and trigger operational reminders.
 - Terminate payroll payees.
 - Discard payment suspense items.
 - Create and update user access contexts.
@@ -58,6 +62,9 @@ Accountant can:
 - Apply and waive penalties.
 - Create and update payroll runs and line items.
 - Send invoice alerts and receipts.
+- Manage private knowledge base documents.
+- Preview and trigger operational reminders.
+- View monitoring summaries and event logs.
 - View audit events.
 - Post approved contractor invoices to expenses.
 
@@ -80,11 +87,14 @@ Meter reader can:
 - Create and update maintenance requests.
 - Record production weekly readings.
 - Upload maintenance supporting documents.
+- Access knowledge base documents shared with the `meter_reader` role.
 
 Meter reader cannot:
 
 - Access bills, payments, expenses, reports, payroll, communications, or backup.
 - Access contractor invoice or expense document surfaces.
+- Manage knowledge base documents.
+- View monitoring, reminder logs, or backup drill records.
 - Manage users or business settings.
 
 ## Customer
@@ -114,11 +124,14 @@ Business viewer can:
 - View production meters, top-ups, weekly readings, reading context, and production report.
 - View payroll payees and runs.
 - View contractor records and contractor invoices.
+- View knowledge base documents shared with the `business_viewer` role.
+- View monitoring summaries and event logs.
 
 Business viewer cannot:
 
 - Create, edit, approve, delete, post, import, or send operational records.
 - Manage users, business settings, billing periods, payments, payroll, production entries, or contractor invoices.
+- Manage knowledge base documents, send reminders, record restore drills, or send monitoring test alerts.
 - Access customer portal as a customer unless assigned a separate customer context.
 
 ## Permission Review Checklist
@@ -129,4 +142,7 @@ Business viewer cannot:
 - Confirm meter readers can do field work without seeing finance registers.
 - Confirm accountants can operate billing and collections without user-management access.
 - Confirm business viewers can view reporting surfaces without mutation access.
+- Confirm knowledge base documents are visible only to roles listed on each document.
+- Confirm public status/docs pages do not expose authenticated operational data.
+- Confirm cron routes require the correct secret.
 - Confirm multi-context users receive the context selection flow at login.

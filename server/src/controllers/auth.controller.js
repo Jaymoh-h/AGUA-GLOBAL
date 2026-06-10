@@ -6,6 +6,7 @@ const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { clientOrigin, jwtSecret, jwtExpiresIn, passwordResetMinutes } = require("../config/env");
 const { recordAuditEvent } = require("../services/audit.service");
+const { recordSystemEvent } = require("../services/systemEvent.service");
 const { sendPasswordResetEmail } = require("../services/email.service");
 const {
   legacyProfileFromUser,
@@ -70,6 +71,14 @@ const login = asyncHandler(async (req, res) => {
   const user = rows[0];
 
   if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+    await recordSystemEvent({
+      eventType: "auth.login_failed",
+      severity: "warning",
+      source: "auth",
+      message: "Invalid login attempt.",
+      details: { email: email.toLowerCase(), user_exists: Boolean(user) },
+      req
+    });
     throw new ApiError(401, "Invalid email or password.");
   }
 

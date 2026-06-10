@@ -3,6 +3,7 @@ const {
   addRunLineItem,
   createPayee,
   createRun,
+  downloadPayslip,
   getRun,
   listPayees,
   listRuns,
@@ -25,6 +26,7 @@ router.post("/runs", authorize("admin", "accountant"), createRun);
 router.get("/runs/:id", authorize("admin", "accountant", "business_viewer"), getRun);
 router.post("/runs/:id/line-items", authorize("admin", "accountant"), addRunLineItem);
 router.patch("/runs/:id/status", authorize("admin", "accountant"), updateRunStatus);
+router.get("/line-items/:lineId/payslip", authorize("admin", "accountant", "business_viewer"), downloadPayslip);
 router.patch("/line-items/:lineId", authorize("admin", "accountant"), updateLineItem);
 
 module.exports = router;

@@ -44,6 +44,7 @@ The project documentation suite lives in [`docs/`](docs/README.md). It includes 
 - Bank statement PDF import trainer for extracting, mapping, and matching payments
 - Expense register with manual entry and CSV imports
 - Business settings for shared logo/contact/payment/footer details
+- Business print defaults for page size, orientation, margins, scale, and wide-print compression
 - Audit trail for customer, reading, bill, billing, payment, and meter changes
 - Detailed audit record view with before/after change details
 - User creation and role assignment
@@ -55,10 +56,15 @@ The project documentation suite lives in [`docs/`](docs/README.md). It includes 
 - Communications center for invoice alerts, saved templates, campaigns, and campaign results
 - WhatsApp sending through Twilio or Meta, including approved template metadata
 - Supporting document uploads for maintenance requests, expenses, and contractor invoices
+- Internal knowledge base for private SOPs, manuals, and controlled documents with role-based access
+- Admin backup manifest, operational backup export, and local backup retention scripts
+- Operational email reminders for pending work, meter readings, bill preparation, and payroll preparation
+- Application monitoring for API errors, database status failures, login failures, and client page crashes
+- Restore drill tracking and monitoring alert delivery by email/SMS
 - Dual/source-side meter billing review and payability promotion
 - Weekly production monitoring with source meters and electricity top-ups
 - Production weekly reading context with previous prepaid kWh balance and previous meter readings
-- Payroll management and payroll expense posting
+- Payroll management, payroll expense posting, and downloadable payslip PDFs
 - Contractor invoice management with approval, document attachments, expense posting, and reporting
 - Printable full or individual accountant reports with business profile header, logo, and footer notes
 - REST API routes for the main resources
@@ -110,8 +116,28 @@ Use these files in pgAdmin, DBeaver, TablePlus, or another PostgreSQL DBMS:
 - Supporting documents migration path: `server/database/migrations/039_supporting_documents.sql`
 - Contractor invoices migration path: `server/database/migrations/040_contractor_invoices.sql`
 - User access profiles migration path: `server/database/migrations/041_user_access_profiles.sql`
+- Migration tracking ledger path: `server/database/migrations/042_schema_migrations.sql`
+- Knowledge documents migration path: `server/database/migrations/043_knowledge_documents.sql`
+- Knowledge document database file storage migration path: `server/database/migrations/044_knowledge_document_file_data.sql`
+- Operational reminder log migration path: `server/database/migrations/045_operational_reminders.sql`
+- System event logs migration path: `server/database/migrations/046_system_event_logs.sql`
+- Print page settings migration path: `server/database/migrations/047_print_page_settings.sql`
+- Operational hardening migration path: `server/database/migrations/048_operational_hardening.sql`
 
-Run `schema.sql` first, then `seed.sql`.
+Run `schema.sql` first, then `seed.sql`. If you create a fresh database from the latest `schema.sql`, also baseline the migration ledger so the runner knows those schema changes are already present:
+
+```powershell
+cd server
+npm.cmd run db:migrate:baseline
+```
+
+For normal ongoing upgrades after the baseline exists, use:
+
+```powershell
+cd server
+npm.cmd run db:migrate:status
+npm.cmd run db:migrate
+```
 
 If you already imported the first version and have data in PostgreSQL, run this migration instead of dropping your database:
 
@@ -231,7 +257,137 @@ npm.cmd run db:migrate:hold-source-backup-bills
 npm.cmd run db:migrate:supporting-documents
 npm.cmd run db:migrate:contractor-invoices
 npm.cmd run db:migrate:user-access-profiles
+npm.cmd run db:migrate:knowledge-documents
+npm.cmd run db:migrate:knowledge-document-file-data
+npm.cmd run db:migrate:operational-reminders
+npm.cmd run db:migrate:system-event-logs
+npm.cmd run db:migrate:print-page-settings
+npm.cmd run db:migrate:operational-hardening
 ```
+
+After migration tracking is installed, prefer the tracked runner instead of individual migration scripts:
+
+```powershell
+cd server
+npm.cmd run db:migrate:status
+npm.cmd run db:migrate
+```
+
+For an existing database where migrations `001` through `041` were already applied manually, run this once after deploying the migration runner:
+
+```powershell
+cd server
+npm.cmd run db:migrate:baseline
+```
+
+After that one-time baseline, future migration files are applied and recorded by `npm.cmd run db:migrate`.
+
+## Backup And Retention
+
+Admins can download an operational backup pack from Business Settings. For a local/server-side retained export, run:
+
+```powershell
+cd server
+npm.cmd run db:backup
+```
+
+For monthly export plus retention pruning:
+
+```powershell
+cd server
+npm.cmd run db:backup:monthly
+```
+
+Optional variables:
+
+```text
+BACKUP_DIR=J:\AGUA-BACKUPS
+BACKUP_RETENTION_DAYS=180
+```
+
+The operational export excludes password hashes, reset tokens, and environment secrets. Knowledge base documents are included as base64 file data, so backup files must be stored securely. Use managed PostgreSQL/Neon backups or `pg_dump` for full disaster recovery.
+
+Record restore tests in Business Settings after restoring a backup into a local/staging database. The app tracks the last drill, status, findings, and next quarterly due date. True PostgreSQL replication remains provider-managed; use Neon/provider point-in-time recovery, read replicas/branches, and provider backup alerts for that layer.
+
+## Operational Reminders
+
+Admin/accountant users can preview and send due operational reminder emails from Business Settings. The reminders cover pending work, end-month customer meter readings, weekly production readings, bill preparation, contractor invoices, and payroll preparation. Each reminder type is logged once per recipient per day to avoid accidental duplicate sends.
+
+The configured timing rules are:
+
+- End-month customer readings: daily for 7 days before the billing period `period_end`.
+- Weekly production readings: midday for 2 days before the Monday reading date, on Monday, and for 2 days after if the reading is still missed.
+- Contractor invoices: daily while invoices are not `posted_to_expense`, `paid`, or `rejected`.
+- Pending work and bill preparation: weekdays while work needs attention.
+- Payroll preparation: daily from the 25th through month end while payroll needs preparation, approval, or payment.
+
+For a scheduled job, run:
+
+```powershell
+cd server
+npm.cmd run ops:reminders
+```
+
+To run only selected reminder groups, pass a comma-separated list:
+
+```powershell
+cd server
+npm.cmd run ops:reminders -- --types=meter_readings,weekly_production_readings
+```
+
+For Vercel Cron, set `CRON_SECRET` in the API project. The app also accepts `REMINDER_CRON_SECRET` for non-Vercel schedulers. Call `GET /api/reminders/operational/cron` with `Authorization: Bearer <secret>` or the `x-reminder-cron-secret` header. Use `types=` to split morning operational reminders from midday reading reminders:
+
+```text
+/api/reminders/operational/cron?types=pending_work,bill_preparation,contractor_invoices,payroll_preparation
+/api/reminders/operational/cron?types=meter_readings,weekly_production_readings
+```
+
+Native Vercel Cron is configured in `server/vercel.json`:
+
+```text
+0 6 * * * -> /api/reminders/operational/cron/operations
+0 9 * * * -> /api/reminders/operational/cron/readings
+```
+
+Those are UTC schedules, equivalent to 9:00 AM and midday in East Africa Time.
+
+## Application Monitoring
+
+The Reports page includes an Application Monitoring panel for admin, accountant, and business viewer users. It summarizes recent API errors, database status failures, failed login attempts, and client page crashes.
+
+Before using it, run:
+
+```powershell
+cd server
+npm.cmd run db:migrate:system-event-logs
+```
+
+The public `GET /api/status` endpoint still returns only API/database status, but database failures are also recorded internally when the monitoring migration is installed. The operational backup export includes the event log table for troubleshooting history.
+
+Monitoring alerts can be sent by email and/or SMS when the scheduled check finds database failure or recent unresolved errors. Configure:
+
+```text
+MONITORING_ALERT_EMAILS=admin@example.com,ops@example.com
+MONITORING_ALERT_PHONES=+2547...
+MONITORING_ALERT_WINDOW_MINUTES=15
+MONITORING_ALERT_COOLDOWN_MINUTES=60
+PUBLIC_STATUS_URL=https://status.example.com
+```
+
+The Vercel Cron schedule calls `GET /api/monitoring/cron` every 15 minutes using `CRON_SECRET` or `MONITORING_CRON_SECRET`.
+
+## Print And PDF Settings
+
+Admins can set default print/PDF page behavior in Business Settings. The supported defaults are page size, orientation, margins, print scale, and a compression option for wide or long printouts.
+
+Before using these controls, run:
+
+```powershell
+cd server
+npm.cmd run db:migrate:print-page-settings
+```
+
+Browser print views for bills, receipts, reports, statements, production reports, and customer portal documents use these defaults when opening the print dialog. Server-generated bill, receipt, and payslip PDF attachments use the saved page size, orientation, and margins.
 
 ## Local Setup
 
@@ -312,36 +468,19 @@ server/database/seed.sql
 
 Use a strong production admin password after the first login. If the database provider requires TLS, set `DATABASE_SSL=true` in the API project's environment variables.
 
-For an existing production database, run the latest migrations before redeploying the API code that uses them. The current improvement batches require:
+For an existing production database that was already manually migrated through the current app version, baseline the migration ledger once:
 
 ```powershell
 cd server
-npm.cmd run db:migrate:numbering
-npm.cmd run db:migrate:account-adjustments
-npm.cmd run db:migrate:penalty-policy
-npm.cmd run db:migrate:tariff-effective-dates
-npm.cmd run db:migrate:payment-suspense
-npm.cmd run db:migrate:dual-meter-billing
-npm.cmd run db:migrate:production-monitoring
-npm.cmd run db:migrate:bill-payability
-npm.cmd run db:migrate:payroll
-npm.cmd run db:migrate:password-reset
-npm.cmd run db:migrate:payroll-expense-posting
-npm.cmd run db:migrate:payroll-lifecycle
-npm.cmd run db:migrate:document-delivery
-npm.cmd run db:migrate:customer-contact-preferences
-npm.cmd run db:migrate:production-topup-expenses
-npm.cmd run db:migrate:communications
-node src/db/runSqlFile.js database/migrations/032_communication_campaign_names.sql
-node src/db/runSqlFile.js database/migrations/033_communication_templates.sql
-node src/db/runSqlFile.js database/migrations/034_whatsapp_template_metadata.sql
-node src/db/runSqlFile.js database/migrations/035_production_meter_replacement.sql
-node src/db/runSqlFile.js database/migrations/036_maintenance_expense_links.sql
-node src/db/runSqlFile.js database/migrations/037_portal_user_customer_links.sql
-npm.cmd run db:migrate:hold-source-backup-bills
-npm.cmd run db:migrate:supporting-documents
-npm.cmd run db:migrate:contractor-invoices
-npm.cmd run db:migrate:user-access-profiles
+npm.cmd run db:migrate:baseline
+```
+
+For future production upgrades after that baseline, run:
+
+```powershell
+cd server
+npm.cmd run db:migrate:status
+npm.cmd run db:migrate
 ```
 
 ### 2. API Project
@@ -363,8 +502,15 @@ DATABASE_URL=postgres://...
 DATABASE_SSL=true
 JWT_SECRET=<long-random-secret>
 JWT_EXPIRES_IN=8h
+CRON_SECRET=<long-random-secret-for-vercel-cron>
 CLIENT_ORIGIN=https://<client-project>.vercel.app
 LOGO_STORAGE_MODE=data-url
+```
+
+`CLIENT_ORIGIN` may contain a comma-separated list when the same client project serves public subdomains:
+
+```text
+CLIENT_ORIGIN=https://www.example.com,https://status.example.com,https://docs.example.com
 ```
 
 Optional delivery environment variables:
@@ -435,6 +581,17 @@ VITE_API_URL=https://<api-project>.vercel.app/api
 
 After the client project has its final URL or custom domain, update the API project's `CLIENT_ORIGIN` to match it exactly and redeploy the API.
 
+### Optional Public Subdomains
+
+The client app can serve lightweight public pages from the same Vercel client project:
+
+```text
+https://status.<domain>  -> public status page
+https://docs.<domain>    -> public documentation hub
+```
+
+Add each subdomain to the client Vercel project, point DNS as Vercel instructs, then add the resulting origins to the API project's `CLIENT_ORIGIN` list. The status page calls `GET /api/status`, which checks both the API and database connection. The existing `GET /api/health` remains available as a simple liveness check.
+
 ### Production Notes
 
 - Keep `.env` files out of Git. Add secrets only in the Vercel dashboard.
@@ -451,6 +608,7 @@ Before sending:
 - Run migrations `028` through `034` for delivery logs, contact preferences, campaigns, templates, and WhatsApp template metadata.
 - Add customer email/phone details and enable the intended delivery channel on the customer record.
 - Configure SMTP for email, SMS provider variables for SMS, and WhatsApp provider variables for WhatsApp.
+- Configure `CRON_SECRET` before enabling hosted operational reminder schedules on Vercel.
 - For WhatsApp free-form sends, provider policy may still reject messages outside the allowed customer-service window.
 
 For approved WhatsApp templates:
@@ -506,7 +664,7 @@ Most core modules are now implemented. The remaining work is mainly hardening, a
 - Complete live provider testing for SMS and WhatsApp after production credentials and approved templates are configured.
 - Add M-Pesa/paybill transaction import or API integration.
 - Add bank integration beyond the current PDF statement import trainer.
-- Add email/SMS/WhatsApp scheduling, retries, and opt-out handling if bulk messaging volume grows.
-- Add a formal migration runner/table so applied migrations are tracked automatically.
+- Add retries and opt-out handling if bulk messaging volume grows.
+- Use the migration runner/table for all future schema changes so applied migrations are tracked automatically.
 - Decide long-term production storage and backup policy for supporting documents.
-- Finish production deployment checks, backups, restore drills, and role-by-role user acceptance testing.
+- Finish production deployment checks, provider backup/replication setup, and role-by-role user acceptance testing.
