@@ -2,16 +2,12 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "crons": [
     {
-      "path": "/api/reminders/operational/cron/operations",
+      "path": "/api/reminders/operational/cron",
       "schedule": "0 6 * * *"
     },
     {
-      "path": "/api/reminders/operational/cron/readings",
-      "schedule": "0 9 * * *"
-    },
-    {
       "path": "/api/monitoring/cron",
-      "schedule": "*/15 * * * *"
+      "schedule": "0 5 * * *"
     }
   ]
 }

@@ -97,5 +97,5 @@ Recommended production topology:
 - Provider credentials stored in Vercel environment variables.
 - `CLIENT_ORIGIN` on the API must include the deployed frontend origin, and can include comma-separated origins for docs/status subdomains.
 - `VITE_API_URL` on the client must point to the deployed API `/api` base URL.
-- Vercel Cron should call operational reminder routes and `/api/monitoring/cron` on their scheduled intervals.
+- Vercel Cron calls operational reminder routes and the monitoring cron on daily schedules for Hobby compatibility. External uptime monitors can call `/api/monitoring/cron` more frequently when near-real-time alerting is required.
 - Provider-native database backups, point-in-time recovery, and replication remain managed outside the application.

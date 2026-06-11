@@ -60,7 +60,7 @@ Operations:
 - Authenticated knowledge base for private SOPs, manuals, and controlled documents.
 - Knowledge document downloads are recorded in the audit trail.
 - Operational email reminders for pending work, end-month meter readings, weekly production readings, billing preparation, contractor invoices, and payroll preparation.
-- Reminder schedules gate sends by due window and support `types` filtering for separate morning and midday cron runs.
+- Reminder schedules gate sends by due window and support `types` filtering for separate external scheduler runs.
 - Reminder logs are recorded and included in operational backup exports.
 - Maintenance requests and linked maintenance expenses.
 - Supporting documents for maintenance requests, expenses, and contractor invoices.

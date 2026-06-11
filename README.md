@@ -335,7 +335,7 @@ cd server
 npm.cmd run ops:reminders -- --types=meter_readings,weekly_production_readings
 ```
 
-For Vercel Cron, set `CRON_SECRET` in the API project. The app also accepts `REMINDER_CRON_SECRET` for non-Vercel schedulers. Call `GET /api/reminders/operational/cron` with `Authorization: Bearer <secret>` or the `x-reminder-cron-secret` header. Use `types=` to split morning operational reminders from midday reading reminders:
+For Vercel Cron, set `CRON_SECRET` in the API project. The app also accepts `REMINDER_CRON_SECRET` for non-Vercel schedulers. Call `GET /api/reminders/operational/cron` with `Authorization: Bearer <secret>` or the `x-reminder-cron-secret` header. Use `types=` if an external scheduler needs to split morning operational reminders from midday reading reminders:
 
 ```text
 /api/reminders/operational/cron?types=pending_work,bill_preparation,contractor_invoices,payroll_preparation
@@ -345,11 +345,10 @@ For Vercel Cron, set `CRON_SECRET` in the API project. The app also accepts `REM
 Native Vercel Cron is configured in `server/vercel.json`:
 
 ```text
-0 6 * * * -> /api/reminders/operational/cron/operations
-0 9 * * * -> /api/reminders/operational/cron/readings
+0 6 * * * -> /api/reminders/operational/cron
 ```
 
-Those are UTC schedules, equivalent to 9:00 AM and midday in East Africa Time.
+That UTC schedule is equivalent to 9:00 AM in East Africa Time and is compatible with Vercel Hobby cron limits. Use an external scheduler for a separate midday readings run if you need that timing without upgrading the Vercel plan.
 
 ## Application Monitoring
 
@@ -374,7 +373,11 @@ MONITORING_ALERT_COOLDOWN_MINUTES=60
 PUBLIC_STATUS_URL=https://status.example.com
 ```
 
-The Vercel Cron schedule calls `GET /api/monitoring/cron` every 15 minutes using `CRON_SECRET` or `MONITORING_CRON_SECRET`.
+On Vercel Hobby, the bundled Vercel Cron schedule calls `GET /api/monitoring/cron` once daily using `CRON_SECRET` or `MONITORING_CRON_SECRET`. For 15-minute monitoring, use an external uptime monitor to call:
+
+```text
+https://<api-domain>/api/monitoring/cron?secret=<MONITORING_CRON_SECRET-or-CRON_SECRET>
+```
 
 ## Print And PDF Settings
 

@@ -181,10 +181,18 @@ It should return `database: "ok"` when the API can reach PostgreSQL.
 Monitoring alert cron is configured in `server/vercel.json`:
 
 ```text
-*/15 * * * * -> /api/monitoring/cron
+0 5 * * * -> /api/monitoring/cron
 ```
 
 Set `MONITORING_ALERT_EMAILS` and/or `MONITORING_ALERT_PHONES` to receive alerts. `MONITORING_CRON_SECRET` can override `CRON_SECRET` for this endpoint.
+
+Vercel Hobby projects cannot run cron jobs more frequently than once per day. For frequent monitoring, configure an external uptime service to call:
+
+```text
+GET https://<api-project>/api/monitoring/cron?secret=<MONITORING_CRON_SECRET-or-CRON_SECRET>
+```
+
+Use a 15-minute interval externally if you want near-real-time alerting without upgrading the Vercel plan.
 
 ## Scheduled Operational Reminders
 
@@ -195,7 +203,7 @@ GET https://<api-project>.vercel.app/api/reminders/operational/cron
 Authorization: Bearer <CRON_SECRET>
 ```
 
-The endpoint skips duplicate reminder type/recipient sends for the same day. It also accepts a comma-separated `types` query so reminder groups can run at different times:
+The endpoint skips duplicate reminder type/recipient sends for the same day. It also accepts a comma-separated `types` query so reminder groups can run at different times when using an external scheduler:
 
 ```text
 Morning operational run:
@@ -205,7 +213,13 @@ Midday readings run:
 GET /api/reminders/operational/cron/readings
 ```
 
-The API project's `server/vercel.json` defines both jobs. Timing uses East Africa Time; Vercel cron expressions are UTC, so 9:00 AM EAT is `0 6 * * *`, and midday EAT is `0 9 * * *`.
+The API project's `server/vercel.json` defines one Hobby-compatible daily job:
+
+```text
+0 6 * * * -> /api/reminders/operational/cron
+```
+
+Timing uses East Africa Time; Vercel cron expressions are UTC, so 9:00 AM EAT is `0 6 * * *`. Use an external scheduler for a separate midday readings run if needed.
 
 Locally or on a persistent server, the equivalent command is:
 
