@@ -1,5 +1,7 @@
-import { Bell, Building2, Download, MailCheck, RefreshCw, Save, Send, Settings2, Upload } from "lucide-react";
+import { Activity, Bell, Building2, Clock, Download, MailCheck, RefreshCw, Save, Send, Settings2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
+import { EmptyTableRow } from "../components/EmptyState";
+import StatCard from "../components/StatCard";
 import { useToastMessage } from "../components/ToastProvider";
 import { api, assetUrl } from "../services/api";
 import { downloadJson } from "../utils/csvTemplate";
@@ -41,7 +43,10 @@ const blankRestoreDrill = {
 
 const valueOrEmpty = (value) => value ?? "";
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
+const number = (value) => Number(value || 0).toLocaleString();
+const label = (value) => String(value || "-").replaceAll("_", " ");
 const shortDateTime = (value) => (value ? new Date(value).toLocaleString() : "Never");
+const browserDateTime = (value) => (value ? new Date(value).toLocaleString() : "-");
 
 function BusinessSettingsPage({ user }) {
   const [settings, setSettings] = useState(blankSettings);
@@ -53,11 +58,17 @@ function BusinessSettingsPage({ user }) {
   const [reminderLogs, setReminderLogs] = useState([]);
   const [reminderLoading, setReminderLoading] = useState(false);
   const [reminderSending, setReminderSending] = useState(false);
+  const [monitoring, setMonitoring] = useState(null);
+  const [monitoringAlertSnapshot, setMonitoringAlertSnapshot] = useState(null);
+  const [monitoringLoading, setMonitoringLoading] = useState(false);
+  const [localNow, setLocalNow] = useState(() => new Date());
   const [, setMessage] = useToastMessage();
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [backupLoading, setBackupLoading] = useState(false);
   const canEdit = user.role === "admin";
   const canSendReminders = ["admin", "accountant"].includes(user.role);
+  const canViewMonitoring = ["admin", "accountant", "business_viewer"].includes(user.role);
+  const monitoringSummary = monitoring?.summary || {};
 
   useEffect(() => {
     api.businessSettings
@@ -94,6 +105,14 @@ function BusinessSettingsPage({ user }) {
     if (canSendReminders) {
       loadOperationalReminders();
     }
+    if (canViewMonitoring) {
+      loadMonitoring();
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setLocalNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const setField = (field, value) => setSettings((current) => ({ ...current, [field]: value }));
@@ -208,6 +227,33 @@ function BusinessSettingsPage({ user }) {
     }
   };
 
+  const loadMonitoring = async () => {
+    setMonitoringLoading(true);
+    try {
+      const [summary, alertSnapshot] = await Promise.all([
+        api.monitoring.summary(),
+        canEdit ? api.monitoring.alertSnapshot().catch(() => null) : Promise.resolve(null)
+      ]);
+      setMonitoring(summary);
+      if (alertSnapshot) setMonitoringAlertSnapshot(alertSnapshot);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setMonitoringLoading(false);
+    }
+  };
+
+  const sendMonitoringTestAlert = async () => {
+    setMessage("");
+    try {
+      const result = await api.monitoring.sendTestAlert();
+      setMessage(`Monitoring alert check completed: ${result.results?.length || 0} recipient(s).`);
+      await loadMonitoring();
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
   return (
     <section className="page-stack">
       <header className="page-header">
@@ -217,7 +263,7 @@ function BusinessSettingsPage({ user }) {
         </div>
       </header>
 
-      <section className="workspace-grid">
+      <section className="business-settings-grid">
         <form className="panel form-grid" onSubmit={save}>
           <div className="panel-heading">
             <h3>Identity</h3>
@@ -312,9 +358,86 @@ function BusinessSettingsPage({ user }) {
           ) : null}
         </form>
 
-        <div className="page-stack wide-panel">
+        <div className="business-ops-grid wide-panel">
+          {canViewMonitoring ? (
+            <div className="panel business-monitoring-panel">
+              <div className="panel-heading">
+                <div>
+                  <h3>Application Monitoring</h3>
+                  <p className="muted">
+                    {monitoring
+                      ? `Checked ${browserDateTime(monitoring.checked_at)} | API ${monitoring.api} | DB ${monitoring.database}`
+                      : "Monitoring summary is loading."}
+                  </p>
+                </div>
+                <div className="row-actions">
+                  <div className="browser-clock" title="Current browser/computer time">
+                    <Clock size={14} />
+                    <span>{browserDateTime(localNow)}</span>
+                  </div>
+                  <button type="button" onClick={loadMonitoring} disabled={monitoringLoading}>
+                    <RefreshCw size={17} />
+                    {monitoringLoading ? "Loading..." : "Refresh"}
+                  </button>
+                  {canEdit ? (
+                    <button type="button" onClick={sendMonitoringTestAlert}>
+                      <Bell size={17} />
+                      Test alert
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="stat-grid compact-stat-grid">
+                <StatCard label="Errors 24h" value={number(monitoringSummary.errors_24h)} detail={`${number(monitoringSummary.unresolved_errors)} unresolved`} />
+                <StatCard label="Login Failures" value={number(monitoringSummary.login_failures_24h)} detail="Last 24 hours" />
+                <StatCard label="API Errors" value={number(monitoringSummary.api_errors_24h)} detail="Server-side failures" />
+                <StatCard label="Page Crashes" value={number(monitoringSummary.client_errors_24h)} detail="Client-side reports" />
+                {canEdit ? (
+                  <StatCard
+                    label="Alert Window"
+                    value={monitoringAlertSnapshot?.status || "-"}
+                    detail={`${number(monitoringAlertSnapshot?.event_count)} event(s), DB ${monitoringAlertSnapshot?.database || "-"}`}
+                  />
+                ) : null}
+              </div>
+              <div className="table-wrap monitoring-events-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Event</th>
+                      <th>Severity</th>
+                      <th>Source</th>
+                      <th>Path</th>
+                      <th>Message</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {monitoring?.recent_events?.length ? (
+                      monitoring.recent_events.slice(0, 10).map((event) => (
+                        <tr key={event.id}>
+                          <td>{browserDateTime(event.created_at)}</td>
+                          <td>{label(event.event_type)}</td>
+                          <td><span className={`status status-${event.severity}`}>{event.severity}</span></td>
+                          <td>{label(event.source)}</td>
+                          <td>{event.path || "-"}</td>
+                          <td>
+                            {event.message}
+                            {event.actor_name ? <small>{event.actor_name}</small> : null}
+                          </td>
+                        </tr>
+                      ))
+                    ) : (
+                      <EmptyTableRow colSpan={6} title="No monitoring events" detail="Server errors, login failures, and page crashes will appear here." />
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+
           {canSendReminders ? (
-            <div className="panel">
+            <div className="panel business-reminders-panel">
               <div className="panel-heading">
                 <div>
                   <h3>Operational Reminders</h3>
@@ -415,7 +538,7 @@ function BusinessSettingsPage({ user }) {
           ) : null}
 
           {canEdit ? (
-            <div className="panel">
+            <div className="panel business-backup-panel">
               <div className="panel-heading">
                 <div>
                   <h3>Data Backup Pack</h3>
@@ -622,7 +745,7 @@ function BusinessSettingsPage({ user }) {
           ) : null}
 
           {billingSettings ? (
-            <div className="panel">
+            <div className="panel business-billing-panel">
               <div className="panel-heading">
                 <h3>Billing Settings Snapshot</h3>
                 <Settings2 size={18} />
@@ -669,7 +792,7 @@ function BusinessSettingsPage({ user }) {
             </div>
           ) : null}
 
-          <form className="panel form-grid" onSubmit={save}>
+          <form className="panel form-grid business-payment-panel" onSubmit={save}>
             <div className="panel-heading">
               <h3>Payment Details</h3>
             </div>

@@ -16,8 +16,7 @@ const createTransporter = () =>
 
 const sendEmail = async ({ to, subject, text, html, attachments = [] }) => {
   if (!hasSmtpConfig()) {
-    console.log(`Email not sent because SMTP is not configured. To: ${to}; Subject: ${subject}`);
-    return { skipped: true };
+    return { skipped: true, error: "SMTP is not configured." };
   }
 
   const transporter = createTransporter();
@@ -48,9 +47,6 @@ const sendPasswordResetEmail = async ({ to, name, resetUrl, expiresInMinutes }) 
     subject,
     text
   });
-  if (result.skipped) {
-    console.log(`Password reset link for ${to}: ${resetUrl}`);
-  }
   return result;
 };
 

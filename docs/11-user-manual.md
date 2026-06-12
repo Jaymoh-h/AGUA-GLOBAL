@@ -158,7 +158,7 @@ Scheduled reminder runs are handled by cron routes when deployed.
 
 ## Monitoring And Public Status
 
-Admins can review the monitoring alert snapshot and send test alerts. Admins, accountants, and business viewers can review monitoring summaries and event logs where exposed in Reports.
+Admins can review the monitoring alert snapshot and send test alerts. Admins, accountants, and business viewers can review monitoring summaries and event logs from Business Settings.
 
 Monitoring tracks:
 

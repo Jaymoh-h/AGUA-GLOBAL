@@ -92,15 +92,16 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [printMode, setPrintMode] = useState("detail");
 
   const canConfigure = ["admin", "accountant"].includes(user?.role);
+  const canRecordProduction = ["admin", "accountant", "meter_reader"].includes(user?.role);
   const focusKey = navigationIntent?.page === "production" ? navigationIntent.focus : "";
   const hasProductionFocus = focusKey === "production_gap";
 
   const load = async () => {
     const [meterRows, rateRows, zoneRows, customerRows, topupRows, weekRows, reportRows, settingsRows] = await Promise.all([
       api.production.meters(),
-      api.rates.list(),
-      api.zones.list(),
-      api.customers.list(),
+      canConfigure ? api.rates.list() : Promise.resolve([]),
+      canConfigure ? api.zones.list() : Promise.resolve([]),
+      canConfigure ? api.customers.list() : Promise.resolve([]),
       api.production.topups(),
       api.production.weeklyReadings(),
       api.production.report(reportFilters),
@@ -670,6 +671,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
         ) : null}
 
         <div className="page-stack wide-panel production-primary-stack">
+          {canRecordProduction ? (
           <form className="panel production-weekly-form" onSubmit={submitWeekly}>
             <div className="panel-heading">
               <h3>{editingWeeklyId ? "Correct Weekly Reading" : "Weekly Monday Readings"}</h3>
@@ -785,6 +787,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
               {editingWeeklyId ? "Save correction" : "Save weekly readings"}
             </button>
           </form>
+          ) : null}
 
           {!hasProductionFocus ? (
           <div className="panel production-report-panel">
@@ -1008,9 +1011,11 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                         <td>{Number(week.prepaid_kwh_balance || 0).toLocaleString()} kWh</td>
                         <td>
                           <div className="row-actions">
-                            <button type="button" onClick={() => editWeeklyReading(week)} title="Correct weekly reading">
-                              <Edit2 size={14} />
-                            </button>
+                            {canRecordProduction ? (
+                              <button type="button" onClick={() => editWeeklyReading(week)} title="Correct weekly reading">
+                                <Edit2 size={14} />
+                              </button>
+                            ) : null}
                             {canConfigure ? (
                               <button
                                 className="danger-button"

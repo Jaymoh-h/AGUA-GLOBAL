@@ -99,7 +99,6 @@ const sendSms = async ({ to, message }) => {
     return sendTwilioSms({ to: normalizedTo, message });
   }
 
-  console.log(`SMS not sent because SMS_PROVIDER is not configured. To: ${normalizedTo}; Message: ${message}`);
   return { skipped: true, error: "SMS provider is not configured." };
 };
 

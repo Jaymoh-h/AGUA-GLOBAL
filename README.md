@@ -69,69 +69,22 @@ The project documentation suite lives in [`docs/`](docs/README.md). It includes 
 - Printable full or individual accountant reports with business profile header, logo, and footer notes
 - REST API routes for the main resources
 
-## Database Files For DBMS Import
+## Database Files And Migrations
 
-Use these files in pgAdmin, DBeaver, TablePlus, or another PostgreSQL DBMS:
+Use these files in pgAdmin, DBeaver, TablePlus, or another PostgreSQL DBMS when creating a database from scratch:
 
 - Schema path: `server/database/schema.sql`
 - Demo seed path: `server/database/seed.sql`
-- Existing database migration path: `server/database/migrations/001_rates_zones.sql`
-- Billing period/settings migration path: `server/database/migrations/002_billing_periods_settings.sql`
-- Meter/readings migration path: `server/database/migrations/003_meters_reading_context.sql`
-- Meter replacement events migration path: `server/database/migrations/004_meter_replacement_events.sql`
-- Receipt-level payments migration path: `server/database/migrations/005_receipt_level_payments.sql`
-- Audit trail migration path: `server/database/migrations/006_audit_events.sql`
-- Expenses migration path: `server/database/migrations/007_expenses.sql`
-- Business settings migration path: `server/database/migrations/008_business_settings.sql`
-- Maintenance requests migration path: `server/database/migrations/009_maintenance_requests.sql`
-- Tariff refinement migration path: `server/database/migrations/010_tariff_refinement.sql`
-- Penalty applications migration path: `server/database/migrations/011_penalty_applications.sql`
-- User password policy migration path: `server/database/migrations/012_user_password_policy.sql`
-- Customer opening balances migration path: `server/database/migrations/013_customer_opening_balances.sql`
-- Migration balance bills path: `server/database/migrations/014_migration_balance_bills.sql`
-- Customer credits migration path: `server/database/migrations/015_customer_credits.sql`
-- Numbering and account closure migration path: `server/database/migrations/016_numbering_and_account_closure.sql`
-- Account closure and adjustments migration path: `server/database/migrations/017_account_closure_and_adjustments.sql`
-- Penalty policy and waivers migration path: `server/database/migrations/018_penalty_policy_and_waivers.sql`
-- Tariff effective dates migration path: `server/database/migrations/019_tariff_effective_dates.sql`
-- Payment suspense migration path: `server/database/migrations/020_payment_suspense.sql`
-- Dual meter billing migration path: `server/database/migrations/021_dual_meter_billing.sql`
-- Production monitoring migration path: `server/database/migrations/022_production_monitoring.sql`
-- Bill payability migration path: `server/database/migrations/023_bill_payability_promotion.sql`
-- Payroll migration path: `server/database/migrations/024_payroll_management.sql`
-- Password reset migration path: `server/database/migrations/025_password_reset_tokens.sql`
-- Payroll expense posting migration path: `server/database/migrations/026_payroll_expense_posting.sql`
-- Payroll lifecycle migration path: `server/database/migrations/027_payroll_lifecycle_and_period_payees.sql`
-- Document delivery logs migration path: `server/database/migrations/028_document_delivery_logs.sql`
-- Customer contact preferences migration path: `server/database/migrations/029_customer_contact_preferences.sql`
-- Production top-up expenses migration path: `server/database/migrations/030_production_topup_expenses.sql`
-- Communication campaigns migration path: `server/database/migrations/031_communication_campaigns.sql`
-- Communication campaign names migration path: `server/database/migrations/032_communication_campaign_names.sql`
-- Communication templates migration path: `server/database/migrations/033_communication_templates.sql`
-- WhatsApp template metadata migration path: `server/database/migrations/034_whatsapp_template_metadata.sql`
-- Production meter replacement migration path: `server/database/migrations/035_production_meter_replacement.sql`
-- Maintenance expense links migration path: `server/database/migrations/036_maintenance_expense_links.sql`
-- Portal user customer links migration path: `server/database/migrations/037_portal_user_customer_links.sql`
-- Source backup bill hold cleanup migration path: `server/database/migrations/038_hold_unallocated_source_backup_bills.sql`
-- Supporting documents migration path: `server/database/migrations/039_supporting_documents.sql`
-- Contractor invoices migration path: `server/database/migrations/040_contractor_invoices.sql`
-- User access profiles migration path: `server/database/migrations/041_user_access_profiles.sql`
-- Migration tracking ledger path: `server/database/migrations/042_schema_migrations.sql`
-- Knowledge documents migration path: `server/database/migrations/043_knowledge_documents.sql`
-- Knowledge document database file storage migration path: `server/database/migrations/044_knowledge_document_file_data.sql`
-- Operational reminder log migration path: `server/database/migrations/045_operational_reminders.sql`
-- System event logs migration path: `server/database/migrations/046_system_event_logs.sql`
-- Print page settings migration path: `server/database/migrations/047_print_page_settings.sql`
-- Operational hardening migration path: `server/database/migrations/048_operational_hardening.sql`
+- Migration folder: `server/database/migrations/`
 
-Run `schema.sql` first, then `seed.sql`. If you create a fresh database from the latest `schema.sql`, also baseline the migration ledger so the runner knows those schema changes are already present:
+For a fresh database created from the latest `schema.sql`, import `schema.sql`, then `seed.sql`, then baseline the migration ledger once so the runner knows the schema is already current:
 
 ```powershell
 cd server
 npm.cmd run db:migrate:baseline
 ```
 
-For normal ongoing upgrades after the baseline exists, use:
+For all ongoing upgrades, use the tracked migration runner only:
 
 ```powershell
 cd server
@@ -139,148 +92,7 @@ npm.cmd run db:migrate:status
 npm.cmd run db:migrate
 ```
 
-If you already imported the first version and have data in PostgreSQL, run this migration instead of dropping your database:
-
-```text
-server/database/migrations/001_rates_zones.sql
-```
-
-Then restart the server.
-
-For the billing period and deposit fields, run:
-
-```text
-server/database/migrations/002_billing_periods_settings.sql
-```
-
-This preserves the existing bill and payment behavior while adding the richer billing fields.
-
-For active meters and previous-reading context, run:
-
-```text
-server/database/migrations/003_meters_reading_context.sql
-```
-
-Or use the project command:
-
-```powershell
-cd server
-npm.cmd run db:migrate:meters
-```
-
-For meter replacement events, run:
-
-```powershell
-cd server
-npm.cmd run db:migrate:meter-events
-```
-
-For receipt-level payments, run:
-
-```powershell
-cd server
-npm.cmd run db:migrate:payments
-```
-
-For audit trail events, run:
-
-```powershell
-cd server
-npm.cmd run db:migrate:audit
-```
-
-For the expense register and expense CSV imports, run:
-
-```powershell
-cd server
-npm.cmd run db:migrate:expenses
-```
-
-For shared business profile, logo path, contacts, payment details, and print footer notes, run:
-
-```powershell
-cd server
-npm.cmd run db:migrate:business-settings
-```
-
-For configurable bill/receipt numbering and account closure support, run:
-
-```powershell
-cd server
-npm.cmd run db:migrate:numbering
-```
-
-For final account closure tracking, deposit settlement history, and manual adjustment approvals, run:
-
-```powershell
-cd server
-npm.cmd run db:migrate:account-adjustments
-```
-
-For percentage penalties and penalty waiver tracking, run:
-
-```powershell
-cd server
-npm.cmd run db:migrate:penalty-policy
-```
-
-For effective-dated tariff history and historical billing, run:
-
-```powershell
-cd server
-npm.cmd run db:migrate:tariff-effective-dates
-```
-
-For the later operational modules, run the matching scripts as needed:
-
-```powershell
-cd server
-npm.cmd run db:migrate:payment-suspense
-npm.cmd run db:migrate:dual-meter-billing
-npm.cmd run db:migrate:production-monitoring
-npm.cmd run db:migrate:bill-payability
-npm.cmd run db:migrate:payroll
-npm.cmd run db:migrate:password-reset
-npm.cmd run db:migrate:payroll-expense-posting
-npm.cmd run db:migrate:payroll-lifecycle
-npm.cmd run db:migrate:document-delivery
-npm.cmd run db:migrate:customer-contact-preferences
-npm.cmd run db:migrate:production-topup-expenses
-npm.cmd run db:migrate:communications
-node src/db/runSqlFile.js database/migrations/032_communication_campaign_names.sql
-node src/db/runSqlFile.js database/migrations/033_communication_templates.sql
-node src/db/runSqlFile.js database/migrations/034_whatsapp_template_metadata.sql
-node src/db/runSqlFile.js database/migrations/035_production_meter_replacement.sql
-node src/db/runSqlFile.js database/migrations/036_maintenance_expense_links.sql
-node src/db/runSqlFile.js database/migrations/037_portal_user_customer_links.sql
-npm.cmd run db:migrate:hold-source-backup-bills
-npm.cmd run db:migrate:supporting-documents
-npm.cmd run db:migrate:contractor-invoices
-npm.cmd run db:migrate:user-access-profiles
-npm.cmd run db:migrate:knowledge-documents
-npm.cmd run db:migrate:knowledge-document-file-data
-npm.cmd run db:migrate:operational-reminders
-npm.cmd run db:migrate:system-event-logs
-npm.cmd run db:migrate:print-page-settings
-npm.cmd run db:migrate:operational-hardening
-```
-
-After migration tracking is installed, prefer the tracked runner instead of individual migration scripts:
-
-```powershell
-cd server
-npm.cmd run db:migrate:status
-npm.cmd run db:migrate
-```
-
-For an existing database where migrations `001` through `041` were already applied manually, run this once after deploying the migration runner:
-
-```powershell
-cd server
-npm.cmd run db:migrate:baseline
-```
-
-After that one-time baseline, future migration files are applied and recorded by `npm.cmd run db:migrate`.
+For an existing production database that was manually migrated before the migration ledger existed, run `npm.cmd run db:migrate:baseline` once after confirming the schema already includes the current migration set. After that one-time baseline, future schema changes are applied and recorded by `npm.cmd run db:migrate`.
 
 ## Backup And Retention
 
@@ -308,6 +120,42 @@ BACKUP_RETENTION_DAYS=180
 The operational export excludes password hashes, reset tokens, and environment secrets. Knowledge base documents are included as base64 file data, so backup files must be stored securely. Use managed PostgreSQL/Neon backups or `pg_dump` for full disaster recovery.
 
 Record restore tests in Business Settings after restoring a backup into a local/staging database. The app tracks the last drill, status, findings, and next quarterly due date. True PostgreSQL replication remains provider-managed; use Neon/provider point-in-time recovery, read replicas/branches, and provider backup alerts for that layer.
+
+## Automated Smoke Tests
+
+The server smoke test uses Node's built-in test runner and only runs when `TEST_DATABASE_URL` is set. Point it at a disposable migrated and seeded test database, not production:
+
+```powershell
+cd server
+$env:TEST_DATABASE_URL="postgres://postgres:postgres@localhost:5432/agua_global_test"
+$env:DATABASE_URL=$env:TEST_DATABASE_URL
+npm.cmd run db:migrate
+npm.cmd run db:seed
+npm.cmd run test:smoke
+```
+
+For a non-destructive smoke check against the database already configured in `server/.env`, skip migrate/seed and run:
+
+```powershell
+cd server
+npm.cmd run test:smoke:current
+```
+
+By default, the smoke test logs in with the seeded admin:
+
+```text
+TEST_ADMIN_EMAIL=admin@agua.local
+TEST_ADMIN_PASSWORD=Admin@123
+```
+
+To also verify business-viewer production read-only access, set:
+
+```text
+TEST_BUSINESS_VIEWER_EMAIL=<viewer email>
+TEST_BUSINESS_VIEWER_PASSWORD=<viewer password>
+```
+
+On a disposable test database, also set `TEST_INCLUDE_WRITE_GUARD=1` to verify that business viewers cannot create production records.
 
 ## Operational Reminders
 
@@ -352,13 +200,13 @@ That UTC schedule is equivalent to 9:00 AM in East Africa Time and is compatible
 
 ## Application Monitoring
 
-The Reports page includes an Application Monitoring panel for admin, accountant, and business viewer users. It summarizes recent API errors, database status failures, failed login attempts, and client page crashes.
+Business Settings includes an Application Monitoring panel for admin, accountant, and business viewer users. It summarizes recent API errors, database status failures, failed login attempts, and client page crashes using the viewer's browser/computer time for on-screen timestamps.
 
-Before using it, run:
+Before using it, make sure migrations are current:
 
 ```powershell
 cd server
-npm.cmd run db:migrate:system-event-logs
+npm.cmd run db:migrate
 ```
 
 The public `GET /api/status` endpoint still returns only API/database status, but database failures are also recorded internally when the monitoring migration is installed. The operational backup export includes the event log table for troubleshooting history.
@@ -383,11 +231,11 @@ https://<api-domain>/api/monitoring/cron?secret=<MONITORING_CRON_SECRET-or-CRON_
 
 Admins can set default print/PDF page behavior in Business Settings. The supported defaults are page size, orientation, margins, print scale, and a compression option for wide or long printouts.
 
-Before using these controls, run:
+Before using these controls, make sure migrations are current:
 
 ```powershell
 cd server
-npm.cmd run db:migrate:print-page-settings
+npm.cmd run db:migrate
 ```
 
 Browser print views for bills, receipts, reports, statements, production reports, and customer portal documents use these defaults when opening the print dialog. Server-generated bill, receipt, and payslip PDF attachments use the saved page size, orientation, and margins.
@@ -608,7 +456,7 @@ The Communications page can send invoice alerts by email, SMS, or WhatsApp to se
 
 Before sending:
 
-- Run migrations `028` through `034` for delivery logs, contact preferences, campaigns, templates, and WhatsApp template metadata.
+- Run `npm.cmd run db:migrate` from `server/` so delivery logs, contact preferences, campaigns, templates, and WhatsApp template metadata are installed.
 - Add customer email/phone details and enable the intended delivery channel on the customer record.
 - Configure SMTP for email, SMS provider variables for SMS, and WhatsApp provider variables for WhatsApp.
 - Configure `CRON_SECRET` before enabling hosted operational reminder schedules on Vercel.

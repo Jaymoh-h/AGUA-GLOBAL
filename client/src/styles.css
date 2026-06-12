@@ -859,6 +859,52 @@ td button,
   min-width: 0;
 }
 
+.business-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.55fr) minmax(0, 1.45fr);
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+
+.business-ops-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+
+.business-monitoring-panel,
+.business-reminders-panel,
+.business-backup-panel {
+  grid-column: 1 / -1;
+}
+
+.business-monitoring-panel .stat-grid {
+  margin-bottom: 10px;
+}
+
+.browser-clock {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid #dbe3ea;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #344256;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.monitoring-events-table {
+  max-height: 320px;
+  overflow: auto;
+}
+
 .workspace-grid.production-workspace {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -2759,10 +2805,12 @@ td {
   }
 
   .workspace-grid,
+  .business-settings-grid,
   .workspace-grid.knowledge-grid,
   .portal-profile-grid,
   .dashboard-chart-grid,
   .action-center-grid,
+  .business-ops-grid,
   .profit-loss-grid,
   .report-grid,
   .payroll-run-context {
@@ -2873,10 +2921,12 @@ td {
   }
 
   .workspace-grid,
+  .business-settings-grid,
   .workspace-grid.knowledge-grid,
   .portal-profile-grid,
   .dashboard-chart-grid,
   .action-center-grid,
+  .business-ops-grid,
   .profit-loss-grid,
   .report-grid,
   .payroll-run-context,
@@ -2913,6 +2963,11 @@ td {
   .page-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .browser-clock {
+    width: 100%;
+    justify-content: center;
   }
 
   .filter-bar {

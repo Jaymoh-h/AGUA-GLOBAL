@@ -19,6 +19,28 @@ const getDateRange = (query) => {
 
 const toNumber = (value) => Number(value || 0);
 const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+const backupSensitiveKeys = new Set([
+  "password",
+  "password_hash",
+  "password_reset_token",
+  "reset_token",
+  "reset_token_hash",
+  "token_hash",
+  "jwt_secret",
+  "current_password",
+  "new_password"
+]);
+
+const sanitizeBackupValue = (value) => {
+  if (Array.isArray(value)) return value.map(sanitizeBackupValue);
+  if (!value || typeof value !== "object" || value instanceof Date) return value;
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !backupSensitiveKeys.has(String(key).toLowerCase()))
+      .map(([key, child]) => [key, sanitizeBackupValue(child)])
+  );
+};
 
 const relationExists = async (name) => {
   const { rows } = await pool.query("SELECT to_regclass($1) AS relation_name", [`public.${name}`]);
@@ -124,7 +146,7 @@ const buildOperationalBackup = async () => {
       continue;
     }
     const { rows } = await pool.query(sql);
-    datasets[key] = rows;
+    datasets[key] = rows.map(sanitizeBackupValue);
     counts[key] = rows.length;
   }
 

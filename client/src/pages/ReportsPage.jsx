@@ -109,8 +109,6 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [accountantMessage, setAccountantMessage] = useState("");
   const [printAllRows, setPrintAllRows] = useState(false);
   const [dataQuality, setDataQuality] = useState([]);
-  const [monitoring, setMonitoring] = useState(null);
-  const [monitoringAlertSnapshot, setMonitoringAlertSnapshot] = useState(null);
   const [selectedQualityKey, setSelectedQualityKey] = useState("");
   const [activeManagementReport, setActiveManagementReport] = useState("billingSummary");
   const [activeAccountantReport, setActiveAccountantReport] = useState("profitLoss");
@@ -118,10 +116,6 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   useEffect(() => {
     api.reports.summary().then(setData).catch((err) => setMessage(err.message));
     api.reports.dataQuality().then(setDataQuality).catch(() => {});
-    api.monitoring.summary().then(setMonitoring).catch(() => {});
-    if (user.role === "admin") {
-      api.monitoring.alertSnapshot().then(setMonitoringAlertSnapshot).catch(() => {});
-    }
     api.businessSettings.get().then(setBusinessSettings).catch(() => {});
   }, []);
 
@@ -225,7 +219,6 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
     .filter((check) => check.severity === "high")
     .reduce((sum, check) => sum + Number(check.count || 0), 0);
   const reviewableQualityCount = dataQuality.filter((check) => Number(check.count || 0) > 0 && check.records?.length).length;
-  const monitoringSummary = monitoring?.summary || {};
   const receiptRegisterTable = useTableControls(accountantData?.receiptRegister || [], {
     searchFields: ["receipt_number", "payment_date", "customer_name", "acc_number", "payment_channel", "external_reference", "recorded_by_name"]
   });
@@ -621,85 +614,6 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
             </div>
           </div>
         ) : null}
-      </div>
-
-      <div className="panel screen-only">
-        <div className="panel-heading">
-          <div>
-            <h3>Application Monitoring</h3>
-            <p className="muted">
-              {monitoring
-                ? `Checked ${monitoring.checked_at?.slice(0, 19).replace("T", " ")} | API ${monitoring.api} | DB ${monitoring.database}`
-                : "Monitoring summary is loading."}
-            </p>
-          </div>
-          <div className="row-actions">
-            <button
-              type="button"
-              onClick={() => {
-                api.monitoring.summary().then(setMonitoring).catch((err) => setMessage(err.message));
-                if (user.role === "admin") api.monitoring.alertSnapshot().then(setMonitoringAlertSnapshot).catch(() => {});
-              }}
-            >
-              <RefreshCw size={17} />
-              Refresh
-            </button>
-            {user.role === "admin" ? (
-              <button
-                type="button"
-                onClick={() => api.monitoring.sendTestAlert().then((result) => setMessage(`Monitoring alert check completed: ${result.results?.length || 0} recipient(s).`)).catch((err) => setMessage(err.message))}
-              >
-                Send test alert
-              </button>
-            ) : null}
-          </div>
-        </div>
-        <div className="stat-grid compact-stat-grid">
-          <StatCard label="Errors 24h" value={number(monitoringSummary.errors_24h)} detail={`${number(monitoringSummary.unresolved_errors)} unresolved`} />
-          <StatCard label="Login Failures" value={number(monitoringSummary.login_failures_24h)} detail="Last 24 hours" />
-          <StatCard label="API Errors" value={number(monitoringSummary.api_errors_24h)} detail="Server-side failures" />
-          <StatCard label="Page Crashes" value={number(monitoringSummary.client_errors_24h)} detail="Client-side reports" />
-          {user.role === "admin" ? (
-            <StatCard
-              label="Alert Window"
-              value={monitoringAlertSnapshot?.status || "-"}
-              detail={`${number(monitoringAlertSnapshot?.event_count)} event(s), DB ${monitoringAlertSnapshot?.database || "-"}`}
-            />
-          ) : null}
-        </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Event</th>
-                <th>Severity</th>
-                <th>Source</th>
-                <th>Path</th>
-                <th>Message</th>
-              </tr>
-            </thead>
-            <tbody>
-              {monitoring?.recent_events?.length ? (
-                monitoring.recent_events.slice(0, 12).map((event) => (
-                  <tr key={event.id}>
-                    <td>{event.created_at?.slice(0, 19).replace("T", " ")}</td>
-                    <td>{label(event.event_type)}</td>
-                    <td><span className={`status status-${event.severity}`}>{event.severity}</span></td>
-                    <td>{label(event.source)}</td>
-                    <td>{event.path || "-"}</td>
-                    <td>
-                      {event.message}
-                      {event.actor_name ? <small>{event.actor_name}</small> : null}
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <EmptyTableRow colSpan={6} title="No monitoring events" detail="Server errors, login failures, and page crashes will appear here." />
-              )}
-            </tbody>
-          </table>
-        </div>
       </div>
 
       <div className="panel screen-only">

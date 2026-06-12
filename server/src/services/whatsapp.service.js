@@ -159,7 +159,6 @@ const sendWhatsApp = async ({ to, message, template = null }) => {
     return sendMetaWhatsApp({ to: normalizedTo, message, template });
   }
 
-  console.log(`WhatsApp not sent because WHATSAPP_PROVIDER is not configured. To: ${normalizedTo}; Message: ${message}`);
   return { skipped: true, error: "WhatsApp provider is not configured." };
 };
 

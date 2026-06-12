@@ -31,6 +31,10 @@ Defined in `server/.env`.
 | `MONITORING_ALERT_COOLDOWN_MINUTES` | No | `60` | Minimum time before repeating the same monitoring alert to the same recipient |
 | `PUBLIC_STATUS_URL` | Optional | `https://status.example.com` | Status page URL included in monitoring alert messages |
 | `CLIENT_ORIGIN` | Yes | `http://localhost:5173` | Allowed CORS origin or comma-separated origins |
+| `API_RATE_LIMIT_WINDOW_MS` | No | `900000` | General API rate-limit window in milliseconds |
+| `API_RATE_LIMIT_MAX` | No | `600` | Maximum general API requests per client/window |
+| `AUTH_RATE_LIMIT_WINDOW_MS` | No | `900000` | Authentication/password-reset rate-limit window in milliseconds |
+| `AUTH_RATE_LIMIT_MAX` | No | `20` | Maximum authentication/password-reset requests per client/window |
 | `PASSWORD_RESET_MINUTES` | No | `60` | Password reset token lifetime |
 | `LOGO_STORAGE_MODE` | No | `filesystem` or `data-url` | Logo storage strategy |
 | `BACKUP_DIR` | No | `backups` | Local directory for scripted operational backup exports |

@@ -18,7 +18,7 @@ Permissions are enforced mainly in route files under `server/src/routes/` using 
 | `accountant` | Finance and billing operator | Customers, billing, payments, expenses, reports, payroll, communications, reminders |
 | `meter_reader` | Field operations user | Customers, readings, meters, maintenance, production readings, dashboard, shared knowledge documents |
 | `customer` | Self-service portal user | Portal dashboard, own payments, service requests, linked customer statement |
-| `business_viewer` | Read-only business observer | Dashboard, reports, audit, monitoring, bills, payments, production, payroll, contractor invoice views |
+| `business_viewer` | Read-only business observer | Dashboard, reports, audit, business settings monitoring, bills, payments, production, payroll, contractor invoice views |
 
 ## Access Contexts
 

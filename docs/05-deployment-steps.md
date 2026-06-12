@@ -29,14 +29,15 @@ For a new database:
 1. Create the production database.
 2. Import `server/database/schema.sql`.
 3. Import `server/database/seed.sql`.
-4. Run migrations that are not already incorporated into the imported schema.
+4. Run `npm.cmd run db:migrate:baseline` once if the imported schema already includes the current migration set.
 5. Log in and rotate seeded/demo passwords.
 
 For an existing database:
 
 1. Back up the database first.
-2. Apply migrations in numeric order.
-3. Run smoke tests before deploying dependent API code.
+2. Run `npm.cmd run db:migrate:status`.
+3. Run `npm.cmd run db:migrate`.
+4. Run smoke tests before deploying dependent API code.
 
 ## API Vercel Project
 
@@ -135,7 +136,7 @@ Add the subdomains to the client Vercel project, configure DNS using Vercel's in
 - Customer portal login works.
 - Production and payroll pages load for authorized users.
 - Communications page shows configured provider state.
-- Reports > Application Monitoring loads and shows API/database status.
+- Business Settings > Application Monitoring loads and shows API/database status.
 - Admin monitoring test alert runs without errors after alert recipients are configured.
 - Business Settings restore drill ledger can record a staging restore result.
 - Business Settings > Print Page Defaults saves and a bill/receipt print dialog opens with the expected page setup.
@@ -148,29 +149,21 @@ Add the subdomains to the client Vercel project, configure DNS using Vercel's in
 - Apply database migrations before deploying code that depends on them.
 - Document every migration and behavior change in `docs/12-implementation-records.md`.
 
-## Current Late-Stage Migrations
+## Current Migrations
 
-The late-stage operational migrations include:
+Use the tracked migration runner for all schema changes:
 
 ```powershell
 cd server
-npm.cmd run db:migrate:hold-source-backup-bills
-npm.cmd run db:migrate:supporting-documents
-npm.cmd run db:migrate:contractor-invoices
-npm.cmd run db:migrate:user-access-profiles
-npm.cmd run db:migrate:knowledge-documents
-npm.cmd run db:migrate:knowledge-document-file-data
-npm.cmd run db:migrate:operational-reminders
-npm.cmd run db:migrate:system-event-logs
-npm.cmd run db:migrate:print-page-settings
-npm.cmd run db:migrate:operational-hardening
+npm.cmd run db:migrate:status
+npm.cmd run db:migrate
 ```
 
 ## Application Monitoring
 
-Application Monitoring is available from Reports for admin, accountant, and business viewer users. It records server-side API failures, database status failures, failed login attempts, and authenticated client page crashes.
+Application Monitoring is available from Business Settings for admin, accountant, and business viewer users. It records server-side API failures, database status failures, failed login attempts, and authenticated client page crashes.
 
-Run `npm.cmd run db:migrate:system-event-logs` and `npm.cmd run db:migrate:operational-hardening` before deploying code that depends on this panel. The public status endpoint remains:
+Run `npm.cmd run db:migrate` before deploying code that depends on this panel. The public status endpoint remains:
 
 ```text
 GET https://<api-project>.vercel.app/api/status
@@ -235,10 +228,8 @@ cd server
 npm.cmd run ops:reminders -- --types=meter_readings,weekly_production_readings
 ```
 
-If a deployment database has not yet received production meter replacement, maintenance expense links, or portal customer links, also run:
+If a deployment database is behind, bring it current with:
 
 ```powershell
-node src/db/runSqlFile.js database/migrations/035_production_meter_replacement.sql
-node src/db/runSqlFile.js database/migrations/036_maintenance_expense_links.sql
-node src/db/runSqlFile.js database/migrations/037_portal_user_customer_links.sql
+npm.cmd run db:migrate
 ```

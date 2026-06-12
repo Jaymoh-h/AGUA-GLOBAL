@@ -3,9 +3,16 @@ const path = require("path");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
-const { clientOrigins } = require("./config/env");
+const {
+  apiRateLimitMax,
+  apiRateLimitWindowMs,
+  authRateLimitMax,
+  authRateLimitWindowMs,
+  clientOrigins
+} = require("./config/env");
 const pool = require("./db/pool");
 const errorHandler = require("./middleware/errorHandler");
+const { createRateLimiter } = require("./middleware/rateLimit");
 const authRoutes = require("./routes/auth.routes");
 const customerRoutes = require("./routes/customer.routes");
 const readingRoutes = require("./routes/reading.routes");
@@ -36,6 +43,7 @@ const { recordSystemEvent } = require("./services/systemEvent.service");
 
 const app = express();
 
+app.set("trust proxy", 1);
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(
   cors({
@@ -52,6 +60,22 @@ app.use(
 app.use(express.json({ limit: "8mb" }));
 app.use(morgan("dev"));
 app.use("/uploads", express.static(path.join(__dirname, "..", "public", "uploads")));
+
+const apiRateLimiter = createRateLimiter({
+  windowMs: apiRateLimitWindowMs,
+  max: apiRateLimitMax,
+  message: "Too many API requests. Please try again shortly."
+});
+
+const authRateLimiter = createRateLimiter({
+  windowMs: authRateLimitWindowMs,
+  max: authRateLimitMax,
+  message: "Too many authentication attempts. Please wait before trying again.",
+  keyGenerator: (req) => {
+    const identifier = String(req.body?.email || req.body?.token || req.ip || "").trim().toLowerCase();
+    return `${req.ip || "unknown"}:${req.path}:${identifier}`;
+  }
+});
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", service: "agua-global-api" });
@@ -94,7 +118,8 @@ app.get("/api/status", async (req, res) => {
   }
 });
 
-app.use("/api/auth", authRoutes);
+app.use("/api", apiRateLimiter);
+app.use("/api/auth", authRateLimiter, authRoutes);
 app.use("/api/customers", customerRoutes);
 app.use("/api/readings", readingRoutes);
 app.use("/api/bills", billRoutes);
