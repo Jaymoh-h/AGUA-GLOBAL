@@ -1,0 +1,9 @@
+node_modules
+npm-debug.log
+.env
+.env.*
+backups
+public/uploads
+storage/documents
+coverage
+*.log

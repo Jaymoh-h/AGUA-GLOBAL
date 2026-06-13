@@ -16,6 +16,8 @@ DROP TABLE IF EXISTS customer_adjustments CASCADE;
 DROP TABLE IF EXISTS customer_deposit_transactions CASCADE;
 DROP TABLE IF EXISTS bill_penalty_applications CASCADE;
 DROP TABLE IF EXISTS bills CASCADE;
+DROP TABLE IF EXISTS contractor_invoices CASCADE;
+DROP TABLE IF EXISTS contractors CASCADE;
 DROP TABLE IF EXISTS expenses CASCADE;
 DROP TABLE IF EXISTS meter_readings CASCADE;
 DROP TABLE IF EXISTS meter_events CASCADE;
@@ -357,27 +359,8 @@ CREATE TABLE communication_campaigns (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE communication_campaign_recipients (
-  id SERIAL PRIMARY KEY,
-  campaign_id INTEGER NOT NULL REFERENCES communication_campaigns(id) ON DELETE CASCADE,
-  customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
-  bill_id INTEGER REFERENCES bills(id) ON DELETE SET NULL,
-  recipient VARCHAR(180),
-  status VARCHAR(30) NOT NULL
-    CHECK (status IN ('sent', 'skipped', 'failed')),
-  error_message TEXT,
-  delivery_log_id INTEGER REFERENCES document_delivery_logs(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
 CREATE INDEX idx_communication_campaigns_created
   ON communication_campaigns(created_at DESC);
-
-CREATE INDEX idx_communication_campaign_recipients_campaign
-  ON communication_campaign_recipients(campaign_id, status);
-
-CREATE INDEX idx_communication_campaign_recipients_customer
-  ON communication_campaign_recipients(customer_id, created_at DESC);
 
 CREATE TABLE communication_templates (
   id SERIAL PRIMARY KEY,
@@ -587,6 +570,25 @@ CREATE TABLE bills (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE communication_campaign_recipients (
+  id SERIAL PRIMARY KEY,
+  campaign_id INTEGER NOT NULL REFERENCES communication_campaigns(id) ON DELETE CASCADE,
+  customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+  bill_id INTEGER REFERENCES bills(id) ON DELETE SET NULL,
+  recipient VARCHAR(180),
+  status VARCHAR(30) NOT NULL
+    CHECK (status IN ('sent', 'skipped', 'failed')),
+  error_message TEXT,
+  delivery_log_id INTEGER REFERENCES document_delivery_logs(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_communication_campaign_recipients_campaign
+  ON communication_campaign_recipients(campaign_id, status);
+
+CREATE INDEX idx_communication_campaign_recipients_customer
+  ON communication_campaign_recipients(customer_id, created_at DESC);
+
 ALTER TABLE customers
   ADD CONSTRAINT customers_closed_by_fkey FOREIGN KEY (closed_by) REFERENCES users(id) ON DELETE SET NULL,
   ADD CONSTRAINT customers_closure_bill_id_fkey FOREIGN KEY (closure_bill_id) REFERENCES bills(id) ON DELETE SET NULL;
@@ -695,6 +697,33 @@ CREATE TABLE source_billing_requests (
 ALTER TABLE bills
   ADD CONSTRAINT bills_source_billing_request_id_fkey FOREIGN KEY (source_billing_request_id) REFERENCES source_billing_requests(id) ON DELETE SET NULL;
 
+CREATE TABLE maintenance_requests (
+  id SERIAL PRIMARY KEY,
+  request_number VARCHAR(40) UNIQUE,
+  customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+  zone_id INTEGER REFERENCES zones(id) ON DELETE SET NULL,
+  meter_id INTEGER REFERENCES meters(id) ON DELETE SET NULL,
+  title VARCHAR(180) NOT NULL,
+  category VARCHAR(40) NOT NULL DEFAULT 'other'
+    CHECK (category IN ('leak', 'meter_fault', 'no_water', 'low_pressure', 'water_quality', 'connection', 'billing_support', 'other')),
+  priority VARCHAR(20) NOT NULL DEFAULT 'normal'
+    CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+  status VARCHAR(20) NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'in_progress', 'resolved', 'cancelled')),
+  source VARCHAR(30) NOT NULL DEFAULT 'internal'
+    CHECK (source IN ('internal', 'field', 'customer_portal', 'phone', 'walk_in', 'other')),
+  reported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  target_date DATE,
+  assigned_to INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  description TEXT,
+  resolution_notes TEXT,
+  resolved_at TIMESTAMPTZ,
+  resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE expenses (
   id SERIAL PRIMARY KEY,
   expense_date DATE NOT NULL DEFAULT CURRENT_DATE,
@@ -711,6 +740,48 @@ CREATE TABLE expenses (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE contractors (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(180) NOT NULL UNIQUE,
+  phone VARCHAR(40),
+  email VARCHAR(160),
+  tax_pin VARCHAR(80),
+  payment_terms_days INTEGER NOT NULL DEFAULT 30 CHECK (payment_terms_days >= 0),
+  status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE contractor_invoices (
+  id SERIAL PRIMARY KEY,
+  contractor_id INTEGER NOT NULL REFERENCES contractors(id) ON DELETE RESTRICT,
+  invoice_number VARCHAR(120) NOT NULL,
+  invoice_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  due_date DATE NOT NULL,
+  description TEXT NOT NULL,
+  category VARCHAR(80) NOT NULL DEFAULT 'Contractor services',
+  subtotal_amount NUMERIC(12, 2) NOT NULL CHECK (subtotal_amount >= 0),
+  vat_amount NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (vat_amount >= 0),
+  total_amount NUMERIC(12, 2) NOT NULL CHECK (total_amount > 0),
+  status VARCHAR(30) NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft', 'submitted', 'approved', 'rejected', 'posted_to_expense', 'paid')),
+  expense_id INTEGER REFERENCES expenses(id) ON DELETE SET NULL,
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ,
+  posted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  posted_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (contractor_id, invoice_number)
+);
+
+ALTER TABLE expenses
+  ADD COLUMN contractor_invoice_id INTEGER REFERENCES contractor_invoices(id) ON DELETE SET NULL;
 
 CREATE TABLE customer_deposit_transactions (
   id SERIAL PRIMARY KEY,
@@ -740,33 +811,6 @@ CREATE TABLE customer_adjustments (
   reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   reviewed_at TIMESTAMPTZ,
   review_notes TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE maintenance_requests (
-  id SERIAL PRIMARY KEY,
-  request_number VARCHAR(40) UNIQUE,
-  customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
-  zone_id INTEGER REFERENCES zones(id) ON DELETE SET NULL,
-  meter_id INTEGER REFERENCES meters(id) ON DELETE SET NULL,
-  title VARCHAR(180) NOT NULL,
-  category VARCHAR(40) NOT NULL DEFAULT 'other'
-    CHECK (category IN ('leak', 'meter_fault', 'no_water', 'low_pressure', 'water_quality', 'connection', 'billing_support', 'other')),
-  priority VARCHAR(20) NOT NULL DEFAULT 'normal'
-    CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
-  status VARCHAR(20) NOT NULL DEFAULT 'open'
-    CHECK (status IN ('open', 'in_progress', 'resolved', 'cancelled')),
-  source VARCHAR(30) NOT NULL DEFAULT 'internal'
-    CHECK (source IN ('internal', 'field', 'customer_portal', 'phone', 'walk_in', 'other')),
-  reported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  target_date DATE,
-  assigned_to INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  description TEXT,
-  resolution_notes TEXT,
-  resolved_at TIMESTAMPTZ,
-  resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -878,6 +922,11 @@ CREATE INDEX idx_bills_billing_meter_id ON bills(billing_meter_id);
 CREATE INDEX idx_bills_customer_period_pay_status ON bills(customer_id, billing_period_id, bill_pay_status);
 CREATE INDEX idx_payments_customer_date ON payments(customer_id, payment_date DESC);
 CREATE INDEX idx_expenses_maintenance_request ON expenses(maintenance_request_id, expense_date DESC);
+CREATE INDEX idx_contractors_status ON contractors(status);
+CREATE INDEX idx_contractor_invoices_status ON contractor_invoices(status);
+CREATE INDEX idx_contractor_invoices_due_date ON contractor_invoices(due_date);
+CREATE INDEX idx_contractor_invoices_contractor ON contractor_invoices(contractor_id);
+CREATE INDEX idx_expenses_contractor_invoice ON expenses(contractor_invoice_id);
 CREATE INDEX idx_payments_receipt_number ON payments(receipt_number);
 CREATE INDEX idx_payment_allocations_payment_id ON payment_allocations(payment_id);
 CREATE INDEX idx_payment_allocations_bill_id ON payment_allocations(bill_id);

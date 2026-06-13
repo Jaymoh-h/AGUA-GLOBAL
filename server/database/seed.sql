@@ -52,11 +52,41 @@ SET rate_id = CASE
 
 INSERT INTO users (name, email, phone, role, customer_id, password_hash, must_change_password)
 VALUES
-  ('System Admin', 'admin@agua.local', '+254700000001', 'admin', NULL, crypt('Admin@123', gen_salt('bf')), TRUE),
-  ('Mary Meter Reader', 'reader@agua.local', '+254700000002', 'meter_reader', NULL, crypt('Reader@123', gen_salt('bf')), TRUE),
-  ('Alex Accountant', 'accountant@agua.local', '+254700000003', 'accountant', NULL, crypt('Accountant@123', gen_salt('bf')), TRUE),
-  ('Jane Wanjiku', 'jane@agua.local', '+254711111111', 'customer', (SELECT id FROM customers WHERE acc_number = 'AG-0001'), crypt('Customer@123', gen_salt('bf')), TRUE)
+  ('System Admin', 'admin@agua.local', '+254700000001', 'admin', NULL, crypt('Admin@123', gen_salt('bf')), FALSE),
+  ('Mary Meter Reader', 'reader@agua.local', '+254700000002', 'meter_reader', NULL, crypt('Reader@123', gen_salt('bf')), FALSE),
+  ('Alex Accountant', 'accountant@agua.local', '+254700000003', 'accountant', NULL, crypt('Accountant@123', gen_salt('bf')), FALSE),
+  ('Business Viewer', 'viewer@agua.local', '+254700000004', 'business_viewer', NULL, crypt('Viewer@123', gen_salt('bf')), FALSE),
+  ('Jane Wanjiku', 'jane@agua.local', '+254711111111', 'customer', (SELECT id FROM customers WHERE acc_number = 'AG-0001'), crypt('Customer@123', gen_salt('bf')), FALSE)
 ON CONFLICT (email) DO NOTHING;
+
+INSERT INTO user_access_profiles (user_id, role, label, customer_id, is_active, is_default)
+SELECT
+  u.id,
+  u.role,
+  CASE u.role
+    WHEN 'admin' THEN 'Admin Console'
+    WHEN 'accountant' THEN 'Accounting Console'
+    WHEN 'meter_reader' THEN 'Meter Reader'
+    WHEN 'customer' THEN 'Customer Portal'
+    WHEN 'business_viewer' THEN 'Business Viewer'
+    ELSE initcap(replace(u.role, '_', ' '))
+  END,
+  u.customer_id,
+  TRUE,
+  TRUE
+FROM users u
+WHERE u.email IN (
+    'admin@agua.local',
+    'reader@agua.local',
+    'accountant@agua.local',
+    'viewer@agua.local',
+    'jane@agua.local'
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM user_access_profiles uap
+    WHERE uap.user_id = u.id
+  );
 
 INSERT INTO billing_settings (
   id, due_rule, penalty_grace_days, penalty_type, penalty_value, deposit_required, default_deposit_amount

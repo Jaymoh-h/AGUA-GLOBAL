@@ -157,6 +157,100 @@ TEST_BUSINESS_VIEWER_PASSWORD=<viewer password>
 
 On a disposable test database, also set `TEST_INCLUDE_WRITE_GUARD=1` to verify that business viewers cannot create production records.
 
+## Docker Setup
+
+The repository includes a Docker Compose stack for local or single-server deployment:
+
+- `db`: PostgreSQL 16 with persistent data.
+- `api`: Express API, migration-aware startup, uploads, document storage, and backups.
+- `client`: Built React app served by Nginx, with `/api` and `/uploads` proxied to the API container.
+
+Create a local Docker env file, then adjust secrets before use:
+
+```powershell
+Copy-Item docker.env.example .env
+```
+
+Start the stack:
+
+```powershell
+docker compose up --build
+```
+
+Open:
+
+```text
+http://localhost:5173
+```
+
+Seeded Docker/demo logins:
+
+```text
+admin@agua.local / Admin@123
+reader@agua.local / Reader@123
+accountant@agua.local / Accountant@123
+viewer@agua.local / Viewer@123
+jane@agua.local / Customer@123
+```
+
+The default Docker client build uses `VITE_API_URL=/api`, so browser requests stay same-origin through Nginx. If you expose the app through another host or port, set `CLIENT_ORIGIN` and, when needed, `VITE_API_URL` in `.env`, then rebuild the client image:
+
+```powershell
+docker compose build client
+docker compose up -d
+```
+
+Fresh Docker databases are initialized from:
+
+```text
+server/database/schema.sql
+server/database/seed.sql
+```
+
+On first API startup, the container baselines the current migration ledger when it detects an initialized schema with no recorded migrations. On later starts it runs:
+
+```text
+npm run db:migrate
+```
+
+Useful Docker commands:
+
+```powershell
+docker compose ps
+docker compose logs -f api
+docker compose exec api npm run db:migrate:status
+docker compose exec api npm run db:backup
+docker compose down
+```
+
+Run the smoke suite against Docker after the stack is healthy:
+
+```powershell
+cd server
+$env:TEST_DATABASE_URL = 'postgres://postgres:000000@localhost:5432/agua_global'
+$env:JWT_SECRET = 'docker-smoke-secret'
+$env:TEST_ADMIN_EMAIL = 'admin@agua.local'
+$env:TEST_ADMIN_PASSWORD = 'Admin@123'
+$env:TEST_BUSINESS_VIEWER_EMAIL = 'viewer@agua.local'
+$env:TEST_BUSINESS_VIEWER_PASSWORD = 'Viewer@123'
+$env:TEST_INCLUDE_WRITE_GUARD = '1'
+npm.cmd run test:smoke
+```
+
+Persistent Docker volumes:
+
+- `postgres_data`: PostgreSQL data.
+- `api_uploads`: uploaded business logos.
+- `document_storage`: supporting documents.
+- `api_backups`: operational backup exports.
+
+To reset a local Docker database completely, stop the stack and remove volumes:
+
+```powershell
+docker compose down -v
+docker compose up --build
+```
+
 ## Operational Reminders
 
 Admin/accountant users can preview and send due operational reminder emails from Business Settings. The reminders cover pending work, end-month customer meter readings, weekly production readings, bill preparation, contractor invoices, and payroll preparation. Each reminder type is logged once per recipient per day to avoid accidental duplicate sends.
