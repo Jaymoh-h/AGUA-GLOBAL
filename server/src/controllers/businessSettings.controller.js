@@ -5,6 +5,7 @@ const { logoStorageMode } = require("../config/env");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
+const { matchesFileSignature } = require("../utils/fileSignature");
 
 const uploadDir = path.join(__dirname, "..", "..", "public", "uploads");
 const logoMimeTypes = {
@@ -70,6 +71,9 @@ const parseLogoUpload = ({ data, mime_type }) => {
   }
   if (buffer.length > maxLogoBytes) {
     throw new ApiError(400, "Logo image must be 2MB or smaller.");
+  }
+  if (!matchesFileSignature(buffer, mimeType)) {
+    throw new ApiError(400, "Logo content does not match the selected image type.");
   }
 
   return { buffer, extension, mimeType };

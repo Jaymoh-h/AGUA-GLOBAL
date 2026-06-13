@@ -3,6 +3,7 @@ const path = require("path");
 const { createReadStream } = require("fs");
 const crypto = require("crypto");
 const ApiError = require("../utils/apiError");
+const { matchesFileSignature } = require("../utils/fileSignature");
 
 const storageRoot = path.join(__dirname, "..", "..", "storage", "documents");
 const maxDocumentBytes = 5 * 1024 * 1024;
@@ -37,6 +38,9 @@ const parseDocumentUpload = ({ data, mime_type, original_name }) => {
   const buffer = Buffer.from(String(base64 || ""), "base64");
   if (!buffer.length) throw new ApiError(400, "Document file data is required.");
   if (buffer.length > maxDocumentBytes) throw new ApiError(400, "Document file must be 5MB or smaller.");
+  if (!matchesFileSignature(buffer, mimeType)) {
+    throw new ApiError(400, "Document content does not match the selected file type.");
+  }
 
   return {
     buffer,

@@ -315,10 +315,11 @@ MONITORING_ALERT_COOLDOWN_MINUTES=60
 PUBLIC_STATUS_URL=https://status.example.com
 ```
 
-On Vercel Hobby, the bundled Vercel Cron schedule calls `GET /api/monitoring/cron` once daily using `CRON_SECRET` or `MONITORING_CRON_SECRET`. For 15-minute monitoring, use an external uptime monitor to call:
+On Vercel Hobby, the bundled Vercel Cron schedule calls `GET /api/monitoring/cron` once daily using `CRON_SECRET` or `MONITORING_CRON_SECRET`. For 15-minute monitoring, use an external uptime monitor to call the endpoint with a bearer token or `x-monitoring-cron-secret` header:
 
 ```text
-https://<api-domain>/api/monitoring/cron?secret=<MONITORING_CRON_SECRET-or-CRON_SECRET>
+GET https://<api-domain>/api/monitoring/cron
+Authorization: Bearer <MONITORING_CRON_SECRET-or-CRON_SECRET>
 ```
 
 ## Print And PDF Settings
@@ -448,6 +449,7 @@ DATABASE_SSL=true
 JWT_SECRET=<long-random-secret>
 JWT_EXPIRES_IN=8h
 CRON_SECRET=<long-random-secret-for-vercel-cron>
+AUTH_RATE_LIMIT_STORE=database
 CLIENT_ORIGIN=https://<client-project>.vercel.app
 LOGO_STORAGE_MODE=data-url
 ```

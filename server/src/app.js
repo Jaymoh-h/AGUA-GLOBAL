@@ -5,10 +5,13 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const {
   apiRateLimitMax,
+  apiRateLimitStore,
   apiRateLimitWindowMs,
   authRateLimitMax,
+  authRateLimitStore,
   authRateLimitWindowMs,
-  clientOrigins
+  clientOrigins,
+  rateLimitHashSecret
 } = require("./config/env");
 const pool = require("./db/pool");
 const errorHandler = require("./middleware/errorHandler");
@@ -64,13 +67,21 @@ app.use("/uploads", express.static(path.join(__dirname, "..", "public", "uploads
 const apiRateLimiter = createRateLimiter({
   windowMs: apiRateLimitWindowMs,
   max: apiRateLimitMax,
-  message: "Too many API requests. Please try again shortly."
+  message: "Too many API requests. Please try again shortly.",
+  store: apiRateLimitStore,
+  scope: "api",
+  pool,
+  hashSecret: rateLimitHashSecret
 });
 
 const authRateLimiter = createRateLimiter({
   windowMs: authRateLimitWindowMs,
   max: authRateLimitMax,
   message: "Too many authentication attempts. Please wait before trying again.",
+  store: authRateLimitStore,
+  scope: "auth",
+  pool,
+  hashSecret: rateLimitHashSecret,
   keyGenerator: (req) => {
     const identifier = String(req.body?.email || req.body?.token || req.ip || "").trim().toLowerCase();
     return `${req.ip || "unknown"}:${req.path}:${identifier}`;

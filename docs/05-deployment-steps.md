@@ -59,6 +59,7 @@ DATABASE_SSL=true
 JWT_SECRET=<long-random-secret>
 JWT_EXPIRES_IN=8h
 CRON_SECRET=<long-random-secret-for-vercel-cron>
+AUTH_RATE_LIMIT_STORE=database
 MONITORING_ALERT_EMAILS=<ops-email-list>
 MONITORING_ALERT_PHONES=<optional-ops-sms-list>
 CLIENT_ORIGIN=https://<client-project>.vercel.app
@@ -182,7 +183,8 @@ Set `MONITORING_ALERT_EMAILS` and/or `MONITORING_ALERT_PHONES` to receive alerts
 Vercel Hobby projects cannot run cron jobs more frequently than once per day. For frequent monitoring, configure an external uptime service to call:
 
 ```text
-GET https://<api-project>/api/monitoring/cron?secret=<MONITORING_CRON_SECRET-or-CRON_SECRET>
+GET https://<api-project>/api/monitoring/cron
+Authorization: Bearer <MONITORING_CRON_SECRET-or-CRON_SECRET>
 ```
 
 Use a 15-minute interval externally if you want near-real-time alerting without upgrading the Vercel plan.

@@ -18,7 +18,6 @@ const requireCronSecret = (req) => {
   const supplied =
     req.get("x-reminder-cron-secret") ||
     getBearerToken(req.get("authorization") || "") ||
-    req.query.token ||
     "";
   if (supplied !== reminderCronSecret) {
     throw new ApiError(401, "Invalid reminder cron secret.");

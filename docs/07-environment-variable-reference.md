@@ -33,8 +33,11 @@ Defined in `server/.env`.
 | `CLIENT_ORIGIN` | Yes | `http://localhost:5173` | Allowed CORS origin or comma-separated origins |
 | `API_RATE_LIMIT_WINDOW_MS` | No | `900000` | General API rate-limit window in milliseconds |
 | `API_RATE_LIMIT_MAX` | No | `600` | Maximum general API requests per client/window |
+| `API_RATE_LIMIT_STORE` | No | `memory` | General API rate-limit store: `memory` or `database` |
 | `AUTH_RATE_LIMIT_WINDOW_MS` | No | `900000` | Authentication/password-reset rate-limit window in milliseconds |
 | `AUTH_RATE_LIMIT_MAX` | No | `20` | Maximum authentication/password-reset requests per client/window |
+| `AUTH_RATE_LIMIT_STORE` | No | `database` | Authentication rate-limit store: use `database` on Vercel/production for shared limits |
+| `RATE_LIMIT_HASH_SECRET` | No | `<long-random-secret>` | Optional HMAC secret for stored rate-limit keys; falls back to `JWT_SECRET` |
 | `PASSWORD_RESET_MINUTES` | No | `60` | Password reset token lifetime |
 | `LOGO_STORAGE_MODE` | No | `filesystem` or `data-url` | Logo storage strategy |
 | `BACKUP_DIR` | No | `backups` | Local directory for scripted operational backup exports |

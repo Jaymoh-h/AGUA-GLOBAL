@@ -12,8 +12,7 @@ const assertMonitoringCronSecret = (req) => {
   const authHeader = req.headers.authorization || "";
   const bearer = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
   const headerSecret = req.headers["x-monitoring-cron-secret"];
-  const querySecret = req.query.secret;
-  if (![bearer, headerSecret, querySecret].includes(monitoringCronSecret)) {
+  if (![bearer, headerSecret].includes(monitoringCronSecret)) {
     throw new ApiError(401, "Invalid monitoring cron secret.");
   }
 };
