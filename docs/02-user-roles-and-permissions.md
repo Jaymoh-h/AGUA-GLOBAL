@@ -8,7 +8,7 @@ AGUA Global uses five primary roles:
 - `customer`
 - `business_viewer`
 
-Permissions are enforced mainly in route files under `server/src/routes/` using JWT authentication and role guards.
+Permissions are enforced mainly in route files under `server/src/routes/` using HttpOnly JWT session cookies, CSRF checks for browser writes, and role guards.
 
 ## Role Summary
 
@@ -22,7 +22,7 @@ Permissions are enforced mainly in route files under `server/src/routes/` using 
 
 ## Access Contexts
 
-Users can have one or more access profiles. If more than one active profile exists, login returns a context selection step before issuing the final operating token.
+Users can have one or more access profiles. If more than one active profile exists, login returns a context selection step before issuing the final browser session.
 
 Access contexts support cases such as:
 
@@ -30,7 +30,7 @@ Access contexts support cases such as:
 - A user with separate administrative and customer-portal contexts.
 - Customer users linked to more than one customer account through portal links.
 
-The selected access profile controls the active role and optional customer scope in the JWT.
+The selected access profile controls the active role and optional customer scope in the signed session.
 
 ## Admin
 

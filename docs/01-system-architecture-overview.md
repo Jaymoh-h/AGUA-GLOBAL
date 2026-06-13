@@ -7,7 +7,7 @@ AGUA Global is a full-stack water utility operations system for customer managem
 - Frontend: React with Vite
 - Backend: Node.js with Express
 - Database: PostgreSQL
-- Authentication: JWT bearer tokens
+- Authentication: HttpOnly JWT session cookies for browser sessions, with bearer-token support reserved for controlled service calls
 - Charts: Recharts
 - Deployment target: Vercel for client and API, with a managed PostgreSQL database
 
@@ -19,7 +19,7 @@ flowchart LR
   PublicUser["Public Visitor / Uptime Check"] --> PublicPages["Public Status And Docs Pages"]
   Client --> API["Express API"]
   PublicPages --> API
-  API --> Auth["JWT Auth And Role Guards"]
+  API --> Auth["Cookie JWT Auth, CSRF Checks, And Role Guards"]
   API --> DB["PostgreSQL"]
   API --> Delivery["Email / SMS / WhatsApp Providers"]
   API --> Reports["Reports And Exports"]

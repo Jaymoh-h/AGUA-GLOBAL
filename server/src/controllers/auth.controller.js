@@ -4,7 +4,16 @@ const jwt = require("jsonwebtoken");
 const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
-const { clientOrigin, jwtSecret, jwtExpiresIn, passwordResetMinutes } = require("../config/env");
+const {
+  clientOrigin,
+  jwtSecret,
+  jwtExpiresIn,
+  passwordResetMinutes,
+  sessionCookieName,
+  sessionCookieSecure,
+  sessionCookieSameSite,
+  sessionCookieDomain
+} = require("../config/env");
 const { recordAuditEvent } = require("../services/audit.service");
 const { recordSystemEvent } = require("../services/systemEvent.service");
 const { sendPasswordResetEmail } = require("../services/email.service");
@@ -14,6 +23,7 @@ const {
   publicAccessProfile
 } = require("../services/accessProfile.service");
 const { validatePassword } = require("../utils/passwordPolicy");
+const { serializeCookie } = require("../utils/cookies");
 
 const publicUser = (user, profile = null) => {
   const accessProfile = profile || legacyProfileFromUser(user);
@@ -32,20 +42,23 @@ const publicUser = (user, profile = null) => {
   };
 };
 
-const signUserToken = (user, profile = null) => {
+const signUserSession = (user, profile = null) => {
   const accessProfile = profile || legacyProfileFromUser(user);
-  return jwt.sign(
+  const csrfToken = crypto.randomBytes(24).toString("hex");
+  const token = jwt.sign(
     {
       id: user.id,
       role: accessProfile.role,
       access_profile_id: accessProfile.id,
-      customer_id: accessProfile.customer_id
+      customer_id: accessProfile.customer_id,
+      csrf_token: csrfToken
     },
     jwtSecret,
     {
       expiresIn: jwtExpiresIn
     }
   );
+  return { token, csrfToken };
 };
 
 const signContextSelectionToken = (user) =>
@@ -56,6 +69,40 @@ const hashResetToken = (token) => crypto.createHash("sha256").update(token).dige
 const buildResetUrl = (token) => {
   const baseUrl = clientOrigin.replace(/\/$/, "");
   return `${baseUrl}/?reset_token=${encodeURIComponent(token)}`;
+};
+
+const sessionCookieOptions = {
+  httpOnly: true,
+  secure: sessionCookieSecure,
+  sameSite: sessionCookieSameSite,
+  domain: sessionCookieDomain || undefined
+};
+
+const setSessionCookie = (res, token) => {
+  res.setHeader(
+    "Set-Cookie",
+    serializeCookie(sessionCookieName, token, sessionCookieOptions)
+  );
+};
+
+const clearSessionCookie = (res) => {
+  res.setHeader(
+    "Set-Cookie",
+    serializeCookie(sessionCookieName, "", {
+      ...sessionCookieOptions,
+      maxAge: 0,
+      expires: new Date(0)
+    })
+  );
+};
+
+const sendSessionResponse = (res, user, profile = null) => {
+  const session = signUserSession(user, profile);
+  setSessionCookie(res, session.token);
+  return res.json({
+    user: publicUser(user, profile),
+    csrf_token: session.csrfToken
+  });
 };
 
 const login = asyncHandler(async (req, res) => {
@@ -99,12 +146,7 @@ const login = asyncHandler(async (req, res) => {
     [user.id]
   );
 
-  const token = signUserToken(loginResult.rows[0], activeProfiles[0]);
-
-  return res.json({
-    token,
-    user: publicUser(loginResult.rows[0], activeProfiles[0])
-  });
+  return sendSessionResponse(res, loginResult.rows[0], activeProfiles[0]);
 });
 
 const selectContext = asyncHandler(async (req, res) => {
@@ -132,10 +174,7 @@ const selectContext = asyncHandler(async (req, res) => {
   if (!profile) throw new ApiError(403, "Selected access context is not available.");
 
   const loginResult = await pool.query("UPDATE users SET last_login_at = NOW() WHERE id = $1 RETURNING *", [user.id]);
-  res.json({
-    token: signUserToken(loginResult.rows[0], profile),
-    user: publicUser(loginResult.rows[0], profile)
-  });
+  sendSessionResponse(res, loginResult.rows[0], profile);
 });
 
 const requestPasswordReset = asyncHandler(async (req, res) => {
@@ -246,10 +285,7 @@ const resetPassword = asyncHandler(async (req, res) => {
 
     await client.query("COMMIT");
     const user = userResult.rows[0];
-    res.json({
-      token: signUserToken(user),
-      user: publicUser(user)
-    });
+    sendSessionResponse(res, user);
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -259,7 +295,25 @@ const resetPassword = asyncHandler(async (req, res) => {
 });
 
 const me = asyncHandler(async (req, res) => {
-  res.json({ user: req.user });
+  const currentProfile = req.user.access_profile_id
+    ? {
+        id: req.user.access_profile_id,
+        role: req.user.role,
+        customer_id: req.user.customer_id,
+        label: req.user.access_profile_label,
+        is_active: true,
+        is_default: false
+      }
+    : null;
+  res.json({
+    user: publicUser(req.user, currentProfile),
+    csrf_token: req.auth?.csrfToken || null
+  });
+});
+
+const logout = asyncHandler(async (_req, res) => {
+  clearSessionCookie(res);
+  res.status(204).send();
 });
 
 const changePassword = asyncHandler(async (req, res) => {
@@ -311,6 +365,7 @@ module.exports = {
   login,
   selectContext,
   me,
+  logout,
   requestPasswordReset,
   resetPassword,
   changePassword

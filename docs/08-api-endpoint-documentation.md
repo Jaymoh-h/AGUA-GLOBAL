@@ -12,7 +12,7 @@ Production base URL:
 https://<api-project>.vercel.app/api
 ```
 
-Most endpoints require a JWT bearer token:
+Browser sessions use the `agua_session` HttpOnly cookie issued by login. Unsafe browser requests also send the `X-CSRF-Token` returned by login or `/auth/me`. Controlled service calls may still use a bearer token when one is issued outside the browser flow:
 
 ```text
 Authorization: Bearer <token>
@@ -29,7 +29,7 @@ Authorization: Bearer <token>
 
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/auth/login` | Public | Login and receive token |
+| `POST` | `/auth/login` | Public | Login and receive an HttpOnly session cookie plus CSRF token |
 | `POST` | `/auth/select-context` | Public with context token | Select an access context after login |
 | `POST` | `/auth/password-reset/request` | Public | Request password reset |
 | `POST` | `/auth/password-reset/confirm` | Public | Confirm password reset |

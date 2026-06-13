@@ -24,6 +24,13 @@ module.exports = {
   databaseSslRejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === "true",
   jwtSecret: process.env.JWT_SECRET,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "8h",
+  sessionCookieName: process.env.SESSION_COOKIE_NAME || "agua_session",
+  sessionCookieSecure:
+    process.env.SESSION_COOKIE_SECURE === undefined
+      ? Boolean(process.env.VERCEL)
+      : process.env.SESSION_COOKIE_SECURE === "true",
+  sessionCookieSameSite: process.env.SESSION_COOKIE_SAME_SITE || (process.env.VERCEL ? "none" : "lax"),
+  sessionCookieDomain: process.env.SESSION_COOKIE_DOMAIN || "",
   reminderCronSecret: process.env.REMINDER_CRON_SECRET || process.env.CRON_SECRET,
   monitoringCronSecret: process.env.MONITORING_CRON_SECRET || process.env.CRON_SECRET,
   monitoringAlertEmails: String(process.env.MONITORING_ALERT_EMAILS || "")

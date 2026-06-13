@@ -6,7 +6,7 @@ import LandingPage from "./pages/LandingPage";
 import PasswordChangePage from "./pages/PasswordChangePage";
 import PublicDocsPage from "./pages/PublicDocsPage";
 import PublicStatusPage from "./pages/PublicStatusPage";
-import { api, setFutureDateOverrideHandler } from "./services/api";
+import { api, clearSessionState, setFutureDateOverrideHandler } from "./services/api";
 
 const AuditTrailPage = lazy(() => import("./pages/AuditTrailPage"));
 const BillsPage = lazy(() => import("./pages/BillsPage"));
@@ -29,20 +29,6 @@ const ReportsPage = lazy(() => import("./pages/ReportsPage"));
 const UsersPage = lazy(() => import("./pages/UsersPage"));
 const ZonesPage = lazy(() => import("./pages/ZonesPage"));
 
-const getSavedUser = () => {
-  const saved = localStorage.getItem("agua_user");
-  if (!saved) return null;
-
-  try {
-    const parsed = JSON.parse(saved);
-    return parsed?.role ? parsed : null;
-  } catch (_error) {
-    localStorage.removeItem("agua_user");
-    localStorage.removeItem("agua_token");
-    return null;
-  }
-};
-
 const IDLE_LOGOUT_MS = 30 * 60 * 1000;
 
 const publicSurface = () => {
@@ -54,13 +40,16 @@ const publicSurface = () => {
 };
 
 function App() {
-  const [user, setUser] = useState(getSavedUser);
-  const [currentPage, setCurrentPage] = useState(() => (getSavedUser()?.role === "customer" ? "portal" : "dashboard"));
+  const [user, setUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [currentPage, setCurrentPage] = useState("dashboard");
   const [navigationIntent, setNavigationIntent] = useState(null);
   const [appName, setAppName] = useState("Water Billing");
   const [businessSettings, setBusinessSettings] = useState({});
   const [sessionMessage, setSessionMessage] = useState("");
   const [futureDateOverride, setFutureDateOverride] = useState(null);
+  const surface = publicSurface();
+  const isPasswordReset = new URLSearchParams(window.location.search).has("reset_token");
 
   const allowedPages = useMemo(() => {
     if (!user) return [];
@@ -74,6 +63,35 @@ function App() {
       setCurrentPage(user.role === "customer" ? "portal" : "dashboard");
     }
   }, [allowedPages, currentPage, user]);
+
+  useEffect(() => {
+    localStorage.removeItem("agua_token");
+    localStorage.removeItem("agua_user");
+
+    if (surface || isPasswordReset) {
+      setAuthChecked(true);
+      return undefined;
+    }
+
+    let cancelled = false;
+    api
+      .me()
+      .then(({ user: nextUser }) => {
+        if (cancelled || !nextUser) return;
+        setUser(nextUser);
+        setCurrentPage(nextUser.role === "customer" ? "portal" : "dashboard");
+      })
+      .catch(() => {
+        clearSessionState();
+      })
+      .finally(() => {
+        if (!cancelled) setAuthChecked(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPasswordReset, surface]);
 
   useEffect(() => {
     api.businessSettings
@@ -149,9 +167,9 @@ function App() {
     };
   }, [user]);
 
-  const handleLogin = ({ token, user: nextUser }) => {
-    localStorage.setItem("agua_token", token);
-    localStorage.setItem("agua_user", JSON.stringify(nextUser));
+  const handleLogin = ({ user: nextUser }) => {
+    localStorage.removeItem("agua_token");
+    localStorage.removeItem("agua_user");
     setSessionMessage("");
     setUser(nextUser);
     if (nextUser.role === "customer") {
@@ -172,7 +190,9 @@ function App() {
 
   const clearNavigationIntent = () => setNavigationIntent(null);
 
-  const handleLogout = (message = "") => {
+  const handleLogout = async (message = "") => {
+    await api.logout().catch(() => {});
+    clearSessionState();
     localStorage.removeItem("agua_token");
     localStorage.removeItem("agua_user");
     setSessionMessage(typeof message === "string" ? message : "");
@@ -181,17 +201,26 @@ function App() {
   };
 
   const handlePasswordChanged = (nextUser) => {
-    localStorage.setItem("agua_user", JSON.stringify(nextUser));
     setUser(nextUser);
     setCurrentPage(nextUser.role === "customer" ? "portal" : "dashboard");
   };
 
-  const surface = publicSurface();
   if (surface === "status") {
     return <PublicStatusPage appName={appName} />;
   }
   if (surface === "docs") {
     return <PublicDocsPage appName={appName} />;
+  }
+
+  if (!authChecked) {
+    return (
+      <main className="login-page">
+        <div className="empty-state">
+          <strong>Checking session</strong>
+          <span>Please wait.</span>
+        </div>
+      </main>
+    );
   }
 
   if (!user) {

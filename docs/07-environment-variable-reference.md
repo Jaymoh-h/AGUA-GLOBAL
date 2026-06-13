@@ -22,6 +22,10 @@ Defined in `server/.env`.
 | `DATABASE_SSL_REJECT_UNAUTHORIZED` | No | `false` | Controls certificate validation for SSL connections |
 | `JWT_SECRET` | Yes | `<long-random-secret>` | Token signing secret |
 | `JWT_EXPIRES_IN` | No | `8h` | JWT lifetime |
+| `SESSION_COOKIE_NAME` | No | `agua_session` | HttpOnly browser session cookie name |
+| `SESSION_COOKIE_SECURE` | Production | `true` | Sends browser session cookies only over HTTPS |
+| `SESSION_COOKIE_SAME_SITE` | Production | `none` | Browser session SameSite policy; use `none` for separate Vercel client/API domains |
+| `SESSION_COOKIE_DOMAIN` | Optional | `.example.com` | Optional shared cookie domain for same parent-domain deployments |
 | `CRON_SECRET` | Required for Vercel Cron schedules | `<long-random-secret>` | Secret Vercel sends in the cron `Authorization` header |
 | `REMINDER_CRON_SECRET` | Optional | `<long-random-secret>` | App-specific alias for non-Vercel schedulers |
 | `MONITORING_CRON_SECRET` | Optional | `<long-random-secret>` | App-specific alias for monitoring alert cron; falls back to `CRON_SECRET` |

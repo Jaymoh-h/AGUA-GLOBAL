@@ -1,19 +1,38 @@
 const jwt = require("jsonwebtoken");
 const pool = require("../db/pool");
-const { jwtSecret } = require("../config/env");
+const { jwtSecret, sessionCookieName } = require("../config/env");
 const ApiError = require("../utils/apiError");
 const { getAccessProfile } = require("../services/accessProfile.service");
+const { parseCookies } = require("../utils/cookies");
+
+const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+const assertCsrfToken = (req, payload) => {
+  if (!unsafeMethods.has(req.method)) return;
+  const supplied = req.get("x-csrf-token") || "";
+  const expected = payload.csrf_token || "";
+  if (!supplied || !expected || supplied !== expected) {
+    throw new ApiError(403, "Session verification failed. Refresh the page and try again.");
+  }
+};
 
 const authenticate = async (req, _res, next) => {
   try {
     const header = req.headers.authorization || "";
-    const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+    const bearerToken = header.startsWith("Bearer ") ? header.slice(7) : null;
+    const cookies = parseCookies(req.headers.cookie || "");
+    const cookieToken = cookies[sessionCookieName];
+    const token = bearerToken || cookieToken;
+    const tokenSource = bearerToken ? "bearer" : cookieToken ? "cookie" : "";
 
     if (!token) {
       throw new ApiError(401, "Authentication required.");
     }
 
     const payload = jwt.verify(token, jwtSecret);
+    if (tokenSource === "cookie") {
+      assertCsrfToken(req, payload);
+    }
     const { rows } = await pool.query(
       `SELECT id, customer_id, name, email, phone, role, is_active,
         must_change_password, password_changed_at, last_login_at
@@ -27,6 +46,10 @@ const authenticate = async (req, _res, next) => {
     }
 
     req.user = rows[0];
+    req.auth = {
+      tokenSource,
+      csrfToken: payload.csrf_token || null
+    };
     if (payload.access_profile_id) {
       const profile = await getAccessProfile(pool, req.user.id, payload.access_profile_id);
       if (!profile || !profile.is_active) {

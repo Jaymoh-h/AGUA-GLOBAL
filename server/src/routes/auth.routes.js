@@ -3,6 +3,7 @@ const {
   login,
   selectContext,
   me,
+  logout,
   requestPasswordReset,
   resetPassword,
   changePassword
@@ -17,5 +18,6 @@ router.post("/password-reset/request", requestPasswordReset);
 router.post("/password-reset/confirm", resetPassword);
 router.get("/me", authenticate, me);
 router.post("/change-password", authenticate, changePassword);
+router.post("/logout", authenticate, logout);
 
 module.exports = router;

@@ -2,8 +2,20 @@ const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 const ASSET_BASE = API_BASE.replace(/\/api\/?$/, "");
 export const apiBaseUrl = API_BASE;
 
-const getToken = () => localStorage.getItem("agua_token");
+let csrfToken = "";
 let futureDateOverrideHandler = null;
+
+export const clearSessionState = () => {
+  csrfToken = "";
+};
+
+const isUnsafeMethod = (method = "GET") => !["GET", "HEAD", "OPTIONS"].includes(String(method).toUpperCase());
+
+const rememberCsrfToken = (data) => {
+  if (data?.csrf_token) {
+    csrfToken = data.csrf_token;
+  }
+};
 
 export const setFutureDateOverrideHandler = (handler) => {
   futureDateOverrideHandler = typeof handler === "function" ? handler : null;
@@ -31,13 +43,13 @@ const request = async (path, options = {}) => {
     ...(options.headers || {})
   };
 
-  const token = getToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
+  if (csrfToken && isUnsafeMethod(options.method)) {
+    headers["X-CSRF-Token"] = csrfToken;
   }
 
   const response = await fetch(`${API_BASE}${path}`, {
     ...fetchOptions,
+    credentials: "include",
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined
   });
@@ -48,6 +60,7 @@ const request = async (path, options = {}) => {
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401) clearSessionState();
     const message = data.message || "Request failed.";
     if (shouldPromptForFutureDateOverride(message, options)) {
       const reason = futureDateOverrideHandler
@@ -67,15 +80,14 @@ const request = async (path, options = {}) => {
     throw new Error(message);
   }
 
+  rememberCsrfToken(data);
   return data;
 };
 
 const requestBlob = async (path) => {
-  const headers = {};
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetch(`${API_BASE}${path}`, { headers });
+  const response = await fetch(`${API_BASE}${path}`, { credentials: "include" });
   if (!response.ok) {
+    if (response.status === 401) clearSessionState();
     const data = await response.json().catch(() => ({}));
     throw new Error(data.message || "Download failed.");
   }
@@ -109,6 +121,7 @@ export const api = {
   resetPassword: (token, newPassword) =>
     request("/auth/password-reset/confirm", { method: "POST", body: { token, new_password: newPassword } }),
   me: () => request("/auth/me"),
+  logout: () => request("/auth/logout", { method: "POST" }).finally(clearSessionState),
   changePassword: (currentPassword, newPassword) =>
     request("/auth/change-password", {
       method: "POST",

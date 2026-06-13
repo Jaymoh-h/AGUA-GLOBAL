@@ -18,7 +18,7 @@ The project documentation suite lives in [`docs/`](docs/README.md). It includes 
 
 ## What Is Included
 
-- JWT login/logout flow
+- HttpOnly cookie login/logout flow with CSRF-protected write requests
 - Roles: `admin`, `meter_reader`, `accountant`, `customer`, `business_viewer`
 - User access contexts so one login can operate through an assigned role/profile
 - Customer CRUD with account numbers and customer rates
@@ -448,6 +448,8 @@ DATABASE_URL=postgres://...
 DATABASE_SSL=true
 JWT_SECRET=<long-random-secret>
 JWT_EXPIRES_IN=8h
+SESSION_COOKIE_SECURE=true
+SESSION_COOKIE_SAME_SITE=none
 CRON_SECRET=<long-random-secret-for-vercel-cron>
 AUTH_RATE_LIMIT_STORE=database
 CLIENT_ORIGIN=https://<client-project>.vercel.app
