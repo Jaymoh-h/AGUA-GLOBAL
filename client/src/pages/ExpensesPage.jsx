@@ -21,7 +21,7 @@ const expenseImportHeaders = [
   "notes"
 ];
 
-function ExpensesPage() {
+function ExpensesPage({ user }) {
   const [expenses, setExpenses] = useState([]);
   const [form, setForm] = useState({
     expense_date: new Date().toISOString().slice(0, 10),
@@ -43,6 +43,7 @@ function ExpensesPage() {
   const [dateToFilter, setDateToFilter] = useState("");
   const [activeDocumentExpenseId, setActiveDocumentExpenseId] = useState(null);
   const [, setMessage] = useToastMessage();
+  const canManageExpenses = ["admin", "accountant"].includes(user.role);
 
   const importReady = useMemo(
     () => importPreview?.rows?.length > 0 && importPreview.summary.invalid === 0,
@@ -174,7 +175,8 @@ function ExpensesPage() {
         </div>
       </header>
 
-      <section className="workspace-grid">
+      <section className={canManageExpenses ? "workspace-grid" : "page-stack"}>
+        {canManageExpenses ? (
         <div className="page-stack">
           <form className="panel form-grid" onSubmit={submit}>
             <div className="panel-heading">
@@ -284,6 +286,7 @@ function ExpensesPage() {
             </button>
           </div>
         </div>
+        ) : null}
 
         <div className="page-stack wide-panel">
           {importPreview ? (
@@ -397,6 +400,7 @@ function ExpensesPage() {
                           <td>{expense.reference || expense.receipt_number || "-"}</td>
                           <td>{expense.recorded_by_name || "-"}</td>
                           <td>
+                            {canManageExpenses ? (
                             <button
                               className="icon-button"
                               type="button"
@@ -405,9 +409,12 @@ function ExpensesPage() {
                             >
                               <FileText size={16} />
                             </button>
+                            ) : (
+                              "-"
+                            )}
                           </td>
                         </tr>
-                        {activeDocumentExpenseId === expense.id ? (
+                        {canManageExpenses && activeDocumentExpenseId === expense.id ? (
                           <tr key={`${expense.id}-documents`}>
                             <td colSpan="9">
                               <SupportingDocumentsPanel entityType="expense" entityId={expense.id} />

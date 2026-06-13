@@ -1,5 +1,6 @@
 import { Edit2, FileUp, Gauge, PlugZap, Printer, RotateCcw, Save, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import CollapsibleSection from "../components/CollapsibleSection";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
 import TableControls, { useTableControls } from "../components/TableControls";
@@ -17,6 +18,7 @@ const meterTypeLabels = {
   customer_source: "Customer source",
   shared_source: "Shared source"
 };
+
 const electricityCostSourceLabel = (week) => {
   if (!week) return "";
   if (week.electricity_cost_source === "period_topups") return "This period's top-ups";
@@ -88,6 +90,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
     from: "",
     to: new Date().toISOString().slice(0, 10)
   });
+  const [selectedReportWeekId, setSelectedReportWeekId] = useState("");
   const [printGeneratedAt, setPrintGeneratedAt] = useState("");
   const [printMode, setPrintMode] = useState("detail");
 
@@ -213,8 +216,19 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
     searchFields: ["reading_date", "meter_count", "total_consumption", "total_revenue"]
   });
 
+  useEffect(() => {
+    if (!selectedReportWeekId) return;
+    const exists = (report.weeks || []).some((week) => String(week.id) === String(selectedReportWeekId));
+    if (!exists) setSelectedReportWeekId("");
+  }, [report.weeks, selectedReportWeekId]);
+
+  const reportWeeks = report.weeks || [];
+  const selectedReportWeek = reportWeeks.find((week) => String(week.id) === String(selectedReportWeekId));
+  const visibleReportWeeks = selectedReportWeek ? [selectedReportWeek] : reportWeeks;
+  const reportWeekDates = reportWeeks.map((week) => dateOnly(week.reading_date)).filter(Boolean).sort();
+
   const reportTotals = useMemo(() => {
-    const rows = report.weeks || [];
+    const rows = visibleReportWeeks;
     const electricityCost = rows.reduce((sum, row) => sum + Number(row.electricity_cost_used || 0), 0);
     const revenue = rows.reduce((sum, row) => sum + Number(row.total_revenue || 0), 0);
     const consumption = rows.reduce((sum, row) => sum + Number(row.total_consumption || 0), 0);
@@ -230,10 +244,31 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
       costPerWaterUnit: consumption > 0 ? electricityCost / consumption : 0,
       electricityCostPerUnit: electricityUsed > 0 ? electricityCost / electricityUsed : 0
     };
-  }, [report]);
-  const reportPeriodLabel = `${report.from?.slice(0, 10) || reportFilters.from || "Beginning"} to ${
-    report.to?.slice(0, 10) || reportFilters.to || "Today"
-  }`;
+  }, [visibleReportWeeks]);
+  const selectedReportWeekDate = selectedReportWeek ? dateOnly(selectedReportWeek.reading_date) : "";
+  const reportPeriodLabel = selectedReportWeekDate
+    ? `${selectedReportWeekDate} to ${selectedReportWeekDate}`
+    : `${report.from?.slice(0, 10) || reportFilters.from || "Beginning"} to ${
+        report.to?.slice(0, 10) || reportFilters.to || "Today"
+      }`;
+
+  const selectReportWeek = (week) => {
+    const weekDate = dateOnly(week.reading_date);
+    setSelectedReportWeekId(String(week.id));
+    if (weekDate) {
+      setReportFilters({ from: weekDate, to: weekDate });
+    }
+  };
+
+  const showAllReportWeeks = () => {
+    setSelectedReportWeekId("");
+    if (reportWeekDates.length) {
+      setReportFilters({
+        from: reportWeekDates[0],
+        to: reportWeekDates[reportWeekDates.length - 1]
+      });
+    }
+  };
 
   const submitMeter = async (event) => {
     event.preventDefault();
@@ -488,11 +523,14 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
         {!hasProductionFocus ? (
         <div className="page-stack production-setup-stack">
           {canConfigure ? (
-            <form className="panel form-grid production-meter-form" onSubmit={submitMeter}>
-              <div className="panel-heading">
-                <h3>Production Meter</h3>
-                <Gauge size={18} />
-              </div>
+            <CollapsibleSection
+              as="form"
+              className="form-grid production-meter-form"
+              icon={<Gauge size={18} />}
+              onSubmit={submitMeter}
+              summary={`${meters.filter((meter) => meter.status === "active").length.toLocaleString()} active meter(s)`}
+              title="Production Meter"
+            >
               <label>
                 Type
                 <select value={meterForm.meter_type} onChange={(event) => setMeterField("meter_type", event.target.value)}>
@@ -559,15 +597,19 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 <Save size={17} />
                 Register meter
               </button>
-            </form>
+            </CollapsibleSection>
           ) : null}
 
           {canConfigure ? (
-            <form className="panel form-grid production-meter-form" onSubmit={submitReplacement}>
-              <div className="panel-heading">
-                <h3>Replace Source Meter</h3>
-                <RotateCcw size={18} />
-              </div>
+            <CollapsibleSection
+              as="form"
+              className="form-grid production-meter-form"
+              defaultOpen={Boolean(replacementForm.production_meter_id)}
+              icon={<RotateCcw size={18} />}
+              onSubmit={submitReplacement}
+              summary={replacementForm.production_meter_id ? "Replacement in progress" : "Select active source meter"}
+              title="Replace Source Meter"
+            >
               <label>
                 Existing source meter
                 <select
@@ -632,15 +674,18 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 <RotateCcw size={17} />
                 Record replacement
               </button>
-            </form>
+            </CollapsibleSection>
           ) : null}
 
           {canConfigure ? (
-            <form className="panel form-grid production-topup-form" onSubmit={submitTopup}>
-              <div className="panel-heading">
-                <h3>Electricity Top-Up</h3>
-                <PlugZap size={18} />
-              </div>
+            <CollapsibleSection
+              as="form"
+              className="form-grid production-topup-form"
+              icon={<PlugZap size={18} />}
+              onSubmit={submitTopup}
+              summary={`${topups.length.toLocaleString()} top-up(s)`}
+              title="Electricity Top-Up"
+            >
               <label>
                 Date
                 <input value={topupForm.topup_date} onChange={(event) => setTopupField("topup_date", event.target.value)} type="date" required />
@@ -665,25 +710,31 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 <Save size={17} />
                 Record top-up
               </button>
-            </form>
+            </CollapsibleSection>
           ) : null}
         </div>
         ) : null}
 
         <div className="page-stack wide-panel production-primary-stack">
           {canRecordProduction ? (
-          <form className="panel production-weekly-form" onSubmit={submitWeekly}>
-            <div className="panel-heading">
-              <h3>{editingWeeklyId ? "Correct Weekly Reading" : "Weekly Monday Readings"}</h3>
-              <div className="row-actions">
+          <CollapsibleSection
+            actions={
+              <>
                 {editingWeeklyId ? (
                   <button className="icon-button" type="button" onClick={cancelWeeklyEdit} title="Cancel correction">
                     <X size={15} />
                   </button>
                 ) : null}
                 <FileUp size={18} />
-              </div>
-            </div>
+              </>
+            }
+            as="form"
+            className="production-weekly-form"
+            defaultOpen
+            onSubmit={submitWeekly}
+            summary={`${readingRows.length.toLocaleString()} meter row(s) | ${weeklyForm.reading_date}`}
+            title={editingWeeklyId ? "Correct Weekly Reading" : "Weekly Monday Readings"}
+          >
             <div className="form-grid">
               <label>
                 Reading date
@@ -786,33 +837,51 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
               <Save size={17} />
               {editingWeeklyId ? "Save correction" : "Save weekly readings"}
             </button>
-          </form>
+          </CollapsibleSection>
           ) : null}
 
           {!hasProductionFocus ? (
-          <div className="panel production-report-panel">
-            <div className="panel-heading">
-              <h3>Production Report</h3>
-              <div className="row-actions">
+          <CollapsibleSection
+            actions={
+              <>
                 <button type="button" onClick={() => printProductionReport("detail")} disabled={!report.weeks?.length}>
                   <Printer size={16} />
                   Print
                 </button>
                 <PlugZap size={18} />
-              </div>
-            </div>
+              </>
+            }
+            className="production-report-panel"
+            defaultOpen
+            summary={`${reportTotals.weekCount.toLocaleString()} week(s) | ${reportPeriodLabel}`}
+            title="Production Report"
+          >
             <div className="table-toolbar">
               <label>
                 From
-                <input value={reportFilters.from} onChange={(event) => setReportFilters((current) => ({ ...current, from: event.target.value }))} type="date" />
+                <input
+                  value={reportFilters.from}
+                  onChange={(event) => {
+                    setSelectedReportWeekId("");
+                    setReportFilters((current) => ({ ...current, from: event.target.value }));
+                  }}
+                  type="date"
+                />
               </label>
               <label>
                 To
-                <input value={reportFilters.to} onChange={(event) => setReportFilters((current) => ({ ...current, to: event.target.value }))} type="date" />
+                <input
+                  value={reportFilters.to}
+                  onChange={(event) => {
+                    setSelectedReportWeekId("");
+                    setReportFilters((current) => ({ ...current, to: event.target.value }));
+                  }}
+                  type="date"
+                />
               </label>
               <button type="button" onClick={refreshReport}>Refresh</button>
             </div>
-            {report.weeks?.length ? (
+            {visibleReportWeeks.length ? (
               <div className="reading-context">
                 <div>
                   <span>Total consumption</span>
@@ -841,7 +910,30 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </div>
               </div>
             ) : null}
-            <div className="table-wrap">
+            {report.weeks?.length ? (
+              <div className="production-week-scroller screen-only" aria-label="Production report weeks">
+                <button
+                  className={!selectedReportWeekId ? "active" : ""}
+                  type="button"
+                  onClick={showAllReportWeeks}
+                >
+                  <strong>All weeks</strong>
+                  <small>{report.weeks.length} week(s)</small>
+                </button>
+                {report.weeks.map((week) => (
+                  <button
+                    className={String(selectedReportWeekId) === String(week.id) ? "active" : ""}
+                    type="button"
+                    key={week.id}
+                    onClick={() => selectReportWeek(week)}
+                  >
+                    <strong>{week.reading_date?.slice(0, 10)}</strong>
+                    <small>{week.rows.length} meter row(s)</small>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <div className="table-wrap production-report-table-wrap">
               <table>
                 <thead>
                   <tr>
@@ -854,8 +946,8 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {report.weeks?.length ? (
-                    report.weeks.flatMap((week) =>
+                  {visibleReportWeeks.length ? (
+                    visibleReportWeeks.flatMap((week) =>
                       week.rows.map((row) => (
                         <tr key={`${week.id}-${row.id}`}>
                           <td>{week.reading_date?.slice(0, 10)}</td>
@@ -886,14 +978,15 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 Print weekly summary
               </button>
             </div>
-          </div>
+          </CollapsibleSection>
           ) : null}
 
           {!hasProductionFocus ? (
-          <div className="panel production-meter-list">
-            <div className="panel-heading">
-              <h3>Production Meters</h3>
-            </div>
+          <CollapsibleSection
+            className="production-meter-list"
+            summary={`${meterTable.filteredRows.length.toLocaleString()} meter(s)`}
+            title="Production Meters"
+          >
             <TableControls table={meterTable} label="production meters" placeholder="Search meters" />
             <div className="table-wrap">
               <table>
@@ -937,14 +1030,15 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleSection>
           ) : null}
 
           {!hasProductionFocus ? (
-          <div className="panel production-topup-list">
-            <div className="panel-heading">
-              <h3>Electricity Top-Ups</h3>
-            </div>
+          <CollapsibleSection
+            className="production-topup-list"
+            summary={`${topupTable.filteredRows.length.toLocaleString()} top-up(s)`}
+            title="Electricity Top-Ups"
+          >
             <TableControls table={topupTable} label="top-ups" placeholder="Search top-ups" />
             <div className="table-wrap">
               <table>
@@ -979,14 +1073,15 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleSection>
           ) : null}
 
           {!hasProductionFocus ? (
-          <div className="panel production-weekly-history">
-            <div className="panel-heading">
-              <h3>Weekly History</h3>
-            </div>
+          <CollapsibleSection
+            className="production-weekly-history"
+            summary={`${weekTable.filteredRows.length.toLocaleString()} week(s)`}
+            title="Weekly History"
+          >
             <TableControls table={weekTable} label="weekly readings" placeholder="Search weeks" />
             <div className="table-wrap">
               <table>
@@ -1036,7 +1131,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleSection>
           ) : null}
         </div>
       </section>
@@ -1105,8 +1200,8 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tr>
               </thead>
               <tbody>
-                {report.weeks?.length ? (
-                  report.weeks.map((week) => (
+                {visibleReportWeeks.length ? (
+                  visibleReportWeeks.map((week) => (
                     <tr className="production-week-summary" key={`print-week-${week.id}`}>
                       <td>{dateOnly(week.reading_date)}</td>
                       <td>{number(week.electricity_used)} kWh</td>
@@ -1128,8 +1223,8 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
           </div>
         ) : (
           <div className="production-print-week-list">
-            {report.weeks?.length ? (
-              report.weeks.map((week) => (
+            {visibleReportWeeks.length ? (
+              visibleReportWeeks.map((week) => (
                 <div className="production-print-week" key={`full-print-week-${week.id}`}>
                   <div className="table-wrap">
                     <table className="production-week-summary-table">

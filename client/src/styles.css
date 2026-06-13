@@ -905,6 +905,45 @@ td button,
   overflow: auto;
 }
 
+.production-week-scroller {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0;
+  padding: 0 0 4px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.production-week-scroller button {
+  flex: 0 0 auto;
+  min-width: 142px;
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid #dbe3ea;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #172033;
+  text-align: left;
+}
+
+.production-week-scroller button:hover {
+  border-color: #9dd8d1;
+  background: #eef7f5;
+}
+
+.production-week-scroller button.active {
+  border-color: #0f766e;
+  background: #e5f4f1;
+  color: #115e59;
+}
+
+.production-report-table-wrap {
+  max-height: min(560px, 65vh);
+  overflow: auto;
+  scroll-behavior: smooth;
+}
+
 .workspace-grid.production-workspace {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -1607,6 +1646,83 @@ td button,
 .panel {
   padding: 16px;
   min-width: 0;
+}
+
+.collapsible-panel {
+  display: grid;
+  gap: 0;
+}
+
+.collapsible-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.collapsible-trigger {
+  min-width: 0;
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: #172033;
+  background: #f8fafc;
+  text-align: left;
+}
+
+.collapsible-trigger:hover {
+  background: #eef7f5;
+}
+
+.collapsible-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 900;
+}
+
+.collapsible-title span,
+.collapsible-trigger small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collapsible-chevron {
+  transition: transform 0.16s ease;
+}
+
+.collapsible-chevron.open {
+  transform: rotate(180deg);
+}
+
+.collapsible-content {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  min-width: 0;
+}
+
+.collapsible-panel.form-grid {
+  gap: 0;
+}
+
+.collapsible-panel.form-grid .collapsible-content {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.collapsible-actions {
+  align-self: stretch;
 }
 
 .panel-heading {
@@ -2963,6 +3079,16 @@ td {
   .page-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .collapsible-heading,
+  .collapsible-trigger {
+    grid-template-columns: 1fr;
+  }
+
+  .collapsible-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .browser-clock {

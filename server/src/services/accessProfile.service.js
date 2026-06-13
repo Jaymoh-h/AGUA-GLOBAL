@@ -153,6 +153,25 @@ const updateAccessProfile = async (client, userId, profileId, payload) => {
   return normalizeProfile(rows[0]);
 };
 
+const detachAccessProfile = async (client, userId, profileId) => {
+  const before = await getAccessProfile(client, userId, profileId);
+  if (!before) throw new ApiError(404, "Access context not found.");
+  if (before.is_default) {
+    throw new ApiError(400, "Default access context cannot be detached.");
+  }
+  if (before.is_active) {
+    throw new ApiError(400, "Disable the access context before detaching it.");
+  }
+
+  await client.query(
+    `DELETE FROM user_access_profiles
+     WHERE id = $1
+       AND user_id = $2`,
+    [profileId, userId]
+  );
+  return before;
+};
+
 module.exports = {
   roles,
   roleLabel,
@@ -162,5 +181,6 @@ module.exports = {
   getAccessProfile,
   syncDefaultAccessProfile,
   createAccessProfile,
-  updateAccessProfile
+  updateAccessProfile,
+  detachAccessProfile
 };

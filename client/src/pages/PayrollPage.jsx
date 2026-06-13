@@ -14,6 +14,7 @@ import {
   X
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import CollapsibleSection from "../components/CollapsibleSection";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
 import StatCard from "../components/StatCard";
@@ -432,11 +433,15 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
       <section className="workspace-grid payroll-workspace-grid">
         <div className="page-stack">
           {!hasPayrollFocus ? (
-          <form className="panel form-grid payroll-create-run" onSubmit={createRun}>
-            <div className="panel-heading">
-              <h3>Create Pay Run</h3>
-              <CalendarDays size={18} />
-            </div>
+          <CollapsibleSection
+            as="form"
+            className="form-grid payroll-create-run"
+            defaultOpen={!runs.length}
+            icon={<CalendarDays size={18} />}
+            onSubmit={createRun}
+            summary={`${runs.length.toLocaleString()} recent run(s)`}
+            title="Create Pay Run"
+          >
             <label>
               Run name
               <input value={runForm.name} onChange={(event) => setRunField("name", event.target.value)} placeholder="May 2026 payroll" />
@@ -468,15 +473,19 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
               <Plus size={17} />
               Create draft run
             </button>
-          </form>
+          </CollapsibleSection>
           ) : null}
 
           {!hasPayrollFocus ? (
-          <form className="panel form-grid payroll-recurring-form" onSubmit={savePayee}>
-            <div className="panel-heading">
-              <h3>{editingPayeeId ? "Edit Recurring Payee" : "Add Recurring Payee"}</h3>
-              <Users size={18} />
-            </div>
+          <CollapsibleSection
+            as="form"
+            className="form-grid payroll-recurring-form"
+            defaultOpen={Boolean(editingPayeeId)}
+            icon={<Users size={18} />}
+            onSubmit={savePayee}
+            summary={`${payeeTable.filteredRows.length.toLocaleString()} recurring payee(s)`}
+            title={editingPayeeId ? "Edit Recurring Payee" : "Add Recurring Payee"}
+          >
             <label>
               Type
               <select value={payeeForm.payee_type} onChange={(event) => setPayeeField("payee_type", event.target.value)}>
@@ -550,15 +559,19 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </button>
               ) : null}
             </div>
-          </form>
+          </CollapsibleSection>
           ) : null}
 
           {!hasPayrollFocus ? (
-          <form className="panel form-grid payroll-period-form" onSubmit={addPeriodPayee}>
-            <div className="panel-heading">
-              <h3>Add To This Run</h3>
-              <Plus size={18} />
-            </div>
+          <CollapsibleSection
+            as="form"
+            className="form-grid payroll-period-form"
+            defaultOpen={Boolean(selectedRun)}
+            icon={<Plus size={18} />}
+            onSubmit={addPeriodPayee}
+            summary={selectedRun ? selectedRun.name : "Select a run first"}
+            title="Add To This Run"
+          >
             <label>
               Type
               <select value={periodPayeeForm.payee_type} onChange={(event) => setPeriodPayeeField("payee_type", event.target.value)}>
@@ -634,14 +647,16 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
               <Plus size={17} />
               Add period payee
             </button>
-          </form>
+          </CollapsibleSection>
           ) : null}
 
-          <div className="panel payroll-run-panel">
-            <div className="panel-heading">
-              <h3>Recent Pay Runs</h3>
-              <Banknote size={18} />
-            </div>
+          <CollapsibleSection
+            className="payroll-run-panel"
+            defaultOpen
+            icon={<Banknote size={18} />}
+            summary={`${runs.length.toLocaleString()} run(s)`}
+            title="Recent Pay Runs"
+          >
             <div className="payroll-run-list">
               {runs.map((run) => (
                 <button
@@ -661,14 +676,13 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
               ))}
               {!runs.length ? <div className="empty-state"><strong>No pay runs</strong><span>Create a draft run to begin.</span></div> : null}
             </div>
-          </div>
+          </CollapsibleSection>
         </div>
 
         <div className="page-stack wide-panel">
-          <div className="panel payroll-review-panel">
-            <div className="panel-heading">
-              <h3>{selectedRun ? selectedRun.name : "Payroll Review"}</h3>
-              <div className="row-actions">
+          <CollapsibleSection
+            actions={
+              <>
                 <button type="button" onClick={exportLines} disabled={!selectedRun}>
                   <Download size={16} />
                   Export
@@ -691,8 +705,17 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
                   <Lock size={16} />
                   Lock
                 </button>
-              </div>
-            </div>
+              </>
+            }
+            className="payroll-review-panel"
+            defaultOpen
+            summary={
+              selectedRun
+                ? `${label(selectedRun.status)} | ${money(summary.payable)} payable`
+                : "Select a pay run"
+            }
+            title={selectedRun ? selectedRun.name : "Payroll Review"}
+          >
 
             {selectedRun ? (
               <div className="reading-context payroll-run-context">
@@ -774,14 +797,18 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleSection>
 
           {lineDraft ? (
-            <form className="panel form-grid payroll-line-editor" onSubmit={saveLine}>
-              <div className="panel-heading">
-                <h3>Edit {lineDraft.name}</h3>
-                <Save size={18} />
-              </div>
+            <CollapsibleSection
+              as="form"
+              className="form-grid payroll-line-editor"
+              defaultOpen
+              icon={<Save size={18} />}
+              onSubmit={saveLine}
+              summary={`${money(lineDraft.net_amount)} net`}
+              title={`Edit ${lineDraft.name}`}
+            >
               <label>
                 Units
                 <input
@@ -830,15 +857,16 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
                 <Save size={17} />
                 Save line
               </button>
-            </form>
+            </CollapsibleSection>
           ) : null}
 
           {!hasPayrollFocus ? (
-          <div className="panel payroll-recurring-register">
-            <div className="panel-heading">
-              <h3>Recurring Payees</h3>
-              <Users size={18} />
-            </div>
+          <CollapsibleSection
+            className="payroll-recurring-register"
+            icon={<Users size={18} />}
+            summary={`${payeeTable.filteredRows.length.toLocaleString()} payee(s)`}
+            title="Recurring Payees"
+          >
             <TableControls table={payeeTable} label="payees" placeholder="Search payees" />
             <div className="table-wrap">
               <table>
@@ -902,15 +930,16 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleSection>
           ) : null}
 
           {!hasPayrollFocus ? (
-          <div className="panel payroll-period-register">
-            <div className="panel-heading">
-              <h3>Period-Only Payees</h3>
-              <Users size={18} />
-            </div>
+          <CollapsibleSection
+            className="payroll-period-register"
+            icon={<Users size={18} />}
+            summary={`${periodPayeeTable.filteredRows.length.toLocaleString()} payee(s)`}
+            title="Period-Only Payees"
+          >
             <TableControls table={periodPayeeTable} label="payees" placeholder="Search casuals and contractors" />
             <div className="table-wrap">
               <table>
@@ -950,7 +979,7 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleSection>
           ) : null}
         </div>
       </section>

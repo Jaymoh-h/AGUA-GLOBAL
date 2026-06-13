@@ -91,6 +91,7 @@ describe("AGUA Global API smoke", { skip: !shouldRun }, () => {
 
     for (const path of [
       "/api/business-settings",
+      "/api/expenses",
       "/api/monitoring/summary",
       "/api/production/meters",
       "/api/production/weekly-readings",

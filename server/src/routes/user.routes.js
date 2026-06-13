@@ -4,7 +4,8 @@ const {
   createUser,
   updateUser,
   createUserAccessProfile,
-  updateUserAccessProfile
+  updateUserAccessProfile,
+  detachUserAccessProfile
 } = require("../controllers/user.controller");
 const { authenticate, authorize } = require("../middleware/auth");
 
@@ -16,5 +17,6 @@ router.post("/", createUser);
 router.put("/:id", updateUser);
 router.post("/:id/access-profiles", createUserAccessProfile);
 router.patch("/:id/access-profiles/:profileId", updateUserAccessProfile);
+router.delete("/:id/access-profiles/:profileId", detachUserAccessProfile);
 
 module.exports = router;

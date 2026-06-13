@@ -1,5 +1,6 @@
 import { Activity, Bell, Building2, Clock, Download, MailCheck, RefreshCw, Save, Send, Settings2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
+import CollapsibleSection from "../components/CollapsibleSection";
 import { EmptyTableRow } from "../components/EmptyState";
 import StatCard from "../components/StatCard";
 import { useToastMessage } from "../components/ToastProvider";
@@ -264,11 +265,15 @@ function BusinessSettingsPage({ user }) {
       </header>
 
       <section className="business-settings-grid">
-        <form className="panel form-grid" onSubmit={save}>
-          <div className="panel-heading">
-            <h3>Identity</h3>
-            <Building2 size={18} />
-          </div>
+        <CollapsibleSection
+          as="form"
+          className="form-grid"
+          defaultOpen
+          icon={<Building2 size={18} />}
+          onSubmit={save}
+          summary={`${settings.business_name || "Business profile"} | ${settings.phone || settings.email || "contacts pending"}`}
+          title="Identity"
+        >
           <label>
             Business name
             <input
@@ -356,21 +361,13 @@ function BusinessSettingsPage({ user }) {
               {uploadingLogo ? "Uploading logo" : "Save business settings"}
             </button>
           ) : null}
-        </form>
+        </CollapsibleSection>
 
         <div className="business-ops-grid wide-panel">
           {canViewMonitoring ? (
-            <div className="panel business-monitoring-panel">
-              <div className="panel-heading">
-                <div>
-                  <h3>Application Monitoring</h3>
-                  <p className="muted">
-                    {monitoring
-                      ? `Checked ${browserDateTime(monitoring.checked_at)} | API ${monitoring.api} | DB ${monitoring.database}`
-                      : "Monitoring summary is loading."}
-                  </p>
-                </div>
-                <div className="row-actions">
+            <CollapsibleSection
+              actions={
+                <>
                   <div className="browser-clock" title="Current browser/computer time">
                     <Clock size={14} />
                     <span>{browserDateTime(localNow)}</span>
@@ -385,8 +382,19 @@ function BusinessSettingsPage({ user }) {
                       Test alert
                     </button>
                   ) : null}
-                </div>
-              </div>
+                </>
+              }
+              className="business-monitoring-panel"
+              defaultOpen
+              icon={<Activity size={18} />}
+              summary={monitoring ? `API ${monitoring.api} | DB ${monitoring.database} | ${number(monitoringSummary.errors_24h)} errors 24h` : "Loading status"}
+              title="Application Monitoring"
+            >
+              <p className="muted">
+                {monitoring
+                  ? `Checked ${browserDateTime(monitoring.checked_at)}`
+                  : "Monitoring summary is loading."}
+              </p>
               <div className="stat-grid compact-stat-grid">
                 <StatCard label="Errors 24h" value={number(monitoringSummary.errors_24h)} detail={`${number(monitoringSummary.unresolved_errors)} unresolved`} />
                 <StatCard label="Login Failures" value={number(monitoringSummary.login_failures_24h)} detail="Last 24 hours" />
@@ -433,17 +441,13 @@ function BusinessSettingsPage({ user }) {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </CollapsibleSection>
           ) : null}
 
           {canSendReminders ? (
-            <div className="panel business-reminders-panel">
-              <div className="panel-heading">
-                <div>
-                  <h3>Operational Reminders</h3>
-                  <p className="muted">Email nudges for pending work, meter readings, billing, and payroll preparation.</p>
-                </div>
-                <div className="row-actions">
+            <CollapsibleSection
+              actions={
+                <>
                   <button type="button" onClick={loadOperationalReminders} disabled={reminderLoading}>
                     <RefreshCw size={17} />
                     {reminderLoading ? "Loading..." : "Refresh"}
@@ -452,8 +456,14 @@ function BusinessSettingsPage({ user }) {
                     <Send size={17} />
                     {reminderSending ? "Sending..." : "Send due"}
                   </button>
-                </div>
-              </div>
+                </>
+              }
+              className="business-reminders-panel"
+              icon={<Bell size={18} />}
+              summary={`${number(reminderPreview?.reminders?.reduce((sum, item) => sum + Number(item.count || 0), 0))} pending item(s)`}
+              title="Operational Reminders"
+            >
+              <p className="muted">Email nudges for pending work, meter readings, billing, and payroll preparation.</p>
               {reminderPreview?.reminders?.length ? (
                 <>
                   <div className="reading-context">
@@ -534,17 +544,13 @@ function BusinessSettingsPage({ user }) {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </CollapsibleSection>
           ) : null}
 
           {canEdit ? (
-            <div className="panel business-backup-panel">
-              <div className="panel-heading">
-                <div>
-                  <h3>Data Backup Pack</h3>
-                  <p className="muted">Server-generated operational export. Password hashes and reset tokens are excluded.</p>
-                </div>
-                <div className="row-actions">
+            <CollapsibleSection
+              actions={
+                <>
                   <button type="button" onClick={() => api.reports.backupStatus().then(setBackupStatus).catch((err) => setMessage(err.message))}>
                     <RefreshCw size={17} />
                     Status
@@ -553,8 +559,14 @@ function BusinessSettingsPage({ user }) {
                     <Download size={17} />
                     {backupLoading ? "Preparing..." : "Download"}
                   </button>
-                </div>
-              </div>
+                </>
+              }
+              className="business-backup-panel"
+              icon={<Download size={18} />}
+              summary={`${backupStatus?.status || "status pending"} | ${number(backupStatus?.dataset_count)} dataset(s) | drill ${backupStatus?.restore_drill_status || "missing"}`}
+              title="Data Backup Pack"
+            >
+              <p className="muted">Server-generated operational export. Password hashes and reset tokens are excluded.</p>
               {backupStatus ? (
                 <>
                   <div className="reading-context">
@@ -741,15 +753,16 @@ function BusinessSettingsPage({ user }) {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </CollapsibleSection>
           ) : null}
 
           {billingSettings ? (
-            <div className="panel business-billing-panel">
-              <div className="panel-heading">
-                <h3>Billing Settings Snapshot</h3>
-                <Settings2 size={18} />
-              </div>
+            <CollapsibleSection
+              className="business-billing-panel"
+              icon={<Settings2 size={18} />}
+              summary={`${billingSettings.deposit_required ? "Deposit required" : "Deposit optional"} | ${billingSettings.penalty_type} penalty`}
+              title="Billing Settings Snapshot"
+            >
               <div className="table-wrap">
                 <table>
                   <tbody>
@@ -789,13 +802,17 @@ function BusinessSettingsPage({ user }) {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </CollapsibleSection>
           ) : null}
 
-          <form className="panel form-grid business-payment-panel" onSubmit={save}>
-            <div className="panel-heading">
-              <h3>Payment Details</h3>
-            </div>
+          <CollapsibleSection
+            as="form"
+            className="form-grid business-payment-panel"
+            icon={<Settings2 size={18} />}
+            onSubmit={save}
+            summary={`${settings.paybill_number ? `Paybill ${settings.paybill_number}` : "Paybill pending"} | ${settings.print_page_size} ${settings.print_orientation}`}
+            title="Payment And Print Details"
+          >
             <label>
               KRA PIN / Tax number
               <input value={settings.tax_pin} onChange={(event) => setField("tax_pin", event.target.value)} disabled={!canEdit} />
@@ -905,7 +922,7 @@ function BusinessSettingsPage({ user }) {
                 Save print details
               </button>
             ) : null}
-          </form>
+          </CollapsibleSection>
         </div>
       </section>
     </section>

@@ -1,6 +1,7 @@
 import { Download, Edit3, Eye, FileUp, Gauge, Replace, Save, Send } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
+import CollapsibleSection from "../components/CollapsibleSection";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
 import TableControls, { useTableControls } from "../components/TableControls";
@@ -684,10 +685,19 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
         {showReadingEntryStack ? (
         <div className="page-stack">
           {showReadingForm ? (
-          <form className="panel form-grid" onSubmit={submit}>
-            <div className="panel-heading">
-              <h3>{editingId ? "Edit Reading" : "Submit Reading"}</h3>
-            </div>
+          <CollapsibleSection
+            as="form"
+            className="form-grid"
+            defaultOpen={showReadingForm}
+            icon={editingId ? <Save size={18} /> : <Send size={18} />}
+            onSubmit={submit}
+            summary={
+              editingId
+                ? `Editing #${editingId}`
+                : `${readingCustomerOptions.length.toLocaleString()} customer(s) awaiting reading`
+            }
+            title={editingId ? "Edit Reading" : "Submit Reading"}
+          >
             <label>
               Customer
               <select
@@ -810,15 +820,18 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
               </button>
             ) : null}
             {editingId ? <AuditPanel entityType="meter_reading" entityId={editingId} title="Reading Audit" /> : null}
-          </form>
+          </CollapsibleSection>
           ) : null}
 
           {showReadingSetupTools && ["admin", "accountant"].includes(user?.role) ? (
-          <form className="panel form-grid" onSubmit={submitMeter}>
-            <div className="panel-heading">
-              <h3>Register Meter</h3>
-              <Gauge size={18} />
-            </div>
+          <CollapsibleSection
+            as="form"
+            className="form-grid"
+            icon={<Gauge size={18} />}
+            onSubmit={submitMeter}
+            summary={`${customers.length.toLocaleString()} customer(s)`}
+            title="Register Meter"
+          >
             <label>
               Customer
               <select value={meterForm.customer_id} onChange={(event) => setMeterField("customer_id", event.target.value)} required>
@@ -863,15 +876,19 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
               <Save size={17} />
               Register meter
             </button>
-          </form>
+          </CollapsibleSection>
           ) : null}
 
           {showReadingSetupTools ? (
-          <form className="panel form-grid" onSubmit={submitReplacement}>
-            <div className="panel-heading">
-              <h3>Replace Meter</h3>
-              <Replace size={18} />
-            </div>
+          <CollapsibleSection
+            as="form"
+            className="form-grid"
+            defaultOpen={Boolean(replacementContext)}
+            icon={<Replace size={18} />}
+            onSubmit={submitReplacement}
+            summary={replacementContext?.activeMeter?.meter_number || "Select customer and meter"}
+            title="Replace Meter"
+          >
             <label>
               Customer
               <select
@@ -960,13 +977,12 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
               <Replace size={17} />
               Record replacement
             </button>
-          </form>
+          </CollapsibleSection>
           ) : null}
 
           {showReadingSetupTools ? (
-          <div className="panel form-grid">
-            <div className="panel-heading">
-              <h3>Import Readings CSV</h3>
+          <CollapsibleSection
+            actions={
               <button
                 type="button"
                 onClick={() => downloadCsvTemplate("readings-import-template.csv", readingImportHeaders)}
@@ -974,7 +990,13 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 <Download size={16} />
                 Template
               </button>
-            </div>
+            }
+            className="form-grid"
+            defaultOpen={Boolean(importPreview)}
+            icon={<FileUp size={18} />}
+            summary={importPreview ? `${importPreview.summary.valid} valid | ${importPreview.summary.invalid} invalid` : "Template and CSV upload"}
+            title="Import Readings CSV"
+          >
             <label>
               CSV file
               <input type="file" accept=".csv,text/csv" onChange={handleCsvFile} />
@@ -1027,18 +1049,19 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
               <FileUp size={17} />
               Import valid rows
             </button>
-          </div>
+          </CollapsibleSection>
           ) : null}
         </div>
         ) : null}
 
         <div className="page-stack wide-panel">
           {focusKey === "missing_readings" ? (
-            <div className="panel">
-              <div className="panel-heading">
-                <h3>{readingEligibility?.period?.name || "Period"} Reading Gaps</h3>
-                <Gauge size={18} />
-              </div>
+            <CollapsibleSection
+              defaultOpen
+              icon={<Gauge size={18} />}
+              summary={`${eligibleReadingCustomers.length.toLocaleString()} customer(s)`}
+              title={`${readingEligibility?.period?.name || "Period"} Reading Gaps`}
+            >
               <div className="table-wrap">
                 <table>
                   <thead>
@@ -1084,15 +1107,16 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </CollapsibleSection>
           ) : null}
 
           {showReadingRegisters && importPreview ? (
-            <div className="panel">
-              <div className="panel-heading">
-                <h3>CSV Preview</h3>
-                <FileUp size={18} />
-              </div>
+            <CollapsibleSection
+              defaultOpen
+              icon={<FileUp size={18} />}
+              summary={`${importPreview.rows.length.toLocaleString()} row(s)`}
+              title="CSV Preview"
+            >
               <div className="table-wrap">
                 <table>
                   <thead>
@@ -1132,21 +1156,20 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </CollapsibleSection>
           ) : null}
 
           {showSourceReview && ["admin", "accountant"].includes(user?.role) ? (
           <>
-          <div className="panel">
-            <div className="panel-heading">
-              <div>
-                <h3>Source Meter Reading Entry</h3>
-                <p className="muted">
-                  {sourceWorkspace?.period?.name || "Selected period"} source meters. Normal route readings stay separate from this source-side workflow.
-                </p>
-              </div>
-              <Gauge size={18} />
-            </div>
+          <CollapsibleSection
+            defaultOpen={focusKey === "pending_source_billing"}
+            icon={<Gauge size={18} />}
+            summary={`${sourceWorkspace?.period?.name || "Selected period"} | ${sourceRowsMissingReading.length.toLocaleString()} missing`}
+            title="Source Meter Reading Entry"
+          >
+            <p className="muted">
+              {sourceWorkspace?.period?.name || "Selected period"} source meters. Normal route readings stay separate from this source-side workflow.
+            </p>
             <form className="form-grid" onSubmit={submitSourceReading}>
               <label>
                 Source period date
@@ -1326,13 +1349,14 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleSection>
 
-          <div className="panel">
-            <div className="panel-heading">
-              <h3>Source Billing Review</h3>
-              <Gauge size={18} />
-            </div>
+          <CollapsibleSection
+            defaultOpen={focusKey === "pending_source_billing"}
+            icon={<Gauge size={18} />}
+            summary={`${sourceRequestTable.filteredRows.length.toLocaleString()} record(s)`}
+            title="Source Billing Review"
+          >
             <TableControls table={sourceRequestTable} label="source billing records" placeholder="Search source billing" />
             <div className="table-wrap">
               <table>
@@ -1422,22 +1446,23 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleSection>
           </>
           ) : null}
 
           {showReadingRegisters ? (
-          <div className="panel">
-            <div className="panel-heading">
-              <h3>Recent Readings</h3>
-              <div className="row-actions">
-                <Gauge size={18} />
-                <button type="button" onClick={exportReadings}>
+          <CollapsibleSection
+            actions={
+              <button type="button" onClick={exportReadings}>
                   <Download size={16} />
                   Export
                 </button>
-              </div>
-            </div>
+            }
+            defaultOpen
+            icon={<Gauge size={18} />}
+            summary={`${readingTable.filteredRows.length.toLocaleString()} reading(s)`}
+            title="Recent Readings"
+          >
             <div className="table-toolbar">
               <label>
                 Customer
@@ -1508,15 +1533,16 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleSection>
           ) : null}
 
           {showReadingRegisters ? (
-          <div className="panel">
-            <div className="panel-heading">
-              <h3>Meter Events</h3>
-              <Replace size={18} />
-            </div>
+          <CollapsibleSection
+            defaultOpen={Boolean(editingEventId)}
+            icon={<Replace size={18} />}
+            summary={`${meterEventTable.filteredRows.length.toLocaleString()} event(s)`}
+            title="Meter Events"
+          >
             {editingEventId ? (
               <form className="form-grid" onSubmit={submitMeterEventEdit}>
                 <label>
@@ -1593,7 +1619,7 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleSection>
           ) : null}
         </div>
       </section>

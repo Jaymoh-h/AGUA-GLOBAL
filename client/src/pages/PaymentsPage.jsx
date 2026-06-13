@@ -1,6 +1,7 @@
 import { CircleDollarSign, Download, Eye, FileUp, Mail, MessageSquare, Printer, Save, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
+import CollapsibleSection from "../components/CollapsibleSection";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
 import TableControls, { useTableControls } from "../components/TableControls";
@@ -1176,6 +1177,13 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
       "reapplied_receipt_number"
     ]
   });
+  const paymentHistoryTotal = paymentTable.filteredRows.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const suspenseHeldTotal = focusedSuspenseItems
+    .filter((item) => item.status === "held")
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const pendingAdjustmentTotal = focusedAdjustments
+    .filter((adjustment) => adjustment.status === "pending")
+    .reduce((sum, adjustment) => sum + Number(adjustment.amount || 0), 0);
   const exportPayments = () => {
     downloadCsvRows(
       namedExport("payment-register", "csv", [
@@ -1234,10 +1242,15 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
         {showEntryTools ? (
         <div className="page-stack payments-entry-grid">
           {showPaymentEntry ? (
-          <form className="panel form-grid" onSubmit={submit}>
-            <div className="panel-heading">
-              <h3>{editingId ? "Edit Payment" : "Record Payment"}</h3>
-            </div>
+          <CollapsibleSection
+            as="form"
+            className="form-grid"
+            defaultOpen={Boolean(editingId)}
+            icon={<CircleDollarSign size={18} />}
+            onSubmit={submit}
+            summary={selectedCustomer ? `${selectedCustomer.acc_number} | ${form.amount ? money(form.amount) : "amount pending"}` : `${payments.length.toLocaleString()} payment(s) recorded`}
+            title={editingId ? "Edit Payment" : "Record Payment"}
+          >
             <label>
               Customer
               <select value={form.customer_id} onChange={(event) => setField("customer_id", event.target.value)} required disabled={Boolean(editingId)}>
@@ -1304,17 +1317,19 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 Cancel edit
               </button>
             ) : null}
-          </form>
+          </CollapsibleSection>
           ) : null}
 
           {showAdjustmentEntry ? (
-          <form className="panel form-grid" onSubmit={submitAdjustment}>
-            <div className="panel-heading">
-              <div>
-                <h3>Manual Credit/Debit</h3>
-                <p className="muted">Accountants submit requests; admin approval posts the credit or debit.</p>
-              </div>
-            </div>
+          <CollapsibleSection
+            as="form"
+            className="form-grid"
+            defaultOpen={focusKey === "pending_adjustments"}
+            onSubmit={submitAdjustment}
+            summary={`${focusedAdjustments.filter((adjustment) => adjustment.status === "pending").length.toLocaleString()} pending | ${money(pendingAdjustmentTotal)}`}
+            title="Manual Credit/Debit"
+          >
+            <p className="muted">Accountants submit requests; admin approval posts the credit or debit.</p>
             <label>
               Customer
               <select
@@ -1370,22 +1385,25 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
             <button className="primary-button" type="submit">
               Submit for approval
             </button>
-          </form>
+          </CollapsibleSection>
           ) : null}
 
           {showBankTools ? (
           <>
-          <div className="panel form-grid bank-trainer-panel">
-            <div className="panel-heading">
-              <div>
-                <h3>Bank Statement Trainer</h3>
-                <p className="muted">Upload a PDF or CSV statement, match statement rows to customers, then send them to the normal payment importer.</p>
-              </div>
+          <CollapsibleSection
+            actions={
               <button type="button" onClick={saveBankTemplate} disabled={!bankHeaders.length}>
                 <Save size={16} />
                 Save mapping
               </button>
-            </div>
+            }
+            className="form-grid bank-trainer-panel"
+            defaultOpen={Boolean(bankHeaders.length || bankReviewRows.length)}
+            icon={<FileUp size={18} />}
+            summary={`${bankRows.length.toLocaleString()} statement row(s) | ${bankReviewRows.filter((row) => bankRowStatus(row) === "ready").length.toLocaleString()} ready`}
+            title="Bank Statement Trainer"
+          >
+            <p className="muted">Upload a PDF or CSV statement, match statement rows to customers, then send them to the normal payment importer.</p>
             <label>
               Bank statement file
               <input type="file" accept=".pdf,application/pdf,.csv,text/csv" onChange={handleBankCsvFile} />
@@ -1619,11 +1637,10 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </table>
               </div>
             ) : null}
-          </div>
+          </CollapsibleSection>
 
-          <div className="panel form-grid payment-import-panel">
-            <div className="panel-heading">
-              <h3>Import Payments CSV</h3>
+          <CollapsibleSection
+            actions={
               <button
                 type="button"
                 onClick={() => downloadCsvTemplate("payments-import-template.csv", paymentImportHeaders)}
@@ -1631,7 +1648,13 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 <Download size={16} />
                 Template
               </button>
-            </div>
+            }
+            className="form-grid payment-import-panel"
+            defaultOpen={Boolean(importPreview)}
+            icon={<FileUp size={18} />}
+            summary={importPreview ? `${importPreview.summary.valid} valid of ${importPreview.summary.total} row(s) | ${money(importPreview.summary.totalAmount)}` : "Paste CSV or upload a file"}
+            title="Import Payments CSV"
+          >
             <label>
               CSV file
               <input type="file" accept=".csv,text/csv" onChange={handleCsvFile} />
@@ -1675,7 +1698,7 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
               <FileUp size={17} />
               Import valid rows
             </button>
-          </div>
+          </CollapsibleSection>
           </>
           ) : null}
         </div>
@@ -1683,11 +1706,12 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
 
         <div className="page-stack wide-panel">
           {!hasPaymentFocus && importPreview ? (
-            <div className="panel">
-              <div className="panel-heading">
-                <h3>CSV Preview</h3>
-                <FileUp size={18} />
-              </div>
+            <CollapsibleSection
+              defaultOpen
+              icon={<FileUp size={18} />}
+              summary={`${importPreview.summary.valid} valid of ${importPreview.summary.total} row(s) | ${money(importPreview.summary.totalAmount)}`}
+              title="CSV Preview"
+            >
               <div className="table-wrap">
                 <table>
                   <thead>
@@ -1723,7 +1747,7 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </CollapsibleSection>
           ) : null}
 
           {receiptDetail ? (
@@ -1888,14 +1912,18 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
           ) : null}
 
           {showPaymentHistory ? (
-          <div className="panel">
-            <div className="panel-heading">
-              <h3>Payment History</h3>
+          <CollapsibleSection
+            actions={
               <button type="button" onClick={exportPayments}>
                 <Download size={16} />
                 Export
               </button>
-            </div>
+            }
+            defaultOpen={focusKey === "customer_credits"}
+            icon={<CircleDollarSign size={18} />}
+            summary={`${paymentTable.filteredRows.length.toLocaleString()} payment(s) | ${money(paymentHistoryTotal)}`}
+            title="Payment History"
+          >
             <div className="table-toolbar">
               <label>
                 Channel
@@ -1983,14 +2011,15 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleSection>
           ) : null}
 
           {showSuspenseRegister ? (
-          <div className="panel">
-            <div className="panel-heading">
-              <h3>Suspense Register</h3>
-            </div>
+          <CollapsibleSection
+            defaultOpen={focusKey === "suspense_payments"}
+            summary={`${focusedSuspenseItems.filter((item) => item.status === "held").length.toLocaleString()} held | ${money(suspenseHeldTotal)}`}
+            title="Suspense Register"
+          >
             <TableControls table={suspenseTable} label="suspense items" placeholder="Search suspense" />
             <div className="table-wrap">
               <table>
@@ -2055,14 +2084,15 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleSection>
           ) : null}
 
           {showAdjustmentRegister ? (
-          <div className="panel">
-            <div className="panel-heading">
-              <h3>Adjustment Approvals</h3>
-            </div>
+          <CollapsibleSection
+            defaultOpen={focusKey === "pending_adjustments"}
+            summary={`${focusedAdjustments.filter((adjustment) => adjustment.status === "pending").length.toLocaleString()} pending | ${money(pendingAdjustmentTotal)}`}
+            title="Adjustment Approvals"
+          >
             <TableControls table={adjustmentTable} label="adjustments" placeholder="Search adjustments" />
             <div className="table-wrap">
               <table>
@@ -2122,7 +2152,7 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tbody>
               </table>
             </div>
-          </div>
+          </CollapsibleSection>
           ) : null}
         </div>
       </section>

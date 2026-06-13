@@ -6,6 +6,7 @@ const { recordAuditEvent } = require("../services/audit.service");
 const { clearPortalLinks, ensurePrimaryPortalLink, replacePortalLinks } = require("../services/portalAccount.service");
 const {
   createAccessProfile,
+  detachAccessProfile,
   roles,
   syncDefaultAccessProfile,
   updateAccessProfile
@@ -342,10 +343,45 @@ const updateUserAccessProfile = asyncHandler(async (req, res) => {
   }
 });
 
+const detachUserAccessProfile = asyncHandler(async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const userResult = await client.query("SELECT * FROM users WHERE id = $1 FOR UPDATE", [req.params.id]);
+    const account = userResult.rows[0];
+    if (!account) throw new ApiError(404, "User not found.");
+
+    const profile = await detachAccessProfile(client, account.id, req.params.profileId);
+    const afterResult = await client.query(
+      `SELECT ${publicColumns("u")}
+       FROM users u
+       LEFT JOIN customers c ON c.id = u.customer_id
+       WHERE u.id = $1`,
+      [account.id]
+    );
+    await recordAuditEvent(client, {
+      req,
+      action: "user.access_profile.detached",
+      entityType: "user",
+      entityId: account.id,
+      beforeData: { profile },
+      afterData: afterResult.rows[0]
+    });
+    await client.query("COMMIT");
+    res.json(afterResult.rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = {
   listUsers,
   createUser,
   updateUser,
   createUserAccessProfile,
-  updateUserAccessProfile
+  updateUserAccessProfile,
+  detachUserAccessProfile
 };

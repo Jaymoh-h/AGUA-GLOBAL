@@ -36,7 +36,7 @@ export const navItems = [
   { key: "business", label: "Business Settings", icon: Building2, roles: ["admin", "accountant", "business_viewer"] },
   { key: "communications", label: "Communications", icon: MessageSquare, roles: ["admin", "accountant"] },
   { key: "payments", label: "Payments", icon: WalletCards, roles: ["admin", "accountant"] },
-  { key: "expenses", label: "Expenses", icon: Banknote, roles: ["admin", "accountant"] },
+  { key: "expenses", label: "Expenses", icon: Banknote, roles: ["admin", "accountant", "business_viewer"] },
   { key: "contractors", label: "Contractor Invoices", icon: ClipboardList, roles: ["admin", "accountant"] },
   { key: "payroll", label: "Payroll", icon: UserRoundCog, roles: ["admin", "accountant"] },
   { key: "maintenance", label: "Maintenance", icon: Wrench, roles: ["admin", "accountant", "meter_reader"] },

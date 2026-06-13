@@ -354,6 +354,8 @@ export const api = {
     update: (id, payload) => request(`/users/${id}`, { method: "PUT", body: payload }),
     createAccessProfile: (id, payload) => request(`/users/${id}/access-profiles`, { method: "POST", body: payload }),
     updateAccessProfile: (id, profileId, payload) =>
-      request(`/users/${id}/access-profiles/${profileId}`, { method: "PATCH", body: payload })
+      request(`/users/${id}/access-profiles/${profileId}`, { method: "PATCH", body: payload }),
+    detachAccessProfile: (id, profileId) =>
+      request(`/users/${id}/access-profiles/${profileId}`, { method: "DELETE" })
   }
 };

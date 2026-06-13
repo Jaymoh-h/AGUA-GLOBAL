@@ -189,6 +189,20 @@ function UsersPage({ user: currentUser }) {
       setMessage(err.message);
     }
   };
+
+  const detachAccessProfile = async (profile) => {
+    if (!editingId || profile.is_default || profile.is_active) return;
+    const proceed = window.confirm(`Detach "${profile.label || roleLabel(profile.role)}" from this user?`);
+    if (!proceed) return;
+    setMessage("");
+    try {
+      await api.users.detachAccessProfile(editingId, profile.id);
+      await load();
+      setMessage("Access context detached.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
   const userTable = useTableControls(users, {
     searchFields: [
       "name",
@@ -317,7 +331,10 @@ function UsersPage({ user: currentUser }) {
                 <Link2 size={16} />
               </div>
               <div className="linked-account-list">
-                {(selectedUser.access_profiles || []).map((profile) => (
+                {(selectedUser.access_profiles || []).map((profile) => {
+                  const canDetachProfile =
+                    !profile.is_default && !profile.is_active && (selectedUser.access_profiles || []).length > 1;
+                  return (
                   <div key={profile.id} className="linked-account-option access-profile-row">
                     <span>
                       <strong>{profile.label || roleLabel(profile.role)}</strong>
@@ -334,8 +351,14 @@ function UsersPage({ user: currentUser }) {
                     >
                       {profile.is_active ? "Disable" : "Enable"}
                     </button>
+                    {canDetachProfile ? (
+                      <button type="button" onClick={() => detachAccessProfile(profile)}>
+                        Detach
+                      </button>
+                    ) : null}
                   </div>
-                ))}
+                );
+                })}
               </div>
               <div className="divider-line" />
               <div className="form-grid compact-form">

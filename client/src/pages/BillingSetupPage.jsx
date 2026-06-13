@@ -1,5 +1,6 @@
 import { ArrowRight, CalendarPlus, Eye, ReceiptText, RefreshCw, Save } from "lucide-react";
 import { useEffect, useState } from "react";
+import CollapsibleSection from "../components/CollapsibleSection";
 import { EmptyTableRow } from "../components/EmptyState";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
@@ -236,10 +237,14 @@ function BillingSetupPage({ onNavigate }) {
       <section className="workspace-grid">
         <div className="page-stack">
           {settings ? (
-            <form className="panel form-grid" onSubmit={saveSettings}>
-              <div className="panel-heading">
-                <h3>Settings</h3>
-              </div>
+            <CollapsibleSection
+              as="form"
+              className="form-grid"
+              defaultOpen
+              onSubmit={saveSettings}
+              summary={`${settings.penalty_type === "none" ? "Penalties disabled" : `Penalty ${settings.penalty_type}`} | ${settings.bill_number_prefix || "BILL"}`}
+              title="Settings"
+            >
               <label>
                 Due rule
                 <input value="Last day of the following month" disabled />
@@ -316,13 +321,17 @@ function BillingSetupPage({ onNavigate }) {
                 <Save size={17} />
                 Save settings
               </button>
-            </form>
+            </CollapsibleSection>
           ) : null}
 
-          <form className="panel form-grid" onSubmit={createPeriod}>
-            <div className="panel-heading">
-              <h3>Open Period</h3>
-            </div>
+          <CollapsibleSection
+            as="form"
+            className="form-grid"
+            icon={<CalendarPlus size={18} />}
+            onSubmit={createPeriod}
+            summary={periodStart}
+            title="Open Period"
+          >
             <label>
               Month
               <input value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} type="date" required />
@@ -331,13 +340,15 @@ function BillingSetupPage({ onNavigate }) {
               <CalendarPlus size={17} />
               Open period
             </button>
-          </form>
+          </CollapsibleSection>
 
-          <div className="panel form-grid">
-            <div className="panel-heading">
-              <h3>Penalty Automation</h3>
-              <ReceiptText size={18} />
-            </div>
+          <CollapsibleSection
+            className="form-grid"
+            defaultOpen={Boolean(penaltyPreview)}
+            icon={<ReceiptText size={18} />}
+            summary={`${penaltyDate} | ${settings?.penalty_type || "none"}`}
+            title="Penalty Automation"
+          >
             <label>
               Application date
               <input value={penaltyDate} onChange={(event) => setPenaltyDate(event.target.value)} type="date" />
@@ -395,13 +406,15 @@ function BillingSetupPage({ onNavigate }) {
               <ReceiptText size={17} />
               Apply previewed penalties
             </button>
-          </div>
+          </CollapsibleSection>
         </div>
 
-        <div className="panel wide-panel">
-          <div className="panel-heading">
-            <h3>Billing Periods</h3>
-          </div>
+        <CollapsibleSection
+          className="wide-panel"
+          defaultOpen
+          summary={`${periodTable.filteredRows.length.toLocaleString()} period(s) | ${selectedPeriod?.name || "No period"}`}
+          title="Billing Periods"
+        >
           <TableControls table={periodTable} label="periods" placeholder="Search periods" />
           <div className="table-wrap">
             <table>
@@ -532,14 +545,15 @@ function BillingSetupPage({ onNavigate }) {
               </div>
             )}
           </div>
-        </div>
+        </CollapsibleSection>
       </section>
 
       {penaltyPreview?.rows?.length ? (
-        <div className="panel">
-          <div className="panel-heading">
-            <h3>Penalty Preview</h3>
-          </div>
+        <CollapsibleSection
+          defaultOpen
+          summary={`${penaltyPreview.rows.length.toLocaleString()} eligible bill(s) | ${money(penaltyPreview.summary.total_penalties)}`}
+          title="Penalty Preview"
+        >
           <div className="table-wrap">
             <table>
               <thead>
@@ -573,13 +587,13 @@ function BillingSetupPage({ onNavigate }) {
               </tbody>
             </table>
           </div>
-        </div>
+        </CollapsibleSection>
       ) : null}
 
-      <div className="panel">
-        <div className="panel-heading">
-          <h3>Penalty Applications</h3>
-        </div>
+      <CollapsibleSection
+        summary={`${penaltyApplicationTable.filteredRows.length.toLocaleString()} application(s)`}
+        title="Penalty Applications"
+      >
         <TableControls table={penaltyApplicationTable} label="penalties" placeholder="Search penalties" />
         <div className="table-wrap">
           <table>
@@ -644,7 +658,7 @@ function BillingSetupPage({ onNavigate }) {
             </tbody>
           </table>
         </div>
-      </div>
+      </CollapsibleSection>
     </section>
   );
 }
