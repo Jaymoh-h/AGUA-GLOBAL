@@ -510,6 +510,20 @@ After deployment, verify:
 https://<api-project>.vercel.app/api/health
 ```
 
+For repeatable Vercel release preflights, run:
+
+```powershell
+.\scripts\vercel-release-check.ps1
+```
+
+If PowerShell blocks local scripts, run it with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\vercel-release-check.ps1
+```
+
+Use `-Production` after loading production API env variables locally, and add `-Deploy` only when the linked Vercel project is the intended target.
+
 ### 3. Client Project
 
 Import the same GitHub repository into a second Vercel project and use these settings:

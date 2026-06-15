@@ -152,6 +152,36 @@ Add the subdomains to the client Vercel project, configure DNS using Vercel's in
 - Apply database migrations before deploying code that depends on them.
 - Document every migration and behavior change in `docs/12-implementation-records.md`.
 
+Use the release helper for a repeatable Vercel preflight:
+
+```powershell
+.\scripts\vercel-release-check.ps1
+```
+
+If PowerShell blocks local scripts, use a process-scoped bypass:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\vercel-release-check.ps1
+```
+
+The default run is a dry run. It checks Git status, audits server/client dependencies, runs targeted server syntax checks, and builds the client. It only runs smoke tests when `TEST_DATABASE_URL` is set.
+
+For a production-oriented check after loading the API project's production environment variables locally:
+
+```powershell
+$env:AGUA_API_URL = "https://<api-project>.vercel.app/api"
+$env:AGUA_CLIENT_URL = "https://<client-project>.vercel.app"
+.\scripts\vercel-release-check.ps1 -Production
+```
+
+To deploy through a linked Vercel CLI project after the checks pass:
+
+```powershell
+.\scripts\vercel-release-check.ps1 -Production -Deploy
+```
+
+Do not use `-Deploy` unless the linked Vercel project and loaded environment variables are the intended production target.
+
 ## Current Migrations
 
 Use the tracked migration runner for all schema changes:

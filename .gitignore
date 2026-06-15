@@ -9,3 +9,5 @@ server/storage/documents/
 *.log
 .DS_Store
 Thumbs.db
+
+.vercel/
