@@ -132,25 +132,33 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
 
   useEffect(() => {
     if (editingWeeklyId) return;
+    const contextRows = new Map(
+      (weeklyContext?.readings || []).map((row) => [Number(row.production_meter_id), row])
+    );
     setReadingRows((current) => {
       const existing = new Map(current.map((row) => [Number(row.production_meter_id), row]));
       return meters
         .filter((meter) => meter.status === "active")
-        .map((meter) => ({
-          production_meter_id: meter.id,
-          meter_number: meter.meter_number,
-          label: meter.customer_name || meter.name || meter.meter_number,
-          previous_reading_value: existing.get(Number(meter.id))?.previous_reading_value ?? null,
-          previous_reading_date: existing.get(Number(meter.id))?.previous_reading_date ?? null,
-          reading_value: existing.get(Number(meter.id))?.reading_value || "",
-          notes: existing.get(Number(meter.id))?.notes || ""
-        }));
+        .map((meter) => {
+          const previous = contextRows.get(Number(meter.id));
+          const current = existing.get(Number(meter.id));
+          return {
+            production_meter_id: meter.id,
+            meter_number: meter.meter_number,
+            label: meter.customer_name || meter.name || meter.meter_number,
+            previous_reading_value: previous?.previous_reading_value ?? current?.previous_reading_value ?? null,
+            previous_reading_date: previous?.previous_reading_date ?? current?.previous_reading_date ?? null,
+            reading_value: current?.reading_value || "",
+            notes: current?.notes || ""
+          };
+        });
     });
-  }, [editingWeeklyId, meters]);
+  }, [editingWeeklyId, meters, weeklyContext]);
 
   useEffect(() => {
     if (!weeklyForm.reading_date) return undefined;
     let ignore = false;
+    setWeeklyContext(null);
     api.production
       .readingContext(weeklyForm.reading_date)
       .then((context) => {
