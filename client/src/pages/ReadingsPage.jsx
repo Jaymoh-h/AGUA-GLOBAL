@@ -586,6 +586,16 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
       Number(row.source_meter_id) === Number(sourceForm.meter_id)
   );
   const sourceRowsMissingReading = (sourceWorkspace.rows || []).filter((row) => !row.source_reading_id);
+  const sourceReadingOptions =
+    selectedSourceWorkspaceRow &&
+    selectedSourceWorkspaceRow.source_reading_id &&
+    !sourceRowsMissingReading.some(
+      (row) =>
+        Number(row.customer_id) === Number(selectedSourceWorkspaceRow.customer_id) &&
+        Number(row.source_meter_id) === Number(selectedSourceWorkspaceRow.source_meter_id)
+    )
+      ? [selectedSourceWorkspaceRow, ...sourceRowsMissingReading]
+      : sourceRowsMissingReading;
   const readingCustomerOptions = editingId
     ? customers
     : selectedCustomer && !eligibleReadingCustomers.some((customer) => Number(customer.id) === Number(selectedCustomer.id))
@@ -1205,13 +1215,16 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
                   }}
                   required
                 >
-                  <option value="">Select source meter</option>
-                  {(sourceWorkspace.rows || []).map((row) => (
+                  <option value="">Select missing source meter</option>
+                  {sourceReadingOptions.map((row) => (
                     <option key={`${row.customer_id}-${row.source_meter_id}`} value={`${row.customer_id}:${row.source_meter_id}`}>
                       {row.acc_number} - {row.customer_name} ({row.source_meter_number})
                     </option>
                   ))}
                 </select>
+                {!sourceReadingOptions.length ? (
+                  <small>No source meters are missing readings for this period.</small>
+                ) : null}
               </label>
               <label>
                 Previous source reading

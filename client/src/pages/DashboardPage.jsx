@@ -46,6 +46,21 @@ const paddedChartMax = (dataMax) => {
   return Math.ceil((max + headroom) / roundedStep) * roundedStep;
 };
 
+const paddedReceivablesMax = (dataMax) => {
+  const max = Number(dataMax || 0);
+  if (max <= 0) return 10;
+  const headroom = max * 0.3;
+  const roundedStep = 10 ** Math.max(0, Math.floor(Math.log10(max)) - 1);
+  return Math.ceil((max + headroom) / roundedStep) * roundedStep;
+};
+
+const receivablesChartHeight = (rows) => {
+  const maxBalance = Math.max(0, ...(rows || []).map((row) => Number(row.balance_amount || 0)));
+  const amountScale = maxBalance > 0 ? Math.min(160, Math.floor(Math.log10(maxBalance)) * 22) : 0;
+  const bucketScale = Math.max(0, (rows || []).length - 4) * 24;
+  return Math.min(520, 260 + amountScale + bucketScale);
+};
+
 const moneyTooltip = (value, name) => [money(value), String(name || "").replace("_", " ")];
 const countTooltip = (value, name) => [Number(value || 0).toLocaleString(), String(name || "").replace("_", " ")];
 
@@ -88,6 +103,7 @@ function DashboardPage({ onNavigate }) {
   const productionTrend = charts.productionTrend || [];
   const visibleBillingTrend = billingTrend.slice(-(showLargeCharts ? 12 : 6));
   const visibleProductionTrend = productionTrend.slice(-(showLargeCharts ? 13 : 8));
+  const agingChartHeight = receivablesChartHeight(receivablesAging);
 
   return (
     <section className="page-stack">
@@ -142,12 +158,12 @@ function DashboardPage({ onNavigate }) {
             </div>
           </div>
           {receivablesAging.length ? (
-            <div className="dashboard-chart">
+            <div className="dashboard-chart" style={{ height: agingChartHeight }}>
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={receivablesAging} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <BarChart data={receivablesAging} margin={{ top: 24, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
-                  <YAxis domain={[0, paddedChartMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
+                  <YAxis domain={[0, paddedReceivablesMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
                   <Tooltip formatter={moneyTooltip} />
                   <Bar dataKey="balance_amount" name="Balance" radius={[5, 5, 0, 0]} fill="#0f766e" />
                 </BarChart>
