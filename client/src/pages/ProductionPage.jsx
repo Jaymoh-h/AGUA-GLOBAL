@@ -99,6 +99,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
     to: new Date().toISOString().slice(0, 10)
   });
   const [selectedReportWeekId, setSelectedReportWeekId] = useState("");
+  const [selectedReportMeterId, setSelectedReportMeterId] = useState("");
   const [printGeneratedAt, setPrintGeneratedAt] = useState("");
   const [printMode, setPrintMode] = useState("detail");
 
@@ -276,18 +277,44 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
 
   const reportWeeks = report.weeks || [];
   const selectedReportWeek = reportWeeks.find((week) => String(week.id) === String(selectedReportWeekId));
-  const visibleReportWeeks = selectedReportWeek ? [selectedReportWeek] : reportWeeks;
+  const baseVisibleReportWeeks = selectedReportWeek ? [selectedReportWeek] : reportWeeks;
+  const reportMeterOptions = useMemo(() => {
+    const meterMap = new Map();
+    for (const week of reportWeeks) {
+      for (const row of week.rows || []) {
+        const meterId = Number(row.production_meter_id);
+        if (!meterId || meterMap.has(meterId)) continue;
+        meterMap.set(meterId, {
+          id: meterId,
+          label: `${row.meter_number} - ${row.customer_name || row.meter_name || meterTypeLabels[row.meter_type] || "Production meter"}`
+        });
+      }
+    }
+    return [...meterMap.values()].sort((left, right) => left.label.localeCompare(right.label));
+  }, [reportWeeks]);
+  const selectedReportMeter = reportMeterOptions.find((meter) => String(meter.id) === String(selectedReportMeterId));
+  const visibleReportWeeks = useMemo(
+    () =>
+      baseVisibleReportWeeks.map((week) => ({
+        ...week,
+        rows: selectedReportMeterId
+          ? (week.rows || []).filter((row) => String(row.production_meter_id) === String(selectedReportMeterId))
+          : week.rows || []
+      })),
+    [baseVisibleReportWeeks, selectedReportMeterId]
+  );
   const reportWeekDates = reportWeeks.map((week) => dateOnly(week.reading_date)).filter(Boolean).sort();
 
   const reportTotals = useMemo(() => {
     const rows = visibleReportWeeks;
-    const electricityCost = rows.reduce((sum, row) => sum + Number(row.electricity_cost_used || 0), 0);
-    const revenue = rows.reduce((sum, row) => sum + Number(row.total_revenue || 0), 0);
-    const consumption = rows.reduce((sum, row) => sum + Number(row.total_consumption || 0), 0);
-    const electricityUsed = rows.reduce((sum, row) => sum + Number(row.electricity_used || 0), 0);
+    const meterRows = rows.flatMap((row) => row.rows || []);
+    const revenue = meterRows.reduce((sum, row) => sum + Number(row.revenue_amount || 0), 0);
+    const consumption = meterRows.reduce((sum, row) => sum + Number(row.consumption || 0), 0);
+    const electricityCost = selectedReportMeterId ? 0 : rows.reduce((sum, row) => sum + Number(row.electricity_cost_used || 0), 0);
+    const electricityUsed = selectedReportMeterId ? 0 : rows.reduce((sum, row) => sum + Number(row.electricity_used || 0), 0);
     return {
       weekCount: rows.length,
-      meterRowCount: rows.reduce((sum, row) => sum + Number(row.rows?.length || 0), 0),
+      meterRowCount: meterRows.length,
       consumption,
       revenue,
       electricityUsed,
@@ -296,7 +323,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
       costPerWaterUnit: consumption > 0 ? electricityCost / consumption : 0,
       electricityCostPerUnit: electricityUsed > 0 ? electricityCost / electricityUsed : 0
     };
-  }, [visibleReportWeeks]);
+  }, [selectedReportMeterId, visibleReportWeeks]);
   const selectedReportWeekDate = selectedReportWeek ? dateOnly(selectedReportWeek.reading_date) : "";
   const reportPeriodLabel = selectedReportWeekDate
     ? `${selectedReportWeekDate} to ${selectedReportWeekDate}`
@@ -321,6 +348,10 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
       });
     }
   };
+  const reportWeekMeterTotals = (week) => ({
+    consumption: (week.rows || []).reduce((sum, row) => sum + Number(row.consumption || 0), 0),
+    revenue: (week.rows || []).reduce((sum, row) => sum + Number(row.revenue_amount || 0), 0)
+  });
 
   const submitMeter = async (event) => {
     event.preventDefault();
@@ -937,10 +968,27 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                   type="date"
                 />
               </label>
+              <label>
+                Meter
+                <select value={selectedReportMeterId} onChange={(event) => setSelectedReportMeterId(event.target.value)}>
+                  <option value="">All meters</option>
+                  {reportMeterOptions.map((meter) => (
+                    <option key={meter.id} value={meter.id}>
+                      {meter.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button type="button" onClick={refreshReport}>Refresh</button>
             </div>
-            {visibleReportWeeks.length ? (
+            {visibleReportWeeks.length && (!selectedReportMeter || reportTotals.meterRowCount) ? (
               <div className="reading-context">
+                {selectedReportMeter ? (
+                  <div>
+                    <span>Selected meter</span>
+                    <strong>{selectedReportMeter.label}</strong>
+                  </div>
+                ) : null}
                 <div>
                   <span>Total consumption</span>
                   <strong>{number(reportTotals.consumption)}</strong>
@@ -949,23 +997,33 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                   <span>Total revenue</span>
                   <strong>{money(reportTotals.revenue)}</strong>
                 </div>
-                <div>
-                  <span>Electricity used</span>
-                  <strong>{number(reportTotals.electricityUsed)} kWh</strong>
-                </div>
-                <div>
-                  <span>Electricity cost</span>
-                  <strong>{money(reportTotals.electricityCost)}</strong>
-                </div>
-                <div>
-                  <span>Average cost basis</span>
-                  <strong>{money(reportTotals.electricityCostPerUnit)} / kWh</strong>
-                  <small>{reportTotals.weekCount} week(s), {reportTotals.meterRowCount} meter row(s)</small>
-                </div>
-                <div>
-                  <span>Cost of production</span>
-                  <strong>{(Number(reportTotals.costOfProductionRatio || 0) * 100).toFixed(2)}%</strong>
-                </div>
+                {selectedReportMeter ? (
+                  <div>
+                    <span>Meter history</span>
+                    <strong>{reportTotals.meterRowCount.toLocaleString()} row(s)</strong>
+                    <small>{reportTotals.weekCount} week(s) in range</small>
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <span>Electricity used</span>
+                      <strong>{number(reportTotals.electricityUsed)} kWh</strong>
+                    </div>
+                    <div>
+                      <span>Electricity cost</span>
+                      <strong>{money(reportTotals.electricityCost)}</strong>
+                    </div>
+                    <div>
+                      <span>Average cost basis</span>
+                      <strong>{money(reportTotals.electricityCostPerUnit)} / kWh</strong>
+                      <small>{reportTotals.weekCount} week(s), {reportTotals.meterRowCount} meter row(s)</small>
+                    </div>
+                    <div>
+                      <span>Cost of production</span>
+                      <strong>{(Number(reportTotals.costOfProductionRatio || 0) * 100).toFixed(2)}%</strong>
+                    </div>
+                  </>
+                )}
               </div>
             ) : null}
             {report.weeks?.length ? (
@@ -986,7 +1044,11 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                     onClick={() => selectReportWeek(week)}
                   >
                     <strong>{week.reading_date?.slice(0, 10)}</strong>
-                    <small>{week.rows.length} meter row(s)</small>
+                    <small>
+                      {selectedReportMeterId
+                        ? (week.rows || []).filter((row) => String(row.production_meter_id) === String(selectedReportMeterId)).length
+                        : week.rows.length} meter row(s)
+                    </small>
                   </button>
                 ))}
               </div>
@@ -1004,7 +1066,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleReportWeeks.length ? (
+                  {reportTotals.meterRowCount ? (
                     visibleReportWeeks.flatMap((week) =>
                       week.rows.map((row) => (
                         <tr key={`${week.id}-${row.id}`}>
@@ -1021,7 +1083,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                       ))
                     )
                   ) : (
-                    <EmptyTableRow colSpan={6} title="No production report data" detail="Save weekly readings to generate monitoring results." />
+                    <EmptyTableRow colSpan={6} title="No production report data" detail="Save weekly readings or adjust the meter filter." />
                   )}
                 </tbody>
               </table>
@@ -1224,6 +1286,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
             <span>Report</span>
             <strong>{printMode === "summary" ? "Production Weekly Summary" : "Production Report"}</strong>
             <small>{reportPeriodLabel}</small>
+            {selectedReportMeter ? <small>{selectedReportMeter.label}</small> : null}
             <small>{printGeneratedAt ? `Generated ${dateTime(printGeneratedAt)}` : ""}</small>
           </div>
         </div>
@@ -1237,22 +1300,32 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
             <span>Total revenue</span>
             <strong>{money(reportTotals.revenue)}</strong>
           </div>
-          <div>
-            <span>Electricity used</span>
-            <strong>{number(reportTotals.electricityUsed)} kWh</strong>
-          </div>
-          <div>
-            <span>Electricity cost</span>
-            <strong>{money(reportTotals.electricityCost)}</strong>
-          </div>
-          <div>
-            <span>Production cost</span>
-            <strong>{(Number(reportTotals.costOfProductionRatio || 0) * 100).toFixed(2)}%</strong>
-          </div>
-          <div>
-            <span>Cost / water unit</span>
-            <strong>{money(reportTotals.costPerWaterUnit)}</strong>
-          </div>
+          {selectedReportMeter ? (
+            <div>
+              <span>Selected meter</span>
+              <strong>{selectedReportMeter.label}</strong>
+              <small>{reportTotals.meterRowCount} row(s)</small>
+            </div>
+          ) : (
+            <>
+              <div>
+                <span>Electricity used</span>
+                <strong>{number(reportTotals.electricityUsed)} kWh</strong>
+              </div>
+              <div>
+                <span>Electricity cost</span>
+                <strong>{money(reportTotals.electricityCost)}</strong>
+              </div>
+              <div>
+                <span>Production cost</span>
+                <strong>{(Number(reportTotals.costOfProductionRatio || 0) * 100).toFixed(2)}%</strong>
+              </div>
+              <div>
+                <span>Cost / water unit</span>
+                <strong>{money(reportTotals.costPerWaterUnit)}</strong>
+              </div>
+            </>
+          )}
         </div>
 
         {printMode === "summary" ? (
@@ -1270,31 +1343,40 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 </tr>
               </thead>
               <tbody>
-                {visibleReportWeeks.length ? (
-                  visibleReportWeeks.map((week) => (
-                    <tr className="production-week-summary" key={`print-week-${week.id}`}>
-                      <td>{dateOnly(week.reading_date)}</td>
-                      <td>{number(week.electricity_used)} kWh</td>
-                      <td>{money(week.electricity_cost_used)}</td>
-                      <td>
-                        {money(week.electricity_cost_per_unit)} / kWh
-                        <small>{electricityCostSourceLabel(week)}</small>
-                      </td>
-                      <td>Week total</td>
-                      <td>{number(week.total_consumption)}</td>
-                      <td>{money(week.total_revenue)}</td>
-                    </tr>
-                  ))
+                {visibleReportWeeks.length && (!selectedReportMeter || reportTotals.meterRowCount) ? (
+                  visibleReportWeeks
+                    .filter((week) => !selectedReportMeter || week.rows.length)
+                    .map((week) => {
+                      const weekTotals = reportWeekMeterTotals(week);
+                      return (
+                        <tr className="production-week-summary" key={`print-week-${week.id}`}>
+                          <td>{dateOnly(week.reading_date)}</td>
+                          <td>{selectedReportMeter ? "-" : `${number(week.electricity_used)} kWh`}</td>
+                          <td>{selectedReportMeter ? "-" : money(week.electricity_cost_used)}</td>
+                          <td>
+                            {selectedReportMeter ? "Meter filter" : `${money(week.electricity_cost_per_unit)} / kWh`}
+                            <small>{selectedReportMeter ? selectedReportMeter.label : electricityCostSourceLabel(week)}</small>
+                          </td>
+                          <td>{selectedReportMeter ? selectedReportMeter.label : "Week total"}</td>
+                          <td>{number(weekTotals.consumption)}</td>
+                          <td>{money(weekTotals.revenue)}</td>
+                        </tr>
+                      );
+                    })
                 ) : (
-                  <EmptyTableRow colSpan={7} title="No production report data" detail="Save weekly readings to generate monitoring results." />
+                  <EmptyTableRow colSpan={7} title="No production report data" detail="Save weekly readings or adjust the meter filter." />
                 )}
               </tbody>
             </table>
           </div>
         ) : (
           <div className="production-print-week-list">
-            {visibleReportWeeks.length ? (
-              visibleReportWeeks.map((week) => (
+            {visibleReportWeeks.length && (!selectedReportMeter || reportTotals.meterRowCount) ? (
+              visibleReportWeeks
+                .filter((week) => !selectedReportMeter || week.rows.length)
+                .map((week) => {
+                  const weekTotals = reportWeekMeterTotals(week);
+                  return (
                 <div className="production-print-week" key={`full-print-week-${week.id}`}>
                   <div className="table-wrap">
                     <table className="production-week-summary-table">
@@ -1311,14 +1393,14 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                       <tbody>
                         <tr className="production-week-summary">
                           <td>{dateOnly(week.reading_date)}</td>
-                          <td>{number(week.electricity_used)} kWh</td>
-                          <td>{money(week.electricity_cost_used)}</td>
+                          <td>{selectedReportMeter ? "-" : `${number(week.electricity_used)} kWh`}</td>
+                          <td>{selectedReportMeter ? "-" : money(week.electricity_cost_used)}</td>
                           <td>
-                            {money(week.electricity_cost_per_unit)} / kWh
-                            <small>{electricityCostSourceLabel(week)}</small>
+                            {selectedReportMeter ? "Meter filter" : `${money(week.electricity_cost_per_unit)} / kWh`}
+                            <small>{selectedReportMeter ? selectedReportMeter.label : electricityCostSourceLabel(week)}</small>
                           </td>
-                          <td>{number(week.total_consumption)}</td>
-                          <td>{money(week.total_revenue)}</td>
+                          <td>{number(weekTotals.consumption)}</td>
+                          <td>{money(weekTotals.revenue)}</td>
                         </tr>
                       </tbody>
                     </table>
@@ -1353,12 +1435,13 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                     </table>
                   </div>
                 </div>
-              ))
+                  );
+                })
             ) : (
               <div className="table-wrap">
                 <table>
                   <tbody>
-                    <EmptyTableRow colSpan={6} title="No production report data" detail="Save weekly readings to generate monitoring results." />
+                    <EmptyTableRow colSpan={6} title="No production report data" detail="Save weekly readings or adjust the meter filter." />
                   </tbody>
                 </table>
               </div>
