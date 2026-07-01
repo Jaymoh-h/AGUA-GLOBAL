@@ -17,6 +17,7 @@ const meterRoleLabels = {
   shared_source_monitoring: "Shared source monitoring"
 };
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
+const percent = (value) => `${(Number(value || 0) * 100).toFixed(2)}%`;
 const today = () => new Date().toISOString().slice(0, 10);
 
 function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
@@ -638,7 +639,9 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
       "client_meter_number",
       "source_billing_request_status",
       "source_bill_number",
-      "client_bill_number"
+      "client_bill_number",
+      "variance_units",
+      "variance_percent"
     ]
   });
   const exportReadings = () => {
@@ -1304,6 +1307,7 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
                     <th>Source Meter</th>
                     <th>Source Reading</th>
                     <th>Client Reading</th>
+                    <th>Comparison</th>
                     <th>Bills</th>
                     <th>Action</th>
                   </tr>
@@ -1334,6 +1338,15 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
                           <small>{row.client_meter_number || row.client_reading_date?.slice(0, 10) || ""}</small>
                         </td>
                         <td>
+                          <strong>{row.variance_units === null || row.variance_units === undefined ? "-" : Number(row.variance_units || 0).toLocaleString()}</strong>
+                          <small>
+                            Primary {Number(row.client_units_used || 0).toLocaleString()} | Source {Number(row.source_units_used || 0).toLocaleString()}
+                          </small>
+                          <small>
+                            {row.variance_percent === null || row.variance_percent === undefined ? "Variance unavailable" : percent(row.variance_percent)}
+                          </small>
+                        </td>
+                        <td>
                           {row.source_bill_number ? (
                             <small>Source: {row.source_bill_number} | {row.source_bill_pay_status} | {money(row.source_bill_total)}</small>
                           ) : (
@@ -1354,7 +1367,7 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
                     ))
                   ) : (
                     <EmptyTableRow
-                      colSpan={6}
+                      colSpan={7}
                       title="No source meters found"
                       detail="Customers with active source backup meters will appear here for source-side reading and bill review."
                     />

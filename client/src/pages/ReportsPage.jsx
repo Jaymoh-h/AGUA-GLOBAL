@@ -66,6 +66,7 @@ const accountantReportTitles = {
   collectionsChannel: "Collections By Channel",
   billingZone: "Billing By Zone",
   billingRegister: "Billing Register",
+  meterConsumptionComparison: "Meter Consumption Comparison",
   receiptRegister: "Receipt Register",
   allocationLedger: "Payment Allocation Ledger",
   agingDetail: "Receivables Aging Detail",
@@ -196,6 +197,18 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const billingRegisterTable = useTableControls(accountantData?.billingRegister || [], {
     searchFields: ["bill_number", "billing_period_name", "billing_month", "customer_name", "acc_number", "zone_name", "balance_amount"]
   });
+  const meterConsumptionComparisonTable = useTableControls(accountantData?.meterConsumptionComparison || [], {
+    searchFields: [
+      "customer_name",
+      "acc_number",
+      "zone_name",
+      "client_meter_number",
+      "source_meter_number",
+      "client_bill_number",
+      "source_bill_number",
+      "comparison_status"
+    ]
+  });
   const focusKey = navigationIntent?.page === "reports" ? navigationIntent.focus : "";
   const dataQualityFocusKeys = ["duplicate_open_payable_bills", "future_dated_operational_records"];
   const hasDataQualityFocus = dataQualityFocusKeys.includes(focusKey);
@@ -243,6 +256,9 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const maintenanceRegisterRows = printAllRows ? maintenanceRegisterTable.filteredRows : maintenanceRegisterTable.visibleRows;
   const customerBalanceRows = printAllRows ? customerBalanceTable.filteredRows : customerBalanceTable.visibleRows;
   const billingRegisterRows = printAllRows ? billingRegisterTable.filteredRows : billingRegisterTable.visibleRows;
+  const meterConsumptionComparisonRows = printAllRows
+    ? meterConsumptionComparisonTable.filteredRows
+    : meterConsumptionComparisonTable.visibleRows;
   const receiptRegisterRows = printAllRows ? receiptRegisterTable.filteredRows : receiptRegisterTable.visibleRows;
   const allocationLedgerRows = printAllRows ? allocationLedgerTable.filteredRows : allocationLedgerTable.visibleRows;
   const receivablesAgingRows = printAllRows ? receivablesAgingTable.filteredRows : receivablesAgingTable.visibleRows;
@@ -322,6 +338,11 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
     billed_amount: sumRows(billingRegisterRows, "billed_amount"),
     paid_amount: sumRows(billingRegisterRows, "paid_amount"),
     balance_amount: sumRows(billingRegisterRows, "balance_amount")
+  };
+  const meterConsumptionComparisonTotals = {
+    client_units_used: sumRows(meterConsumptionComparisonRows, "client_units_used"),
+    source_units_used: sumRows(meterConsumptionComparisonRows, "source_units_used"),
+    variance_units: sumRows(meterConsumptionComparisonRows, "variance_units")
   };
   const receiptRegisterTotals = {
     amount: sumRows(receiptRegisterRows, "amount"),
@@ -417,6 +438,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
     { key: "collectionsChannel", title: "Collections By Channel", detail: `${money(collectionsByChannelTotals.received_amount)} received` },
     { key: "billingZone", title: "Billing By Zone", detail: `${number(billingByZoneTotals.bill_count)} bills by zone` },
     { key: "billingRegister", title: "Billing Register", detail: `${number(billingRegisterTable.total)} bill rows` },
+    { key: "meterConsumptionComparison", title: "Meter Consumption Comparison", detail: `${number(meterConsumptionComparisonTable.total)} source meter row(s)` },
     { key: "receiptRegister", title: "Receipt Register", detail: `${number(receiptRegisterTable.total)} receipt rows` },
     { key: "allocationLedger", title: "Payment Allocation Ledger", detail: `${money(allocationLedgerTotals.allocated_amount)} allocated` },
     { key: "agingDetail", title: "Receivables Aging Detail", detail: `${number(receivablesAgingTable.total)} customers | ${money(receivablesAgingTotals.total_amount)} total` },
@@ -1430,6 +1452,73 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                         </>
                       ) : (
                         <EmptyRow colSpan={14} />
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className={reportSectionClass("panel full-span report-section report-section-meterConsumptionComparison", showAccountantReport("meterConsumptionComparison"))}>
+                <div className="panel-heading">
+                  <h3>Meter Consumption Comparison</h3>
+                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "meterConsumptionComparison")} title="Print meter consumption comparison">
+                    <Printer size={17} />
+                  </button>
+                </div>
+                <TableControls table={meterConsumptionComparisonTable} label="meter comparisons" placeholder="Search meter comparisons" />
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Customer</th>
+                        <th>Primary Meter</th>
+                        <th>Second Meter</th>
+                        <th>Primary Units</th>
+                        <th>Second Units</th>
+                        <th>Variance</th>
+                        <th>Variance %</th>
+                        <th>Bills</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {meterConsumptionComparisonTable.total ? (
+                        <>
+                          {meterConsumptionComparisonRows.map((row) => (
+                            <tr key={`${row.customer_id}-${row.source_meter_id}`}>
+                              <td>
+                                {row.customer_name}
+                                <small>{row.acc_number} | {row.zone_name || "-"}</small>
+                              </td>
+                              <td>
+                                {row.client_meter_number || "-"}
+                                <small>{row.client_reading_date ? `Reading ${date(row.client_reading_date)}` : "No primary reading"}</small>
+                              </td>
+                              <td>
+                                {row.source_meter_number || "-"}
+                                <small>{row.source_reading_date ? `Reading ${date(row.source_reading_date)}` : "No second reading"}</small>
+                              </td>
+                              <td>{number(row.client_units_used)}</td>
+                              <td>{number(row.source_units_used)}</td>
+                              <td>{number(row.variance_units)}</td>
+                              <td>{row.variance_percent === null || row.variance_percent === undefined ? "-" : percent(row.variance_percent)}</td>
+                              <td>
+                                <small>Primary: {row.client_bill_number || "-"} {row.client_bill_pay_status ? `| ${label(row.client_bill_pay_status)}` : ""}</small>
+                                <small>Second: {row.source_bill_number || "-"} {row.source_bill_pay_status ? `| ${label(row.source_bill_pay_status)}` : ""}</small>
+                              </td>
+                              <td>{label(row.comparison_status)}</td>
+                            </tr>
+                          ))}
+                          <tr className="muted-total">
+                            <td colSpan="3"><strong>Total</strong></td>
+                            <td><strong>{number(meterConsumptionComparisonTotals.client_units_used)}</strong></td>
+                            <td><strong>{number(meterConsumptionComparisonTotals.source_units_used)}</strong></td>
+                            <td><strong>{number(meterConsumptionComparisonTotals.variance_units)}</strong></td>
+                            <td colSpan="3">-</td>
+                          </tr>
+                        </>
+                      ) : (
+                        <EmptyRow colSpan={9} />
                       )}
                     </tbody>
                   </table>

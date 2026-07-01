@@ -1036,6 +1036,127 @@ const getAccountantReports = asyncHandler(async (req, res) => {
     dateParams
   );
 
+  const meterConsumptionComparison = await pool.query(
+    `SELECT
+       comparison.*,
+       comparison.source_units_used - comparison.client_units_used AS variance_units,
+       CASE
+         WHEN comparison.client_units_used > 0
+         THEN (comparison.source_units_used - comparison.client_units_used) / comparison.client_units_used
+         ELSE NULL
+       END AS variance_percent,
+       CASE
+         WHEN comparison.source_reading_id IS NULL THEN 'missing_source_reading'
+         WHEN comparison.client_reading_id IS NULL AND comparison.client_bill_id IS NULL THEN 'missing_primary_reading'
+         WHEN ABS(comparison.source_units_used - comparison.client_units_used) <= 1 THEN 'aligned'
+         WHEN comparison.source_units_used > comparison.client_units_used THEN 'source_higher'
+         ELSE 'primary_higher'
+       END AS comparison_status
+     FROM (
+       SELECT
+         c.id AS customer_id,
+         c.name AS customer_name,
+         c.acc_number,
+         z.name AS zone_name,
+         source_meter.id AS source_meter_id,
+         source_meter.meter_number AS source_meter_number,
+         client_meter.meter_number AS client_meter_number,
+         source_reading.id AS source_reading_id,
+         source_reading.reading_date AS source_reading_date,
+         source_reading.reading_value AS source_reading_value,
+         source_prev.reading_value AS previous_source_reading_value,
+         CASE
+           WHEN source_reading.id IS NOT NULL AND source_prev.reading_value IS NOT NULL
+           THEN GREATEST(source_reading.reading_value - source_prev.reading_value, 0)
+           ELSE 0
+         END AS source_units_used,
+         client_reading.id AS client_reading_id,
+         client_reading.reading_date AS client_reading_date,
+         client_reading.reading_value AS client_reading_value,
+         client_prev.reading_value AS previous_client_reading_value,
+         client_bill.id AS client_bill_id,
+         client_bill.bill_number AS client_bill_number,
+         client_bill.bill_pay_status AS client_bill_pay_status,
+         client_bill.status AS client_bill_status,
+         source_bill.id AS source_bill_id,
+         source_bill.bill_number AS source_bill_number,
+         source_bill.bill_pay_status AS source_bill_pay_status,
+         source_bill.status AS source_bill_status,
+         CASE
+           WHEN client_reading.id IS NOT NULL AND client_prev.reading_value IS NOT NULL
+           THEN GREATEST(client_reading.reading_value - client_prev.reading_value, 0)
+           ELSE COALESCE(client_bill.units_used, 0)
+         END AS client_units_used
+       FROM customers c
+       JOIN meters source_meter ON source_meter.customer_id = c.id
+                               AND source_meter.meter_role = 'source_backup'
+                               AND source_meter.status = 'active'
+       LEFT JOIN zones z ON z.id = c.zone_id
+       LEFT JOIN LATERAL (
+         SELECT m.*
+         FROM meters m
+         WHERE m.customer_id = c.id
+           AND m.meter_role = 'client_billing'
+           AND m.status = 'active'
+         ORDER BY m.installed_at DESC, m.id DESC
+         LIMIT 1
+       ) client_meter ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT mr.*
+         FROM meter_readings mr
+         WHERE mr.customer_id = c.id
+           AND mr.meter_id = source_meter.id
+           AND mr.reading_date BETWEEN $1 AND $2
+         ORDER BY mr.reading_date DESC, mr.id DESC
+         LIMIT 1
+       ) source_reading ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT mr.*
+         FROM meter_readings mr
+         WHERE mr.customer_id = c.id
+           AND mr.meter_id = source_meter.id
+           AND (source_reading.id IS NULL OR mr.id <> source_reading.id)
+           AND mr.reading_date < COALESCE(source_reading.reading_date, $1::date)
+         ORDER BY mr.reading_date DESC, mr.id DESC
+         LIMIT 1
+       ) source_prev ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT mr.*
+         FROM meter_readings mr
+         WHERE mr.customer_id = c.id
+           AND mr.meter_id = client_meter.id
+           AND mr.reading_date BETWEEN $1 AND $2
+         ORDER BY mr.reading_date DESC, mr.id DESC
+         LIMIT 1
+       ) client_reading ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT mr.*
+         FROM meter_readings mr
+         WHERE mr.customer_id = c.id
+           AND mr.meter_id = client_meter.id
+           AND (client_reading.id IS NULL OR mr.id <> client_reading.id)
+           AND mr.reading_date < COALESCE(client_reading.reading_date, $1::date)
+         ORDER BY mr.reading_date DESC, mr.id DESC
+         LIMIT 1
+       ) client_prev ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT b.*
+         FROM bills b
+         WHERE b.customer_id = c.id
+           AND b.billing_source <> 'source_backup'
+           AND b.billing_month BETWEEN $1 AND $2
+         ORDER BY b.bill_pay_status = 'payable' DESC, b.billing_month DESC, b.id DESC
+         LIMIT 1
+       ) client_bill ON TRUE
+       LEFT JOIN source_billing_requests sbr ON sbr.current_reading_id = source_reading.id
+       LEFT JOIN bills source_bill ON source_bill.id = sbr.bill_id
+       WHERE c.status = 'active'
+     ) comparison
+     ORDER BY ABS(comparison.source_units_used - comparison.client_units_used) DESC, comparison.zone_name ASC, comparison.acc_number ASC
+     LIMIT 500`,
+    dateParams
+  );
+
   const profitAndLoss = await buildProfitAndLoss(startDate, endDate);
 
   res.json({
@@ -1050,6 +1171,7 @@ const getAccountantReports = asyncHandler(async (req, res) => {
     collectionsByChannel: collectionsByChannel.rows,
     receiptRegister: receiptRegister.rows,
     allocationLedger: allocationLedger.rows,
+    meterConsumptionComparison: meterConsumptionComparison.rows,
     receivablesAging: receivablesAging.rows,
     depositRegister: depositRegister.rows,
     expenseTotals: expenseTotals.rows[0],

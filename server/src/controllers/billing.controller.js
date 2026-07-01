@@ -774,6 +774,52 @@ const listSourceBillingWorkspace = asyncHandler(async (req, res) => {
             client_reading.meter_number AS client_meter_number,
             client_reading.reading_date AS client_reading_date,
             client_reading.reading_value AS client_reading_value,
+            CASE
+              WHEN client_reading.id IS NOT NULL AND client_prev.reading_value IS NOT NULL
+              THEN GREATEST(client_reading.reading_value - client_prev.reading_value, 0)
+              ELSE client_bill.units_used
+            END AS client_units_used,
+            CASE
+              WHEN source_reading.id IS NOT NULL
+                   AND source_prev.reading_value IS NOT NULL
+                   AND (
+                     (client_reading.id IS NOT NULL AND client_prev.reading_value IS NOT NULL)
+                     OR client_bill.units_used IS NOT NULL
+                   )
+              THEN GREATEST(source_reading.reading_value - source_prev.reading_value, 0) -
+                   CASE
+                     WHEN client_reading.id IS NOT NULL AND client_prev.reading_value IS NOT NULL
+                     THEN GREATEST(client_reading.reading_value - client_prev.reading_value, 0)
+                     ELSE client_bill.units_used
+                   END
+              ELSE NULL
+            END AS variance_units,
+            CASE
+              WHEN source_reading.id IS NOT NULL
+                   AND source_prev.reading_value IS NOT NULL
+                   AND (
+                     CASE
+                       WHEN client_reading.id IS NOT NULL AND client_prev.reading_value IS NOT NULL
+                       THEN GREATEST(client_reading.reading_value - client_prev.reading_value, 0)
+                       ELSE client_bill.units_used
+                     END
+                   ) > 0
+              THEN (
+                GREATEST(source_reading.reading_value - source_prev.reading_value, 0) -
+                CASE
+                  WHEN client_reading.id IS NOT NULL AND client_prev.reading_value IS NOT NULL
+                  THEN GREATEST(client_reading.reading_value - client_prev.reading_value, 0)
+                  ELSE client_bill.units_used
+                END
+              ) / (
+                CASE
+                  WHEN client_reading.id IS NOT NULL AND client_prev.reading_value IS NOT NULL
+                  THEN GREATEST(client_reading.reading_value - client_prev.reading_value, 0)
+                  ELSE client_bill.units_used
+                END
+              )
+              ELSE NULL
+            END AS variance_percent,
             client_bill.id AS client_bill_id,
             client_bill.bill_number AS client_bill_number,
             client_bill.bill_pay_status AS client_bill_pay_status,
@@ -825,6 +871,17 @@ const listSourceBillingWorkspace = asyncHandler(async (req, res) => {
        ORDER BY mr.reading_date DESC, mr.id DESC
        LIMIT 1
      ) client_reading ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT mr.*
+       FROM meter_readings mr
+       JOIN meters cm ON cm.id = mr.meter_id
+       WHERE mr.customer_id = c.id
+         AND cm.meter_role = 'client_billing'
+         AND (client_reading.id IS NULL OR mr.id <> client_reading.id)
+         AND mr.reading_date < COALESCE(client_reading.reading_date, sp.period_start)
+       ORDER BY mr.reading_date DESC, mr.id DESC
+       LIMIT 1
+     ) client_prev ON TRUE
      LEFT JOIN source_billing_requests sbr ON sbr.current_reading_id = source_reading.id
      LEFT JOIN bills source_bill ON source_bill.id = sbr.bill_id
      LEFT JOIN LATERAL (
