@@ -18,6 +18,14 @@ const meterTypeLabels = {
   customer_source: "Customer source",
   shared_source: "Shared source"
 };
+const previousContextLabels = {
+  production_weekly_reading: "Production weekly",
+  production_replacement_baseline: "Production replacement",
+  linked_source_reading: "Linked source reading",
+  linked_source_initial_reading: "Linked source initial",
+  customer_source_fallback_reading: "Customer source fallback",
+  customer_source_fallback_initial_reading: "Customer source initial fallback"
+};
 
 const electricityCostSourceLabel = (week) => {
   if (!week) return "";
@@ -148,6 +156,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
             label: meter.customer_name || meter.name || meter.meter_number,
             previous_reading_value: previous?.previous_reading_value ?? current?.previous_reading_value ?? null,
             previous_reading_date: previous?.previous_reading_date ?? current?.previous_reading_date ?? null,
+            previous_context_source: previous?.previous_context_source ?? current?.previous_context_source ?? null,
             reading_value: current?.reading_value || "",
             notes: current?.notes || ""
           };
@@ -174,7 +183,8 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
             return {
               ...row,
               previous_reading_value: match.previous_reading_value,
-              previous_reading_date: match.previous_reading_date
+              previous_reading_date: match.previous_reading_date,
+              previous_context_source: match.previous_context_source
             };
           })
         );
@@ -196,7 +206,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
     api.meters
       .list(meterForm.customer_id)
       .then((rows) => {
-        if (!ignore) setCustomerMeters(rows.filter((meter) => meter.meter_role === "source_backup"));
+        if (!ignore) setCustomerMeters(rows.filter((meter) => meter.meter_role === "source_backup" && meter.status === "active"));
       })
       .catch((err) => {
         if (!ignore) setMessage(err.message);
@@ -206,7 +216,41 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
     };
   }, [meterForm.customer_id]);
 
-  const setMeterField = (field, value) => setMeterForm((current) => ({ ...current, [field]: value }));
+  useEffect(() => {
+    if (meterForm.meter_type !== "customer_source") return;
+    if (meterForm.meter_id || customerMeters.length !== 1) return;
+    const [onlyMeter] = customerMeters;
+    setMeterForm((current) => ({
+      ...current,
+      meter_id: String(onlyMeter.id),
+      meter_number: current.meter_number || onlyMeter.meter_number
+    }));
+  }, [customerMeters, meterForm.meter_id, meterForm.meter_type]);
+
+  const setMeterField = (field, value) =>
+    setMeterForm((current) => {
+      if (field === "customer_id") {
+        return { ...current, customer_id: value, meter_id: "", meter_number: current.meter_number };
+      }
+      if (field === "meter_id") {
+        const linkedMeter = customerMeters.find((meter) => Number(meter.id) === Number(value));
+        return {
+          ...current,
+          meter_id: value,
+          meter_number: current.meter_number || linkedMeter?.meter_number || ""
+        };
+      }
+      if (field === "meter_type") {
+        return {
+          ...current,
+          meter_type: value,
+          customer_id: value === "customer_source" ? current.customer_id : "",
+          meter_id: value === "customer_source" ? current.meter_id : "",
+          rate_id: value === "shared_source" ? current.rate_id : ""
+        };
+      }
+      return { ...current, [field]: value };
+    });
   const setReplacementField = (field, value) => setReplacementForm((current) => ({ ...current, [field]: value }));
   const setTopupField = (field, value) => setTopupForm((current) => ({ ...current, [field]: value }));
   const setWeeklyField = (field, value) => {
@@ -286,7 +330,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
         ...meterForm,
         zone_id: meterForm.zone_id || null,
         customer_id: meterForm.meter_type === "customer_source" ? Number(meterForm.customer_id) : null,
-        meter_id: meterForm.meter_id || null,
+        meter_id: meterForm.meter_type === "customer_source" ? Number(meterForm.meter_id) : null,
         rate_id: meterForm.meter_type === "shared_source" ? Number(meterForm.rate_id) : null
       });
       setMeterForm({
@@ -578,12 +622,15 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                   </label>
                   <label>
                     Linked source meter
-                    <select value={meterForm.meter_id} onChange={(event) => setMeterField("meter_id", event.target.value)}>
-                      <option value="">No linked meter</option>
+                    <select value={meterForm.meter_id} onChange={(event) => setMeterField("meter_id", event.target.value)} required>
+                      <option value="">Select exact source meter</option>
                       {customerMeters.map((meter) => (
                         <option key={meter.id} value={meter.id}>{meter.meter_number}</option>
                       ))}
                     </select>
+                    {meterForm.customer_id && !customerMeters.length ? (
+                      <small>No active source meter is registered for this customer.</small>
+                    ) : null}
                   </label>
                 </>
               ) : (
@@ -805,6 +852,9 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                         <td>
                           {optionalNumber(row.previous_reading_value)}
                           <small>{row.previous_reading_date ? dateOnly(row.previous_reading_date) : "No prior reading"}</small>
+                          {row.previous_context_source ? (
+                            <small>{previousContextLabels[row.previous_context_source] || row.previous_context_source}</small>
+                          ) : null}
                         </td>
                         <td>
                           <input
@@ -1002,6 +1052,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                   <tr>
                     <th>Meter</th>
                     <th>Type</th>
+                    <th>Linked Source</th>
                     <th>Zone</th>
                     <th>Tariff</th>
                     <th>Status</th>
@@ -1017,6 +1068,17 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                           <small>{meter.customer_name || meter.name || "-"}</small>
                         </td>
                         <td>{meterTypeLabels[meter.meter_type] || meter.meter_type}</td>
+                        <td>
+                          {meter.linked_meter_number || "-"}
+                          {meter.linked_meter_status ? (
+                            <small>{meter.linked_meter_status === "active" ? "Linked active meter" : `Linked meter ${meter.linked_meter_status}`}</small>
+                          ) : null}
+                          {meter.linked_latest_reading_value !== null && meter.linked_latest_reading_value !== undefined ? (
+                            <small>
+                              Latest source {Number(meter.linked_latest_reading_value || 0).toLocaleString()} on {dateOnly(meter.linked_latest_reading_date)}
+                            </small>
+                          ) : null}
+                        </td>
                         <td>{meter.zone_name || "-"}</td>
                         <td>{meter.rate_name || "-"}</td>
                         <td><span className={`status status-${meter.status}`}>{meter.status}</span></td>
@@ -1033,7 +1095,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                       </tr>
                     ))
                   ) : (
-                    <EmptyTableRow colSpan={6} title="No production meters" detail="Register source meters to start monitoring." />
+                    <EmptyTableRow colSpan={7} title="No production meters" detail="Register source meters to start monitoring." />
                   )}
                 </tbody>
               </table>

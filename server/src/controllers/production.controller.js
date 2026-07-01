@@ -18,12 +18,25 @@ const listProductionMeters = asyncHandler(async (_req, res) => {
             c.name AS customer_name,
             c.acc_number,
             cm.meter_number AS linked_meter_number,
+            cm.meter_role AS linked_meter_role,
+            cm.status AS linked_meter_status,
+            cm.initial_reading AS linked_meter_initial_reading,
+            cm.installed_at AS linked_meter_installed_at,
+            latest_source.reading_value AS linked_latest_reading_value,
+            latest_source.reading_date AS linked_latest_reading_date,
             COALESCE(c.rate_id, psm.rate_id) AS effective_rate_id,
             r.name AS rate_name
      FROM production_source_meters psm
      LEFT JOIN zones z ON z.id = psm.zone_id
      LEFT JOIN customers c ON c.id = psm.customer_id
      LEFT JOIN meters cm ON cm.id = psm.meter_id
+     LEFT JOIN LATERAL (
+       SELECT mr.reading_value, mr.reading_date
+       FROM meter_readings mr
+       WHERE mr.meter_id = cm.id
+       ORDER BY mr.reading_date DESC, mr.id DESC
+       LIMIT 1
+     ) latest_source ON TRUE
      LEFT JOIN rates r ON r.id = COALESCE(c.rate_id, psm.rate_id)
      ORDER BY psm.status = 'active' DESC, psm.meter_type ASC, psm.meter_number ASC`
   );
@@ -50,6 +63,9 @@ const createProductionMeter = asyncHandler(async (req, res) => {
   if (meter_type === "customer_source" && !customer_id) {
     throw new ApiError(400, "Linked customer is required for a customer source meter.");
   }
+  if (meter_type === "customer_source" && !meter_id) {
+    throw new ApiError(400, "Link the exact customer source meter for production monitoring.");
+  }
   if (meter_type === "shared_source" && !rate_id) {
     throw new ApiError(400, "Default tariff is required for a shared source meter.");
   }
@@ -67,12 +83,13 @@ const createProductionMeter = asyncHandler(async (req, res) => {
     if (meter_type === "customer_source") {
       const customerResult = await client.query("SELECT * FROM customers WHERE id = $1", [customer_id]);
       if (!customerResult.rows[0]) throw new ApiError(404, "Customer not found.");
-      if (meter_id) {
-        const meterResult = await client.query(
-          "SELECT * FROM meters WHERE id = $1 AND customer_id = $2 AND meter_role = 'source_backup'",
-          [meter_id, customer_id]
-        );
-        if (!meterResult.rows[0]) throw new ApiError(400, "Linked meter must be a source backup meter for this customer.");
+      const meterResult = await client.query(
+        "SELECT * FROM meters WHERE id = $1 AND customer_id = $2 AND meter_role = 'source_backup'",
+        [meter_id, customer_id]
+      );
+      if (!meterResult.rows[0]) throw new ApiError(400, "Linked meter must be a source backup meter for this customer.");
+      if (meterResult.rows[0].status !== "active") {
+        throw new ApiError(400, "Linked source meter is not active. Link the current active source meter.");
       }
     }
     if (rate_id) {
@@ -90,7 +107,7 @@ const createProductionMeter = asyncHandler(async (req, res) => {
       [
         zone_id || null,
         meter_type === "customer_source" ? customer_id : null,
-        meter_type === "customer_source" ? meter_id || null : null,
+        meter_type === "customer_source" ? meter_id : null,
         meter_type === "shared_source" ? rate_id : null,
         String(meter_number).trim(),
         name || null,
@@ -345,9 +362,14 @@ const resolveProductionMeters = async (client, activeOnly = true) => {
             c.rate_id AS customer_rate_id,
             c.name AS customer_name,
             c.acc_number,
+            cm.meter_number AS linked_meter_number,
+            cm.status AS linked_meter_status,
+            cm.initial_reading AS linked_meter_initial_reading,
+            cm.installed_at AS linked_meter_installed_at,
             r.name AS rate_name
      FROM production_source_meters psm
      LEFT JOIN customers c ON c.id = psm.customer_id
+     LEFT JOIN meters cm ON cm.id = psm.meter_id
      LEFT JOIN rates r ON r.id = COALESCE(c.rate_id, psm.rate_id)
      WHERE ($1::boolean = FALSE OR psm.status = 'active')
      ORDER BY psm.meter_number ASC`,
@@ -356,7 +378,77 @@ const resolveProductionMeters = async (client, activeOnly = true) => {
   return rows;
 };
 
-const getPreviousProductionReading = async (client, productionMeterId, readingDate) => {
+const resolveProductionMeter = async (client, productionMeterOrId) => {
+  if (productionMeterOrId && typeof productionMeterOrId === "object") return productionMeterOrId;
+  const { rows } = await client.query(
+    `SELECT psm.*,
+            cm.initial_reading AS linked_meter_initial_reading,
+            cm.installed_at AS linked_meter_installed_at,
+            cm.status AS linked_meter_status
+     FROM production_source_meters psm
+     LEFT JOIN meters cm ON cm.id = psm.meter_id
+     WHERE psm.id = $1`,
+    [productionMeterOrId]
+  );
+  return rows[0] || null;
+};
+
+const getLinkedSourceReadingFallback = async (client, meter, readingDate) => {
+  let linkedMeterId = meter?.meter_id || null;
+  let linkedInitialReading = meter?.linked_meter_initial_reading ?? meter?.initial_reading;
+  let linkedInstalledAt = meter?.linked_meter_installed_at || meter?.installed_at;
+  let contextPrefix = "linked_source";
+  if (!linkedMeterId && meter?.customer_id) {
+    const fallbackMeterResult = await client.query(
+      `SELECT id, initial_reading, installed_at
+       FROM meters
+       WHERE customer_id = $1
+         AND meter_role = 'source_backup'
+         AND status = 'active'
+       ORDER BY installed_at DESC, id DESC
+       LIMIT 1`,
+      [meter.customer_id]
+    );
+    if (fallbackMeterResult.rows[0]) {
+      linkedMeterId = fallbackMeterResult.rows[0].id;
+      linkedInitialReading = fallbackMeterResult.rows[0].initial_reading;
+      linkedInstalledAt = fallbackMeterResult.rows[0].installed_at;
+      contextPrefix = "customer_source_fallback";
+    }
+  }
+  if (!linkedMeterId) return null;
+  const latestSourceResult = await client.query(
+    `SELECT reading_value,
+            reading_date
+     FROM meter_readings
+     WHERE meter_id = $1
+       AND reading_date < $2
+     ORDER BY reading_date DESC, id DESC
+     LIMIT 1`,
+    [linkedMeterId, readingDate]
+  );
+  if (latestSourceResult.rows[0]) {
+    return {
+      ...latestSourceResult.rows[0],
+      context_source: `${contextPrefix}_reading`
+    };
+  }
+
+  const initialReading = linkedInitialReading;
+  const initialDate = dateOnly(linkedInstalledAt);
+  if (initialReading !== null && initialReading !== undefined && (!initialDate || initialDate < readingDate)) {
+    return {
+      reading_value: initialReading,
+      reading_date: initialDate || null,
+      context_source: `${contextPrefix}_initial_reading`
+    };
+  }
+  return null;
+};
+
+const getPreviousProductionReading = async (client, productionMeterOrId, readingDate) => {
+  const meter = await resolveProductionMeter(client, productionMeterOrId);
+  if (!meter) return null;
   const { rows } = await client.query(
     `SELECT pmr.*, pwr.reading_date
      FROM production_meter_readings pmr
@@ -365,9 +457,9 @@ const getPreviousProductionReading = async (client, productionMeterId, readingDa
        AND pwr.reading_date < $2
      ORDER BY pwr.reading_date DESC, pmr.id DESC
      LIMIT 1`,
-    [productionMeterId, readingDate]
+    [meter.id, readingDate]
   );
-  if (rows[0]) return rows[0];
+  if (rows[0]) return { ...rows[0], context_source: "production_weekly_reading" };
 
   const baselineResult = await client.query(
     `SELECT new_initial_reading AS reading_value,
@@ -377,9 +469,11 @@ const getPreviousProductionReading = async (client, productionMeterId, readingDa
        AND event_date < $2
      ORDER BY event_date DESC, id DESC
      LIMIT 1`,
-    [productionMeterId, readingDate]
+    [meter.id, readingDate]
   );
-  return baselineResult.rows[0] || null;
+  if (baselineResult.rows[0]) return { ...baselineResult.rows[0], context_source: "production_replacement_baseline" };
+
+  return getLinkedSourceReadingFallback(client, meter, readingDate);
 };
 
 const getProductionReadingContext = asyncHandler(async (req, res) => {
@@ -398,11 +492,12 @@ const getProductionReadingContext = asyncHandler(async (req, res) => {
   const meters = await resolveProductionMeters(pool);
   const readings = [];
   for (const meter of meters) {
-    const previous = await getPreviousProductionReading(pool, meter.id, readingDate);
+    const previous = await getPreviousProductionReading(pool, meter, readingDate);
     readings.push({
       production_meter_id: meter.id,
       previous_reading_value: previous?.reading_value ?? null,
-      previous_reading_date: previous?.reading_date ?? null
+      previous_reading_date: previous?.reading_date ?? null,
+      previous_context_source: previous?.context_source || null
     });
   }
 
