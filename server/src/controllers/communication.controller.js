@@ -29,6 +29,7 @@ const buildInvoiceTemplateValues = ({ row, business }) => {
   const businessName = business.business_name || "Water Billing";
   const currency = business.default_currency || "KES";
   const total = asNumber(row.total_amount || row.amount);
+  const paidAmount = Math.max(asNumber(row.recent_paid_amount), asNumber(row.paid_amount));
   const outstanding = Math.max(asNumber(row.gross_outstanding) - asNumber(row.credit_balance), 0);
   const priorOutstanding = Math.max(asNumber(row.prior_outstanding) - asNumber(row.credit_balance), 0);
   const invoicePeriod = row.billing_period_name || dateOnly(row.billing_month);
@@ -42,7 +43,7 @@ const buildInvoiceTemplateValues = ({ row, business }) => {
     current_reading: formatNumber(row.current_reading),
     units_consumed: formatNumber(row.units_used),
     amount: money(total, currency),
-    amount_paid: money(row.paid_amount, currency),
+    amount_paid: money(paidAmount, currency),
     arrears_after_payment: money(priorOutstanding, currency),
     total_outstanding: money(outstanding, currency),
     due_date: dateOnly(row.due_date),
@@ -172,6 +173,7 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
         latest_bill.balance_amount,
         latest_bill.due_date,
         latest_bill.status AS bill_status,
+        GREATEST(COALESCE(recent_payments.recent_paid_amount, 0), COALESCE(latest_bill.paid_amount, 0)) AS recent_paid_amount,
         COALESCE(customer_totals.gross_outstanding, 0) AS gross_outstanding,
         COALESCE(prior_totals.prior_outstanding, 0) AS prior_outstanding,
         COALESCE(customer_credit.credit_balance, 0) AS credit_balance
@@ -187,23 +189,93 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
        LIMIT 1
      ) portal_user ON TRUE
      LEFT JOIN LATERAL (
-       SELECT b.*, bp.name AS billing_period_name
+       SELECT
+         b.id,
+         b.bill_number,
+         b.billing_month,
+         bp.name AS billing_period_name,
+         b.previous_reading,
+         b.current_reading,
+         b.units_used,
+         b.amount,
+         COALESCE(NULLIF(b.total_amount, 0), b.amount, 0) AS total_amount,
+         GREATEST(COALESCE(b.paid_amount, 0), COALESCE(bill_allocations.allocated_amount, 0)) AS paid_amount,
+         GREATEST(
+           COALESCE(NULLIF(b.total_amount, 0), b.amount, 0) -
+             GREATEST(COALESCE(b.paid_amount, 0), COALESCE(bill_allocations.allocated_amount, 0)),
+           0
+         ) AS balance_amount,
+         b.due_date,
+         b.status
        FROM bills b
        LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(SUM(pa.amount), 0) AS allocated_amount
+         FROM payment_allocations pa
+         WHERE pa.bill_id = b.id
+       ) bill_allocations ON TRUE
        WHERE b.customer_id = c.id
          AND b.bill_pay_status = 'payable'
        ORDER BY b.billing_month DESC, b.created_at DESC, b.id DESC
        LIMIT 1
      ) latest_bill ON TRUE
      LEFT JOIN LATERAL (
+       SELECT b.billing_month
+       FROM bills b
+       WHERE b.customer_id = c.id
+         AND b.bill_pay_status = 'payable'
+         AND latest_bill.id IS NOT NULL
+         AND (
+           b.billing_month < latest_bill.billing_month
+           OR (b.billing_month = latest_bill.billing_month AND b.id < latest_bill.id)
+         )
+       ORDER BY b.billing_month DESC, b.created_at DESC, b.id DESC
+       LIMIT 1
+     ) previous_bill ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT COALESCE(SUM(p.amount), 0) AS recent_paid_amount
+       FROM payments p
+       WHERE p.customer_id = c.id
+         AND p.status = 'posted'
+         AND latest_bill.id IS NOT NULL
+         AND p.payment_date > COALESCE(previous_bill.billing_month, latest_bill.billing_month - INTERVAL '1 month')
+         AND p.payment_date <= CURRENT_DATE
+     ) recent_payments ON TRUE
+     LEFT JOIN LATERAL (
        SELECT COALESCE(SUM(balance_amount), 0) AS gross_outstanding
-       FROM bills
-       WHERE customer_id = c.id
-         AND bill_pay_status = 'payable'
+       FROM (
+         SELECT GREATEST(
+                  COALESCE(NULLIF(b.total_amount, 0), b.amount, 0) -
+                    GREATEST(COALESCE(b.paid_amount, 0), COALESCE(bill_allocations.allocated_amount, 0)),
+                  0
+                ) AS balance_amount
+         FROM bills b
+         LEFT JOIN LATERAL (
+           SELECT COALESCE(SUM(pa.amount), 0) AS allocated_amount
+           FROM payment_allocations pa
+           WHERE pa.bill_id = b.id
+         ) bill_allocations ON TRUE
+         WHERE b.customer_id = c.id
+           AND b.bill_pay_status = 'payable'
+       ) balances
      ) customer_totals ON TRUE
      LEFT JOIN LATERAL (
        SELECT COALESCE(SUM(balance_amount), 0) AS prior_outstanding
+       FROM (
+         SELECT
+           b.billing_month,
+           b.id,
+           GREATEST(
+             COALESCE(NULLIF(b.total_amount, 0), b.amount, 0) -
+               GREATEST(COALESCE(b.paid_amount, 0), COALESCE(bill_allocations.allocated_amount, 0)),
+             0
+           ) AS balance_amount
        FROM bills b
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(SUM(pa.amount), 0) AS allocated_amount
+         FROM payment_allocations pa
+         WHERE pa.bill_id = b.id
+       ) bill_allocations ON TRUE
        WHERE b.customer_id = c.id
          AND b.bill_pay_status = 'payable'
          AND b.status <> 'paid'
@@ -212,6 +284,7 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
            b.billing_month < latest_bill.billing_month
            OR (b.billing_month = latest_bill.billing_month AND b.id < latest_bill.id)
          )
+       ) balances
      ) prior_totals ON TRUE
      LEFT JOIN LATERAL (
        SELECT COALESCE(SUM(unallocated_amount), 0) AS credit_balance
@@ -271,7 +344,7 @@ const mapInvoicePreviewRow = ({ row, business }) => {
     current_reading: row.current_reading,
     units_used: row.units_used,
     amount: row.total_amount || row.amount,
-    amount_paid: row.paid_amount,
+    amount_paid: Math.max(asNumber(row.recent_paid_amount), asNumber(row.paid_amount)),
     arrears_after_payment: Math.max(asNumber(row.prior_outstanding) - asNumber(row.credit_balance), 0),
     total_outstanding: totalOutstanding,
     due_date: row.due_date,
