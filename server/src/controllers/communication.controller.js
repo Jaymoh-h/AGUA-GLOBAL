@@ -30,8 +30,8 @@ const buildInvoiceTemplateValues = ({ row, business }) => {
   const currency = business.default_currency || "KES";
   const total = asNumber(row.total_amount || row.amount);
   const paidAmount = asNumber(row.recent_paid_amount);
-  const outstanding = Math.max(asNumber(row.gross_outstanding) - asNumber(row.credit_balance), 0);
-  const priorOutstanding = Math.max(asNumber(row.prior_outstanding) - asNumber(row.credit_balance), 0);
+  const outstanding = asNumber(row.statement_total_outstanding);
+  const priorOutstanding = asNumber(row.statement_arrears_after_payment);
   const invoicePeriod = row.billing_period_name || dateOnly(row.billing_month);
 
   return {
@@ -176,7 +176,9 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
         COALESCE(recent_payments.recent_paid_amount, 0) AS recent_paid_amount,
         COALESCE(customer_totals.gross_outstanding, 0) AS gross_outstanding,
         COALESCE(prior_totals.prior_outstanding, 0) AS prior_outstanding,
-        COALESCE(customer_credit.credit_balance, 0) AS credit_balance
+        COALESCE(customer_credit.credit_balance, 0) AS credit_balance,
+        COALESCE(statement_totals.arrears_after_payment, 0) AS statement_arrears_after_payment,
+        COALESCE(statement_totals.total_outstanding, 0) AS statement_total_outstanding
      FROM customers c
      LEFT JOIN zones z ON z.id = c.zone_id
      LEFT JOIN LATERAL (
@@ -303,6 +305,62 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
        WHERE customer_id = c.id
          AND status = 'posted'
      ) customer_credit ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT
+         GREATEST(prior_debits - prior_credits, 0) AS arrears_after_payment,
+         GREATEST(prior_debits - prior_credits + COALESCE(latest_bill.total_amount, 0), 0) AS total_outstanding
+       FROM (
+         SELECT
+           COALESCE((
+             SELECT SUM(COALESCE(NULLIF(b.total_amount, 0), b.amount, 0))
+             FROM bills b
+             WHERE b.customer_id = c.id
+               AND b.bill_pay_status = 'payable'
+               AND latest_bill.id IS NOT NULL
+               AND (
+                 b.billing_month < latest_bill.billing_month
+                 OR (b.billing_month = latest_bill.billing_month AND b.id < latest_bill.id)
+               )
+           ), 0) +
+           CASE
+             WHEN COALESCE(c.opening_balance_amount, 0) > 0
+              AND c.opening_balance_date <= COALESCE(
+                latest_bill.issued_at::date,
+                latest_bill.created_at::date,
+                CURRENT_DATE
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM bills mb
+                WHERE mb.customer_id = c.id
+                  AND mb.bill_number = 'MIG-' || c.id::text
+              )
+             THEN c.opening_balance_amount
+             ELSE 0
+           END AS prior_debits,
+           COALESCE((
+             SELECT SUM(p.amount)
+             FROM payments p
+             WHERE p.customer_id = c.id
+               AND p.status = 'posted'
+               AND latest_bill.id IS NOT NULL
+               AND p.payment_date <= COALESCE(
+                 latest_bill.issued_at::date,
+                 latest_bill.created_at::date,
+                 CURRENT_DATE
+               )
+           ), 0) +
+           CASE
+             WHEN COALESCE(c.opening_balance_amount, 0) < 0
+              AND c.opening_balance_date <= COALESCE(
+                latest_bill.issued_at::date,
+                latest_bill.created_at::date,
+                CURRENT_DATE
+              )
+             THEN ABS(c.opening_balance_amount)
+             ELSE 0
+           END AS prior_credits
+       ) ledger
+     ) statement_totals ON TRUE
      WHERE c.status = 'active'
        ${customerClause}
      ORDER BY c.name ASC, c.id ASC`,
@@ -315,7 +373,8 @@ const mapInvoicePreviewRow = ({ row, business }) => {
   const normalizedPhone = normalizePhoneNumber(row.phone);
   const normalizedWhatsApp = normalizeWhatsAppNumber(row.phone);
   const hasInvoice = Boolean(row.bill_id);
-  const totalOutstanding = Math.max(asNumber(row.gross_outstanding) - asNumber(row.credit_balance), 0);
+  const arrearsAfterPayment = asNumber(row.statement_arrears_after_payment);
+  const totalOutstanding = asNumber(row.statement_total_outstanding);
   const contacts = {
     email: {
       value: row.email || "",
@@ -356,7 +415,7 @@ const mapInvoicePreviewRow = ({ row, business }) => {
     units_used: row.units_used,
     amount: row.total_amount || row.amount,
     amount_paid: asNumber(row.recent_paid_amount),
-    arrears_after_payment: Math.max(asNumber(row.prior_outstanding) - asNumber(row.credit_balance), 0),
+    arrears_after_payment: arrearsAfterPayment,
     total_outstanding: totalOutstanding,
     due_date: row.due_date,
     contacts,
