@@ -597,7 +597,7 @@ const getCustomerStatement = asyncHandler(async (req, res) => {
          COALESCE(bp.name, to_char(b.billing_month, 'FMMonth YYYY')) AS description,
          COALESCE(NULLIF(b.total_amount, 0), b.amount) AS debit,
          0::numeric AS credit,
-         1 AS sort_order
+         2 AS sort_order
        FROM bills b
        LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
        WHERE b.customer_id = $1
@@ -629,7 +629,7 @@ const getCustomerStatement = asyncHandler(async (req, res) => {
          'Payment via ' || replace(p.payment_channel, '_', ' ') AS description,
          0::numeric AS debit,
          p.amount AS credit,
-         2 AS sort_order
+         1 AS sort_order
        FROM payments p
        WHERE p.customer_id = $1
          AND p.status = 'posted'

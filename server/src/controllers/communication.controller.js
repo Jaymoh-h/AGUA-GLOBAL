@@ -246,10 +246,10 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
            previous_bill.billing_month,
            latest_bill.billing_month - INTERVAL '1 month'
          )
-         AND p.payment_date < COALESCE(
+         AND p.payment_date <= COALESCE(
            latest_bill.issued_at::date,
            latest_bill.created_at::date,
-           CURRENT_DATE + INTERVAL '1 day'
+           CURRENT_DATE
          )
      ) recent_payments ON TRUE
      LEFT JOIN LATERAL (
