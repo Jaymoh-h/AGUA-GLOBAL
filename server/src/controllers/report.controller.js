@@ -542,6 +542,104 @@ const getReportsSummary = asyncHandler(async (_req, res) => {
      LIMIT 100`
   );
 
+  const clientFinancialSummary = await pool.query(
+    `WITH financial_base AS (
+       SELECT
+         c.id,
+         c.name AS customer,
+         c.acc_number,
+         latest_bill.period_name AS last_billed_period,
+         latest_bill.due_date AS last_due_date,
+         last_payment.payment_date AS last_payment_date,
+         last_payment.amount AS last_payment_amount,
+         COALESCE(bill_totals.billed_amount, 0) +
+           CASE
+             WHEN COALESCE(c.opening_balance_amount, 0) > 0
+              AND NOT EXISTS (
+                SELECT 1 FROM bills mb
+                WHERE mb.customer_id = c.id
+                  AND mb.bill_number = 'MIG-' || c.id::text
+              )
+             THEN c.opening_balance_amount
+             ELSE 0
+           END -
+           COALESCE(payment_totals.paid_amount, 0) -
+           CASE
+             WHEN COALESCE(c.opening_balance_amount, 0) < 0 THEN ABS(c.opening_balance_amount)
+             ELSE 0
+           END AS current_outstanding,
+         COALESCE(open_bill_totals.open_bills, 0) AS open_bills,
+         COALESCE(open_bill_totals.months_unpaid, 0) AS months_unpaid,
+         COALESCE(open_bill_totals.has_overdue, FALSE) AS has_overdue,
+         COALESCE(open_bill_totals.has_partial, FALSE) AS has_partial
+       FROM customers c
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(SUM(COALESCE(NULLIF(b.total_amount, 0), b.amount, 0)), 0) AS billed_amount
+         FROM bills b
+         WHERE b.customer_id = c.id
+           AND b.bill_pay_status = 'payable'
+       ) bill_totals ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(SUM(p.amount), 0) AS paid_amount
+         FROM payments p
+         WHERE p.customer_id = c.id
+           AND p.status = 'posted'
+       ) payment_totals ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT
+           COUNT(*) AS open_bills,
+           COUNT(DISTINCT COALESCE(b.billing_period_id::text, b.billing_month::text)) AS months_unpaid,
+           BOOL_OR(COALESCE(b.due_date, b.billing_month) < CURRENT_DATE) AS has_overdue,
+           BOOL_OR(b.status = 'partial' OR COALESCE(b.paid_amount, 0) > 0) AS has_partial
+         FROM bills b
+         WHERE b.customer_id = c.id
+           AND b.bill_pay_status = 'payable'
+           AND b.status <> 'paid'
+           AND COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount) > 0
+       ) open_bill_totals ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT
+           COALESCE(bp.name, to_char(b.billing_month, 'FMMonth YYYY')) AS period_name,
+           b.due_date
+         FROM bills b
+         LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
+         WHERE b.customer_id = c.id
+           AND b.bill_pay_status = 'payable'
+         ORDER BY b.billing_month DESC, b.created_at DESC, b.id DESC
+         LIMIT 1
+       ) latest_bill ON TRUE
+       LEFT JOIN LATERAL (
+         SELECT p.payment_date, p.amount
+         FROM payments p
+         WHERE p.customer_id = c.id
+           AND p.status = 'posted'
+         ORDER BY p.payment_date DESC, p.created_at DESC, p.id DESC
+         LIMIT 1
+       ) last_payment ON TRUE
+     )
+     SELECT
+       id,
+       customer,
+       acc_number,
+       last_billed_period,
+       last_due_date,
+       last_payment_date,
+       last_payment_amount,
+       current_outstanding,
+       open_bills,
+       months_unpaid,
+       CASE
+         WHEN current_outstanding < 0 THEN 'In credit'
+         WHEN current_outstanding = 0 THEN 'Paid up'
+         WHEN has_overdue THEN 'Overdue'
+         WHEN has_partial THEN 'Partial'
+         ELSE 'Unpaid'
+       END AS payment_status
+     FROM financial_base
+     ORDER BY current_outstanding DESC, months_unpaid DESC, customer ASC
+     LIMIT 1000`
+  );
+
   const zoneReadingSummary = await pool.query(
     `WITH latest_readings AS (
        SELECT DISTINCT ON (mr.customer_id)
@@ -679,6 +777,7 @@ const getReportsSummary = asyncHandler(async (_req, res) => {
     collectionsSummary: collectionsSummary.rows,
     agingSummary: agingSummary.rows,
     customerBalances: customerBalances.rows,
+    clientFinancialSummary: clientFinancialSummary.rows,
     zoneReadingSummary: zoneReadingSummary.rows,
     maintenanceTotals: maintenanceTotals.rows[0],
     maintenanceByStatus: maintenanceByStatus.rows,

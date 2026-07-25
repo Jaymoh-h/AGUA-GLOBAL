@@ -9,6 +9,7 @@ import { api, assetUrl } from "../services/api";
 import { withPrintTitle } from "../utils/exportNames";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
+const moneyOrDash = (value) => (value === null || value === undefined ? "-" : money(value));
 const number = (value) => Number(value || 0).toLocaleString();
 const date = (value) => value?.slice(0, 10) || "-";
 const label = (value) => String(value || "-").replaceAll("_", " ");
@@ -49,6 +50,7 @@ const managementReportTitles = {
   agingAnalysis: "Aging Analysis",
   collections: "Collections",
   routeSummary: "Route Reading Summary",
+  clientFinancialSummary: "Client Financial Summary",
   customerBalances: "Customer Balances",
   maintenanceStatus: "Maintenance Status",
   maintenanceCategory: "Maintenance By Category",
@@ -194,6 +196,20 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const customerBalanceTable = useTableControls(data?.customerBalances || [], {
     searchFields: ["name", "acc_number", "zone_name", "open_bills", "oldest_due_date", "balance_due"]
   });
+  const clientFinancialSummaryTable = useTableControls(data?.clientFinancialSummary || [], {
+    searchFields: [
+      "customer",
+      "acc_number",
+      "last_billed_period",
+      "last_due_date",
+      "last_payment_date",
+      "last_payment_amount",
+      "current_outstanding",
+      "open_bills",
+      "months_unpaid",
+      "payment_status"
+    ]
+  });
   const billingRegisterTable = useTableControls(accountantData?.billingRegister || [], {
     searchFields: ["bill_number", "billing_period_name", "billing_month", "customer_name", "acc_number", "zone_name", "balance_amount"]
   });
@@ -255,6 +271,9 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   });
   const maintenanceRegisterRows = printAllRows ? maintenanceRegisterTable.filteredRows : maintenanceRegisterTable.visibleRows;
   const customerBalanceRows = printAllRows ? customerBalanceTable.filteredRows : customerBalanceTable.visibleRows;
+  const clientFinancialSummaryRows = printAllRows
+    ? clientFinancialSummaryTable.filteredRows
+    : clientFinancialSummaryTable.visibleRows;
   const billingRegisterRows = printAllRows ? billingRegisterTable.filteredRows : billingRegisterTable.visibleRows;
   const meterConsumptionComparisonRows = printAllRows
     ? meterConsumptionComparisonTable.filteredRows
@@ -327,6 +346,10 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const customerBalanceTotals = {
     open_bills: countRows(customerBalanceRows, "open_bills"),
     balance_due: sumRows(customerBalanceRows, "balance_due")
+  };
+  const clientFinancialSummaryTotals = {
+    current_outstanding: sumRows(clientFinancialSummaryRows, "current_outstanding"),
+    open_bills: countRows(clientFinancialSummaryRows, "open_bills")
   };
   const billingRegisterTotals = {
     units_used: sumRows(billingRegisterRows, "units_used"),
@@ -430,6 +453,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
     { key: "maintenanceZone", title: "Maintenance By Zone", detail: `${number(maintenanceZoneTotals.urgent_count)} urgent` },
     { key: "maintenanceAssignee", title: "Maintenance Assignment", detail: `${number(maintenanceAssigneeTotals.request_count)} assigned/open requests` },
     { key: "maintenanceRegister", title: "Maintenance Register", detail: `${number(maintenanceRegisterTable.total)} records` },
+    { key: "clientFinancialSummary", title: "Client Financial Summary", detail: `${number(clientFinancialSummaryTable.total)} clients | ${money(clientFinancialSummaryTotals.current_outstanding)} outstanding` },
     { key: "customerBalances", title: "Customer Balances", detail: `${number(customerBalanceTable.total)} customers | ${money(customerBalanceTotals.balance_due)} balance` }
   ];
   const accountantReportCatalog = [
@@ -1081,6 +1105,63 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 ) : (
                   <EmptyRow colSpan={8} />
                 )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className={reportSectionClass("panel full-span management-section management-section-clientFinancialSummary", showManagementReport("clientFinancialSummary"))}>
+          <div className="panel-heading">
+            <h3>Client Financial Summary</h3>
+            <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "clientFinancialSummary")} title="Print client financial summary">
+              <Printer size={17} />
+            </button>
+          </div>
+          <TableControls table={clientFinancialSummaryTable} label="clients" placeholder="Search client finances" />
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Acc Number</th>
+                  <th>Last Billed Period</th>
+                  <th>Last Due Date</th>
+                  <th>Last Payment Date</th>
+                  <th>Last Payment Amount</th>
+                  <th>Current Outstanding</th>
+                  <th>Open Bills</th>
+                  <th>Months Unpaid</th>
+                  <th>Payment Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {clientFinancialSummaryTable.total ? (
+                  clientFinancialSummaryRows.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.customer}</td>
+                      <td>{row.acc_number}</td>
+                      <td>{row.last_billed_period || "-"}</td>
+                      <td>{date(row.last_due_date)}</td>
+                      <td>{date(row.last_payment_date)}</td>
+                      <td>{moneyOrDash(row.last_payment_amount)}</td>
+                      <td>{money(row.current_outstanding)}</td>
+                      <td>{number(row.open_bills)}</td>
+                      <td>{number(row.months_unpaid)}</td>
+                      <td>{row.payment_status}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <EmptyRow colSpan={10} />
+                )}
+                {clientFinancialSummaryTable.total ? (
+                  <tr className="muted-total">
+                    <td colSpan="6"><strong>Total</strong></td>
+                    <td><strong>{money(clientFinancialSummaryTotals.current_outstanding)}</strong></td>
+                    <td><strong>{number(clientFinancialSummaryTotals.open_bills)}</strong></td>
+                    <td>-</td>
+                    <td>-</td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>

@@ -3340,6 +3340,7 @@ td {
   .active-print-surface.report-print-agingAnalysis .management-section-agingAnalysis,
   .active-print-surface.report-print-collections .management-section-collections,
   .active-print-surface.report-print-routeSummary .management-section-routeSummary,
+  .active-print-surface.report-print-clientFinancialSummary .management-section-clientFinancialSummary,
   .active-print-surface.report-print-customerBalances .management-section-customerBalances,
   .active-print-surface.report-print-maintenanceStatus .management-section-maintenanceStatus,
   .active-print-surface.report-print-maintenanceCategory .management-section-maintenanceCategory,
