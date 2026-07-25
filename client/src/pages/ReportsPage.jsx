@@ -4,6 +4,7 @@ import { flushSync } from "react-dom";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
 import StatCard from "../components/StatCard";
+import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { api, assetUrl } from "../services/api";
 import { withPrintTitle } from "../utils/exportNames";
@@ -13,6 +14,7 @@ const moneyOrDash = (value) => (value === null || value === undefined ? "-" : mo
 const number = (value) => Number(value || 0).toLocaleString();
 const date = (value) => value?.slice(0, 10) || "-";
 const label = (value) => String(value || "-").replaceAll("_", " ");
+const statusKey = (value) => String(value || "").toLowerCase().replace(/\s+/g, "_");
 const percent = (value) => `${(Number(value || 0) * 100).toFixed(2)}%`;
 const sumRows = (rows, field) => rows.reduce((sum, row) => sum + Number(row?.[field] || 0), 0);
 const countRows = (rows, field) => rows.reduce((sum, row) => sum + Number(row?.[field] || 0), 0);
@@ -1147,7 +1149,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                       <td>{money(row.current_outstanding)}</td>
                       <td>{number(row.open_bills)}</td>
                       <td>{number(row.months_unpaid)}</td>
-                      <td>{row.payment_status}</td>
+                      <td><StatusBadge status={statusKey(row.payment_status)} /></td>
                     </tr>
                   ))
                 ) : (

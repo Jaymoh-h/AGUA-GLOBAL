@@ -2743,11 +2743,22 @@ td {
   color: #166534;
 }
 
+.status-paid_up {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-in_credit {
+  background: #e0f2fe;
+  color: #075985;
+}
+
 .status-partial {
   background: #fef3c7;
   color: #92400e;
 }
 
+.status-overdue,
 .status-unpaid {
   background: #fee2e2;
   color: #991b1b;
