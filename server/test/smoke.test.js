@@ -113,6 +113,24 @@ describe("AGUA Global API smoke", { skip: !shouldRun }, () => {
     assert.ok(dashboard.data.summary, "dashboard should include summary data");
   });
 
+  it("lists active contexts and rejects unavailable in-session context switches", async () => {
+    const email = process.env.TEST_ADMIN_EMAIL || "admin@agua.local";
+    const password = process.env.TEST_ADMIN_PASSWORD || "Admin@123";
+    const { session } = await login(email, password);
+
+    const contexts = await request("/api/auth/contexts", { session });
+    assert.equal(contexts.response.status, 200, contexts.data.message || "contexts endpoint failed");
+    assert.ok(Array.isArray(contexts.data.contexts), "contexts should be an array");
+    assert.ok(contexts.data.contexts.length >= 1, "at least one active context should be available");
+
+    const switchAttempt = await request("/api/auth/switch-context", {
+      session,
+      method: "POST",
+      body: { access_profile_id: 2147483647 }
+    });
+    assert.equal(switchAttempt.response.status, 403);
+  });
+
   it("requires CSRF token for cookie-authenticated writes", async () => {
     const email = process.env.TEST_ADMIN_EMAIL || "admin@agua.local";
     const password = process.env.TEST_ADMIN_PASSWORD || "Admin@123";

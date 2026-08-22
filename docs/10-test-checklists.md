@@ -29,6 +29,9 @@ Use these checklists before demos, production deployments, and major commits.
 - Business viewer can view dashboard, reports, audit, monitoring summaries, bills, payments, production, payroll, contractor invoice summaries, and shared knowledge documents.
 - Business viewer cannot create, update, approve, post, delete, import, or send records.
 - Multi-context user is prompted to select an access context after login.
+- Multi-context user can switch workspace from the sidebar without logging out; the destination changes to the staff dashboard or customer portal as appropriate.
+- A context switch refreshes visible navigation and rejects profiles not owned by the logged-in user or marked inactive.
+- Confirm `auth.context_switched` appears in the audit trail with the previous and new profiles.
 - Cron routes reject requests without the configured secret.
 
 ## Customer Setup Test

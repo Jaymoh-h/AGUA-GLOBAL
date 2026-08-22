@@ -2,6 +2,8 @@ const express = require("express");
 const {
   login,
   selectContext,
+  listContexts,
+  switchContext,
   me,
   logout,
   requestPasswordReset,
@@ -17,6 +19,8 @@ router.post("/select-context", selectContext);
 router.post("/password-reset/request", requestPasswordReset);
 router.post("/password-reset/confirm", resetPassword);
 router.get("/me", authenticate, me);
+router.get("/contexts", authenticate, listContexts);
+router.post("/switch-context", authenticate, switchContext);
 router.post("/change-password", authenticate, changePassword);
 router.post("/logout", authenticate, logout);
 

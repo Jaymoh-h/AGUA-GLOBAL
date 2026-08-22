@@ -12,7 +12,8 @@ Foundation:
 - JWT authentication.
 - Roles: admin, accountant, meter_reader, customer, business_viewer.
 - Business viewer role for read-oriented oversight.
-- User access profiles and login context selection.
+- User access profiles with login context selection and in-session workspace switching.
+- Context switches rotate the browser session and CSRF token, refresh the destination workspace, and create `auth.context_switched` audit events.
 - Tracked SQL migration runner with `schema_migrations` checksums and status output.
 
 Customer and setup:

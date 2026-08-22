@@ -41,6 +41,7 @@ const publicSurface = () => {
 
 function App() {
   const [user, setUser] = useState(null);
+  const [accessContexts, setAccessContexts] = useState([]);
   const [authChecked, setAuthChecked] = useState(false);
   const [currentPage, setCurrentPage] = useState("dashboard");
   const [navigationIntent, setNavigationIntent] = useState(null);
@@ -48,6 +49,8 @@ function App() {
   const [businessSettings, setBusinessSettings] = useState({});
   const [sessionMessage, setSessionMessage] = useState("");
   const [futureDateOverride, setFutureDateOverride] = useState(null);
+  const [switchingContext, setSwitchingContext] = useState(false);
+  const [contextSwitchError, setContextSwitchError] = useState("");
   const surface = publicSurface();
   const isPasswordReset = new URLSearchParams(window.location.search).has("reset_token");
 
@@ -76,9 +79,10 @@ function App() {
     let cancelled = false;
     api
       .me()
-      .then(({ user: nextUser }) => {
+      .then(({ user: nextUser, contexts }) => {
         if (cancelled || !nextUser) return;
         setUser(nextUser);
+        setAccessContexts(Array.isArray(contexts) ? contexts : []);
         setCurrentPage(nextUser.role === "customer" ? "portal" : "dashboard");
       })
       .catch(() => {
@@ -167,13 +171,22 @@ function App() {
     };
   }, [user]);
 
-  const handleLogin = ({ user: nextUser }) => {
+  const handleLogin = async ({ user: nextUser, contexts }) => {
     localStorage.removeItem("agua_token");
     localStorage.removeItem("agua_user");
     setSessionMessage("");
+    setContextSwitchError("");
     setUser(nextUser);
-    if (nextUser.role === "customer") {
-      setCurrentPage("portal");
+    setCurrentPage(nextUser.role === "customer" ? "portal" : "dashboard");
+    if (Array.isArray(contexts)) {
+      setAccessContexts(contexts);
+      return;
+    }
+    try {
+      const contextData = await api.contexts();
+      setAccessContexts(Array.isArray(contextData.contexts) ? contextData.contexts : []);
+    } catch (_error) {
+      setAccessContexts([]);
     }
   };
 
@@ -190,6 +203,24 @@ function App() {
 
   const clearNavigationIntent = () => setNavigationIntent(null);
 
+  const handleSwitchContext = async (accessProfileId) => {
+    if (!accessProfileId || Number(accessProfileId) === Number(user?.access_profile_id)) return;
+
+    setSwitchingContext(true);
+    setContextSwitchError("");
+    try {
+      const data = await api.switchContext(accessProfileId);
+      setUser(data.user);
+      setAccessContexts(Array.isArray(data.contexts) ? data.contexts : accessContexts);
+      setNavigationIntent(null);
+      setCurrentPage(data.user.role === "customer" ? "portal" : "dashboard");
+    } catch (error) {
+      setContextSwitchError(error.message || "Unable to switch workspace.");
+    } finally {
+      setSwitchingContext(false);
+    }
+  };
+
   const handleLogout = async (message = "") => {
     await api.logout().catch(() => {});
     clearSessionState();
@@ -197,6 +228,8 @@ function App() {
     localStorage.removeItem("agua_user");
     setSessionMessage(typeof message === "string" ? message : "");
     setUser(null);
+    setAccessContexts([]);
+    setContextSwitchError("");
     setCurrentPage("dashboard");
   };
 
@@ -258,8 +291,18 @@ function App() {
 
   return (
     <ToastProvider>
-      <Layout appName={appName} user={user} currentPage={currentPage} onNavigate={handleNavigate} onLogout={handleLogout}>
-        <AppErrorBoundary key={currentPage}>
+      <Layout
+        appName={appName}
+        user={user}
+        accessContexts={accessContexts}
+        currentPage={currentPage}
+        onNavigate={handleNavigate}
+        onSwitchContext={handleSwitchContext}
+        switchingContext={switchingContext}
+        contextSwitchError={contextSwitchError}
+        onLogout={handleLogout}
+      >
+        <AppErrorBoundary key={`${user.access_profile_id || "legacy"}:${currentPage}`}>
           <Suspense
             fallback={
               <div className="panel">

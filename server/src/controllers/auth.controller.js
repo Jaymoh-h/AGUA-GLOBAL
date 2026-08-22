@@ -105,6 +105,11 @@ const sendSessionResponse = (res, user, profile = null) => {
   });
 };
 
+const listActiveAccessProfiles = async (user) => {
+  const profiles = await listAccessProfiles(pool, user.id, { activeOnly: true });
+  return profiles.length ? profiles : [legacyProfileFromUser(user)];
+};
+
 const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
@@ -129,8 +134,7 @@ const login = asyncHandler(async (req, res) => {
     throw new ApiError(401, "Invalid email or password.");
   }
 
-  const profiles = await listAccessProfiles(pool, user.id, { activeOnly: true });
-  const activeProfiles = profiles.length ? profiles : [legacyProfileFromUser(user)];
+  const activeProfiles = await listActiveAccessProfiles(user);
 
   if (activeProfiles.length > 1) {
     return res.json({
@@ -175,6 +179,45 @@ const selectContext = asyncHandler(async (req, res) => {
 
   const loginResult = await pool.query("UPDATE users SET last_login_at = NOW() WHERE id = $1 RETURNING *", [user.id]);
   sendSessionResponse(res, loginResult.rows[0], profile);
+});
+
+const listContexts = asyncHandler(async (req, res) => {
+  const contexts = await listActiveAccessProfiles(req.user);
+  res.json({ contexts: contexts.map(publicAccessProfile) });
+});
+
+const switchContext = asyncHandler(async (req, res) => {
+  const { access_profile_id: accessProfileId } = req.body;
+  if (!accessProfileId) {
+    throw new ApiError(400, "Access context is required.");
+  }
+
+  const contexts = await listActiveAccessProfiles(req.user);
+  const profile = contexts.find((item) => Number(item.id) === Number(accessProfileId));
+  if (!profile) throw new ApiError(403, "Selected access context is not available.");
+
+  const currentProfile =
+    contexts.find((item) => Number(item.id) === Number(req.user.access_profile_id)) ||
+    legacyProfileFromUser(req.user);
+
+  await recordAuditEvent(pool, {
+    req,
+    actorUserId: req.user.id,
+    action: "auth.context_switched",
+    entityType: "user",
+    entityId: req.user.id,
+    beforeData: publicAccessProfile(currentProfile),
+    afterData: publicAccessProfile(profile),
+    reason: "Active access context switched"
+  });
+
+  const session = signUserSession(req.user, profile);
+  setSessionCookie(res, session.token);
+  res.json({
+    user: publicUser(req.user, profile),
+    contexts: contexts.map(publicAccessProfile),
+    csrf_token: session.csrfToken
+  });
 });
 
 const requestPasswordReset = asyncHandler(async (req, res) => {
@@ -305,8 +348,10 @@ const me = asyncHandler(async (req, res) => {
         is_default: false
       }
     : null;
+  const contexts = await listActiveAccessProfiles(req.user);
   res.json({
     user: publicUser(req.user, currentProfile),
+    contexts: contexts.map(publicAccessProfile),
     csrf_token: req.auth?.csrfToken || null
   });
 });
@@ -364,6 +409,8 @@ const changePassword = asyncHandler(async (req, res) => {
 module.exports = {
   login,
   selectContext,
+  listContexts,
+  switchContext,
   me,
   logout,
   requestPasswordReset,

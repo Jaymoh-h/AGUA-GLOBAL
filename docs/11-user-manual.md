@@ -11,6 +11,16 @@ This user manual describes the main business workflows for AGUA Global users.
 
 Visible modules depend on the logged-in user's role.
 
+## Switching Workspaces
+
+Users assigned more than one active access context can change workspaces without logging out.
+
+1. Use the Workspace selector below your name in the sidebar.
+2. Select the required staff console or customer portal context.
+3. The application opens the matching dashboard or portal and refreshes the available navigation.
+
+Only active contexts assigned to the logged-in account are listed. The switch is recorded in the audit trail.
+
 ## Admin Workflow
 
 Admin typically:

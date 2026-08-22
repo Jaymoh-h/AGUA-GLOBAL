@@ -22,7 +22,7 @@ Permissions are enforced mainly in route files under `server/src/routes/` using 
 
 ## Access Contexts
 
-Users can have one or more access profiles. If more than one active profile exists, login returns a context selection step before issuing the final browser session.
+Users can have one or more access profiles. If more than one active profile exists, login returns a context selection step before issuing the final browser session. After login, the sidebar shows a Workspace selector for the same active profiles, so the user can switch contexts without logging out.
 
 Access contexts support cases such as:
 
@@ -30,7 +30,7 @@ Access contexts support cases such as:
 - A user with separate administrative and customer-portal contexts.
 - Customer users linked to more than one customer account through portal links.
 
-The selected access profile controls the active role and optional customer scope in the signed session.
+The selected access profile controls the active role and optional customer scope in the signed session. Each in-session switch is ownership-checked, issues a fresh HttpOnly session cookie and CSRF token, resets the interface to the matching dashboard or customer portal, and is recorded as `auth.context_switched` in the audit trail.
 
 ## Admin
 

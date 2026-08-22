@@ -51,8 +51,26 @@ export const navItems = [
 
 export const pageAccess = Object.fromEntries(navItems.map((item) => [item.key, item.roles]));
 
-function Layout({ appName, user, currentPage, onNavigate, onLogout, children }) {
+const contextLabel = (context) => {
+  const label = context.label || String(context.role || "").replace(/_/g, " ");
+  if (!context.customer_acc_number) return label;
+  return `${label}: ${context.customer_acc_number}${context.customer_name ? ` - ${context.customer_name}` : ""}`;
+};
+
+function Layout({
+  appName,
+  user,
+  accessContexts = [],
+  currentPage,
+  onNavigate,
+  onSwitchContext,
+  switchingContext = false,
+  contextSwitchError = "",
+  onLogout,
+  children
+}) {
   const visibleItems = navItems.filter((item) => item.roles.includes(user.role));
+  const canSwitchContext = accessContexts.length > 1;
 
   return (
     <div className="shell">
@@ -86,9 +104,31 @@ function Layout({ appName, user, currentPage, onNavigate, onLogout, children }) 
         </nav>
 
         <div className="sidebar-footer">
-          <div>
+          <div className="sidebar-user">
             <strong>{user.name}</strong>
             <small>{user.access_profile_label || user.role.replace("_", " ")}</small>
+            {canSwitchContext ? (
+              <label className="workspace-switcher">
+                <span>Workspace</span>
+                <select
+                  aria-label="Switch workspace"
+                  value={String(user.access_profile_id || "")}
+                  onChange={(event) => onSwitchContext(event.target.value)}
+                  disabled={switchingContext}
+                >
+                  {accessContexts.map((context) => (
+                    <option key={context.id} value={context.id}>
+                      {contextLabel(context)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {contextSwitchError ? (
+              <small className="workspace-switch-error" role="alert">
+                {contextSwitchError}
+              </small>
+            ) : null}
           </div>
           <button className="icon-button" onClick={() => onLogout()} type="button" title="Log out">
             <LogOut size={18} />

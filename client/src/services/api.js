@@ -121,6 +121,8 @@ export const api = {
   resetPassword: (token, newPassword) =>
     request("/auth/password-reset/confirm", { method: "POST", body: { token, new_password: newPassword } }),
   me: () => request("/auth/me"),
+  contexts: () => request("/auth/contexts"),
+  switchContext: (accessProfileId) => request("/auth/switch-context", { method: "POST", body: { access_profile_id: accessProfileId } }),
   logout: () => request("/auth/logout", { method: "POST" }).finally(clearSessionState),
   changePassword: (currentPassword, newPassword) =>
     request("/auth/change-password", {

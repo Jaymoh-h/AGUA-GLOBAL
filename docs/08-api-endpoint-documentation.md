@@ -31,6 +31,8 @@ Authorization: Bearer <token>
 | --- | --- | --- | --- |
 | `POST` | `/auth/login` | Public | Login and receive an HttpOnly session cookie plus CSRF token |
 | `POST` | `/auth/select-context` | Public with context token | Select an access context after login |
+| `GET` | `/auth/contexts` | Authenticated | List the current user's active access contexts |
+| `POST` | `/auth/switch-context` | Authenticated | Switch the active access context and rotate the session and CSRF token |
 | `POST` | `/auth/password-reset/request` | Public | Request password reset |
 | `POST` | `/auth/password-reset/confirm` | Public | Confirm password reset |
 | `GET` | `/auth/me` | Authenticated | Current user profile |
