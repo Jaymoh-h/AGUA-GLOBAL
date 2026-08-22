@@ -1,12 +1,10 @@
-const fs = require("fs/promises");
 const path = require("path");
 const { createReadStream } = require("fs");
-const crypto = require("crypto");
 const ApiError = require("../utils/apiError");
 const { matchesFileSignature } = require("../utils/fileSignature");
 
 const storageRoot = path.join(__dirname, "..", "..", "storage", "documents");
-const maxDocumentBytes = 5 * 1024 * 1024;
+const maxDocumentBytes = 3 * 1024 * 1024;
 const allowedMimeTypes = {
   "application/pdf": "pdf",
   "image/jpeg": "jpg",
@@ -37,7 +35,7 @@ const parseDocumentUpload = ({ data, mime_type, original_name }) => {
 
   const buffer = Buffer.from(String(base64 || ""), "base64");
   if (!buffer.length) throw new ApiError(400, "Document file data is required.");
-  if (buffer.length > maxDocumentBytes) throw new ApiError(400, "Document file must be 5MB or smaller.");
+  if (buffer.length > maxDocumentBytes) throw new ApiError(400, "Document file must be 3MB or smaller.");
   if (!matchesFileSignature(buffer, mimeType)) {
     throw new ApiError(400, "Document content does not match the selected file type.");
   }
@@ -47,21 +45,6 @@ const parseDocumentUpload = ({ data, mime_type, original_name }) => {
     extension,
     mimeType,
     originalName
-  };
-};
-
-const storeDocumentFile = async ({ buffer, extension, entityType }) => {
-  const now = new Date();
-  const year = String(now.getFullYear());
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const storedName = `${crypto.randomUUID()}.${extension}`;
-  const relativePath = path.join(entityType, year, month, storedName);
-  const absolutePath = path.join(storageRoot, relativePath);
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  await fs.writeFile(absolutePath, buffer, { flag: "wx" });
-  return {
-    storedName,
-    storagePath: relativePath.replace(/\\/g, "/")
   };
 };
 
@@ -76,17 +59,7 @@ const resolveStoredDocumentPath = (storagePath) => {
 
 const openDocumentStream = (storagePath) => createReadStream(resolveStoredDocumentPath(storagePath));
 
-const removeDocumentFile = async (storagePath) => {
-  try {
-    await fs.unlink(resolveStoredDocumentPath(storagePath));
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-};
-
 module.exports = {
   openDocumentStream,
-  parseDocumentUpload,
-  removeDocumentFile,
-  storeDocumentFile
+  parseDocumentUpload
 };

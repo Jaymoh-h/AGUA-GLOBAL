@@ -34,10 +34,14 @@ const listBills = asyncHandler(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT b.*, c.name AS customer_name, c.acc_number, c.phone,
             bp.name AS billing_period_name,
-            bp.status AS billing_period_status
+            bp.status AS billing_period_status,
+            sc.charge_number,
+            sc.charge_type,
+            sc.description AS service_charge_description
      FROM bills b
      JOIN customers c ON c.id = b.customer_id
      LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
+     LEFT JOIN customer_service_charges sc ON sc.id = b.service_charge_id
      ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
      ORDER BY b.billing_month DESC, b.created_at DESC`,
     params
@@ -49,11 +53,15 @@ const getBill = asyncHandler(async (req, res) => {
   const { rows } = await pool.query(
     `SELECT b.*, c.name AS customer_name, c.acc_number, c.phone, c.location, z.name AS zone_name,
             bp.name AS billing_period_name,
-            bp.status AS billing_period_status
+            bp.status AS billing_period_status,
+            sc.charge_number,
+            sc.charge_type,
+            sc.description AS service_charge_description
      FROM bills b
      JOIN customers c ON c.id = b.customer_id
      LEFT JOIN zones z ON z.id = c.zone_id
      LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
+     LEFT JOIN customer_service_charges sc ON sc.id = b.service_charge_id
      WHERE b.id = $1
        AND ($2::text <> 'customer' OR (b.customer_id = $3 AND b.bill_pay_status = 'payable'))`,
     [req.params.id, req.user.role, req.user.customer_id || 0]

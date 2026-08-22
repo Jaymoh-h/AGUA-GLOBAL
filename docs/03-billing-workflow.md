@@ -8,6 +8,7 @@ This document describes the implemented billing workflow from customer setup thr
 - Rates can have effective-dated tariff versions and tariff blocks.
 - Billing periods define the accounting window.
 - Meter readings generate bills.
+- Customer service charges can generate payable service-charge bills.
 - Payments allocate against payable bills.
 - Corrections are allowed through controlled edit/review flows.
 
@@ -22,6 +23,7 @@ flowchart TD
   E --> F["Calculate units used"]
   F --> G["Generate bill"]
   G --> H["Bill enters payable register"]
+  L["Post customer service charge"] --> H
   H --> I["Receive payment"]
   I --> J["Allocate receipt across unpaid bills"]
   J --> K["Update bill status"]
@@ -45,6 +47,7 @@ The current implementation supports more than the original flat-rate MVP:
 - Customer deposits.
 - Opening balances and migration balance bills.
 - Source-side billing review and promotion.
+- Customer service charges for extra services such as meter replacement, reconnection, inspection, repair, water delivery, and admin fees.
 
 ## Billing Period Rules
 
@@ -97,7 +100,7 @@ Payment behavior:
 - User selects a customer.
 - System shows unpaid balance.
 - Receipt amount is validated.
-- Payment allocates against oldest unpaid payable bills first.
+- Payment allocates against oldest unpaid payable bills first, including service-charge-backed bills.
 - Payment allocations are recorded separately.
 - Bill status updates to `unpaid`, `partial`, or `paid`.
 - Receipts can be edited.
@@ -112,6 +115,8 @@ Supported recovery workflows:
 - Void payments into suspense.
 - Reapply or discard suspense.
 - Create customer adjustments.
+- Post customer service charges as payable customer debt.
+- Waive or cancel unpaid service charges with audit reasons.
 - Close customer accounts with closure bills and settlement tracking.
 
 ## Business Risks To Test Carefully
@@ -122,3 +127,4 @@ Supported recovery workflows:
 - Source billing promotion.
 - Penalty waiver and reapplication.
 - Customer closure with unpaid balances or deposits.
+- Service charges that should be visible as customer payables but reported separately from normal water usage revenue.

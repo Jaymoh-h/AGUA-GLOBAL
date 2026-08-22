@@ -190,6 +190,16 @@ export const api = {
     update: (id, payload) => request(`/customers/${id}`, { method: "PUT", body: payload }),
     remove: (id) => request(`/customers/${id}`, { method: "DELETE" })
   },
+  customerServiceCharges: {
+    list: (params = {}) => {
+      const query = new URLSearchParams(params);
+      return request(`/customer-service-charges${query.toString() ? `?${query}` : ""}`);
+    },
+    get: (id) => request(`/customer-service-charges/${id}`),
+    create: (payload) => request("/customer-service-charges", { method: "POST", body: payload }),
+    waive: (id, reason) => request(`/customer-service-charges/${id}/waive`, { method: "PATCH", body: { reason } }),
+    cancel: (id, reason) => request(`/customer-service-charges/${id}/cancel`, { method: "PATCH", body: { reason } })
+  },
   rates: {
     list: () => request("/rates"),
     create: (payload) => request("/rates", { method: "POST", body: payload }),

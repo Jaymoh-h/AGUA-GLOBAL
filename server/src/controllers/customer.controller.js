@@ -593,13 +593,17 @@ const getCustomerStatement = asyncHandler(async (req, res) => {
            (date_trunc('month', b.billing_month)::date + INTERVAL '1 month - 1 day')::date,
            b.billing_month
          ) AS transaction_date,
-         COALESCE(b.bill_number, 'Bill #' || b.id::text) AS reference,
-         COALESCE(bp.name, to_char(b.billing_month, 'FMMonth YYYY')) AS description,
+         COALESCE(sc.charge_number, b.bill_number, 'Bill #' || b.id::text) AS reference,
+         CASE
+           WHEN b.bill_origin = 'service_charge' THEN 'Service charge: ' || COALESCE(sc.description, b.payability_reason, b.bill_number, b.id::text)
+           ELSE COALESCE(bp.name, to_char(b.billing_month, 'FMMonth YYYY'))
+         END AS description,
          COALESCE(NULLIF(b.total_amount, 0), b.amount) AS debit,
          0::numeric AS credit,
          2 AS sort_order
        FROM bills b
        LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
+       LEFT JOIN customer_service_charges sc ON sc.id = b.service_charge_id
        WHERE b.customer_id = $1
          AND b.bill_pay_status = 'payable'
          AND (

@@ -7,6 +7,8 @@ DROP TABLE IF EXISTS monitoring_alert_logs CASCADE;
 DROP TABLE IF EXISTS backup_restore_drills CASCADE;
 DROP TABLE IF EXISTS operational_reminder_logs CASCADE;
 DROP TABLE IF EXISTS knowledge_documents CASCADE;
+DROP TABLE IF EXISTS supporting_documents CASCADE;
+DROP TABLE IF EXISTS customer_service_charges CASCADE;
 DROP TABLE IF EXISTS payments CASCADE;
 DROP TABLE IF EXISTS production_meter_readings CASCADE;
 DROP TABLE IF EXISTS production_weekly_readings CASCADE;
@@ -579,6 +581,9 @@ CREATE TABLE bills (
   payability_reason TEXT,
   promoted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   promoted_at TIMESTAMPTZ,
+  bill_origin VARCHAR(30) NOT NULL DEFAULT 'meter_reading'
+    CHECK (bill_origin IN ('meter_reading', 'opening_balance', 'manual_adjustment', 'service_charge', 'account_closure')),
+  service_charge_id INTEGER UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -735,6 +740,35 @@ CREATE TABLE maintenance_requests (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE customer_service_charges (
+  id SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  bill_id INTEGER UNIQUE REFERENCES bills(id) ON DELETE SET NULL,
+  charge_number VARCHAR(80) UNIQUE,
+  charge_type VARCHAR(80) NOT NULL,
+  description TEXT NOT NULL,
+  amount NUMERIC(12, 2) NOT NULL CHECK (amount > 0),
+  status VARCHAR(20) NOT NULL DEFAULT 'payable'
+    CHECK (status IN ('payable', 'waived', 'cancelled')),
+  charge_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  due_date DATE,
+  linked_maintenance_request_id INTEGER REFERENCES maintenance_requests(id) ON DELETE SET NULL,
+  linked_meter_event_id INTEGER REFERENCES meter_events(id) ON DELETE SET NULL,
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  waived_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  waived_at TIMESTAMPTZ,
+  waiver_reason TEXT,
+  cancelled_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  cancelled_at TIMESTAMPTZ,
+  cancellation_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE bills
+  ADD CONSTRAINT bills_service_charge_id_fkey FOREIGN KEY (service_charge_id) REFERENCES customer_service_charges(id) ON DELETE SET NULL;
 
 CREATE TABLE expenses (
   id SERIAL PRIMARY KEY,
@@ -913,6 +947,24 @@ CREATE TABLE audit_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE supporting_documents (
+  id SERIAL PRIMARY KEY,
+  entity_type VARCHAR(40) NOT NULL
+    CHECK (entity_type IN ('maintenance_request', 'expense', 'contractor_invoice')),
+  entity_id INTEGER NOT NULL,
+  original_name VARCHAR(255) NOT NULL,
+  stored_name VARCHAR(255) NOT NULL,
+  storage_path TEXT NOT NULL UNIQUE,
+  mime_type VARCHAR(160) NOT NULL,
+  file_size INTEGER NOT NULL CHECK (file_size > 0),
+  file_data BYTEA,
+  description TEXT,
+  uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  deleted_at TIMESTAMPTZ,
+  deleted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX idx_customers_acc_number ON customers(acc_number);
 CREATE INDEX idx_tariff_blocks_rate_order ON tariff_blocks(rate_id, sort_order, min_units);
 CREATE INDEX idx_rate_versions_rate_effective ON rate_versions(rate_id, effective_from DESC);
@@ -932,6 +984,11 @@ CREATE INDEX idx_bills_billing_period_id ON bills(billing_period_id);
 CREATE INDEX idx_bills_customer_status ON bills(customer_id, status);
 CREATE INDEX idx_bills_billing_meter_id ON bills(billing_meter_id);
 CREATE INDEX idx_bills_customer_period_pay_status ON bills(customer_id, billing_period_id, bill_pay_status);
+CREATE INDEX idx_bills_bill_origin ON bills(bill_origin, customer_id, status);
+CREATE INDEX idx_customer_service_charges_customer_status
+  ON customer_service_charges(customer_id, status, due_date, charge_date);
+CREATE INDEX idx_customer_service_charges_charge_date
+  ON customer_service_charges(charge_date DESC, id DESC);
 CREATE INDEX idx_payments_customer_date ON payments(customer_id, payment_date DESC);
 CREATE INDEX idx_expenses_maintenance_request ON expenses(maintenance_request_id, expense_date DESC);
 CREATE INDEX idx_contractors_status ON contractors(status);
@@ -970,3 +1027,7 @@ CREATE INDEX idx_production_electricity_topups_date ON production_electricity_to
 CREATE INDEX idx_audit_events_entity ON audit_events(entity_type, entity_id);
 CREATE INDEX idx_audit_events_actor ON audit_events(actor_user_id);
 CREATE INDEX idx_audit_events_created_at ON audit_events(created_at DESC);
+CREATE INDEX idx_supporting_documents_entity
+  ON supporting_documents(entity_type, entity_id)
+  WHERE deleted_at IS NULL;
+CREATE INDEX idx_supporting_documents_uploaded_by ON supporting_documents(uploaded_by);

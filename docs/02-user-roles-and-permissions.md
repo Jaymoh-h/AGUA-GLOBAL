@@ -42,6 +42,7 @@ Admin can:
 - Review source billing requests.
 - Promote held bills for payment.
 - Review customer adjustments.
+- Create, waive, and cancel customer service charges.
 - Access operational backup reports.
 - Record restore drill results and review backup readiness.
 - Manage private knowledge base documents.
@@ -62,6 +63,7 @@ Accountant can:
 - Apply and waive penalties.
 - Create and update payroll runs and line items.
 - Send invoice alerts and receipts.
+- Create and waive customer service charges.
 - Manage private knowledge base documents.
 - Preview and trigger operational reminders.
 - View monitoring summaries and event logs.
@@ -93,6 +95,7 @@ Meter reader cannot:
 
 - Access bills, payments, expenses, reports, payroll, communications, or backup.
 - Access contractor invoice or expense document surfaces.
+- Create, waive, or cancel customer service charges.
 - Manage knowledge base documents.
 - View monitoring, reminder logs, or backup drill records.
 - Manage users or business settings.
@@ -124,6 +127,7 @@ Business viewer can:
 - View production meters, top-ups, weekly readings, reading context, and production report.
 - View payroll payees and runs.
 - View contractor records and contractor invoices.
+- View customer service charge reporting.
 - View knowledge base documents shared with the `business_viewer` role.
 - View monitoring summaries and event logs.
 
@@ -131,6 +135,7 @@ Business viewer cannot:
 
 - Create, edit, approve, delete, post, import, or send operational records.
 - Manage users, business settings, billing periods, payments, payroll, production entries, or contractor invoices.
+- Create, waive, or cancel customer service charges.
 - Manage knowledge base documents, send reminders, record restore drills, or send monitoring test alerts.
 - Access customer portal as a customer unless assigned a separate customer context.
 

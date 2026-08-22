@@ -629,5 +629,5 @@ Most core modules are now implemented. The remaining work is mainly hardening, a
 - Add bank integration beyond the current PDF statement import trainer.
 - Add retries and opt-out handling if bulk messaging volume grows.
 - Use the migration runner/table for all future schema changes so applied migrations are tracked automatically.
-- Decide long-term production storage and backup policy for supporting documents.
+- Supporting documents are stored in PostgreSQL, with a 3MB file limit that remains within Vercel Function payload limits.
 - Finish production deployment checks, provider backup/replication setup, and role-by-role user acceptance testing.

@@ -51,6 +51,26 @@ const customerImportHeaders = [
 
 const openingBalanceImportHeaders = ["acc_number", "opening_balance_amount", "opening_balance_date"];
 
+const serviceChargeBlank = {
+  charge_type: "other",
+  description: "",
+  amount: "",
+  charge_date: new Date().toISOString().slice(0, 10),
+  due_date: "",
+  notes: ""
+};
+
+const serviceChargeTypes = [
+  ["meter_replacement", "Meter replacement"],
+  ["reconnection", "Reconnection"],
+  ["new_connection", "New connection"],
+  ["inspection", "Inspection"],
+  ["repair", "Repair"],
+  ["water_delivery", "Water delivery"],
+  ["admin_fee", "Admin fee"],
+  ["other", "Other"]
+];
+
 function CustomersPage({ user }) {
   const [customers, setCustomers] = useState([]);
   const [rates, setRates] = useState([]);
@@ -69,6 +89,10 @@ function CustomersPage({ user }) {
   const [statusFilter, setStatusFilter] = useState("");
   const [zoneFilter, setZoneFilter] = useState("");
   const [closingCustomer, setClosingCustomer] = useState(null);
+  const [serviceChargeCustomer, setServiceChargeCustomer] = useState(null);
+  const [serviceCharges, setServiceCharges] = useState([]);
+  const [serviceChargeForm, setServiceChargeForm] = useState(serviceChargeBlank);
+  const [loadingServiceCharges, setLoadingServiceCharges] = useState(false);
   const [closureForm, setClosureForm] = useState({
     settlement_date: new Date().toISOString().slice(0, 10),
     apply_deposit: true,
@@ -314,6 +338,71 @@ function CustomersPage({ user }) {
     } catch (err) {
       setMessage(err.message);
     }
+  };
+
+  const loadServiceCharges = async (customer) => {
+    if (!customer) return;
+    setLoadingServiceCharges(true);
+    try {
+      const rows = await api.customerServiceCharges.list({ customer_id: customer.id });
+      setServiceCharges(rows);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoadingServiceCharges(false);
+    }
+  };
+
+  const openServiceCharges = async (customer) => {
+    setServiceChargeCustomer(customer);
+    setServiceChargeForm({
+      ...serviceChargeBlank,
+      charge_date: new Date().toISOString().slice(0, 10)
+    });
+    setServiceCharges([]);
+    setMessage("");
+    await loadServiceCharges(customer);
+  };
+
+  const setServiceChargeField = (field, value) =>
+    setServiceChargeForm((current) => ({ ...current, [field]: value }));
+
+  const submitServiceCharge = async (event) => {
+    event.preventDefault();
+    if (!serviceChargeCustomer) return;
+    setMessage("");
+    try {
+      await api.customerServiceCharges.create({
+        ...serviceChargeForm,
+        customer_id: serviceChargeCustomer.id,
+        amount: Number(serviceChargeForm.amount || 0),
+        due_date: serviceChargeForm.due_date || serviceChargeForm.charge_date
+      });
+      setServiceChargeForm({
+        ...serviceChargeBlank,
+        charge_date: new Date().toISOString().slice(0, 10)
+      });
+      await Promise.all([load(), loadServiceCharges(serviceChargeCustomer)]);
+      setMessage("Customer service charge posted as payable.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const waiveServiceCharge = async (charge) => {
+    const reason = window.prompt("Reason for waiving this service charge:");
+    if (!String(reason || "").trim()) return;
+    await api.customerServiceCharges.waive(charge.id, reason.trim());
+    await Promise.all([load(), loadServiceCharges(serviceChargeCustomer)]);
+    setMessage("Service charge waived.");
+  };
+
+  const cancelServiceCharge = async (charge) => {
+    const reason = window.prompt("Reason for cancelling this service charge:");
+    if (!String(reason || "").trim()) return;
+    await api.customerServiceCharges.cancel(charge.id, reason.trim());
+    await Promise.all([load(), loadServiceCharges(serviceChargeCustomer)]);
+    setMessage("Service charge cancelled.");
   };
 
   const previewOpeningBalanceImport = async () => {
@@ -567,6 +656,9 @@ function CustomersPage({ user }) {
                           <FileText size={15} />
                           Statement
                         </button>
+                        <button type="button" onClick={() => openServiceCharges(customer)} title="Manage customer service charges">
+                          Service Charges
+                        </button>
                         {user.role === "admin" ? (
                           <button className="danger-button" type="button" onClick={() => remove(customer.id)} title="Delete customer">
                             <Trash2 size={15} />
@@ -749,6 +841,153 @@ function CustomersPage({ user }) {
           <button className="primary-button" type="button" onClick={closeAccount}>
             Close account
           </button>
+        </section>
+      ) : null}
+
+      {canWrite && serviceChargeCustomer ? (
+        <section className="panel full-span form-grid">
+          <div className="panel-heading">
+            <div>
+              <h3>Customer Service Charges</h3>
+              <p className="muted">
+                {serviceChargeCustomer.acc_number} - {serviceChargeCustomer.name}
+              </p>
+            </div>
+            <button type="button" onClick={() => setServiceChargeCustomer(null)}>
+              Close
+            </button>
+          </div>
+
+          <form className="form-grid nested-form" onSubmit={submitServiceCharge}>
+            <label>
+              Charge type
+              <select
+                value={serviceChargeForm.charge_type}
+                onChange={(event) => setServiceChargeField("charge_type", event.target.value)}
+              >
+                {serviceChargeTypes.map(([value, labelText]) => (
+                  <option key={value} value={value}>
+                    {labelText}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Amount
+              <input
+                value={serviceChargeForm.amount}
+                onChange={(event) => setServiceChargeField("amount", event.target.value)}
+                type="number"
+                min="0"
+                step="0.01"
+                required
+              />
+            </label>
+            <label>
+              Charge date
+              <input
+                value={serviceChargeForm.charge_date}
+                onChange={(event) => setServiceChargeField("charge_date", event.target.value)}
+                type="date"
+                required
+              />
+            </label>
+            <label>
+              Due date
+              <input
+                value={serviceChargeForm.due_date}
+                onChange={(event) => setServiceChargeField("due_date", event.target.value)}
+                type="date"
+              />
+            </label>
+            <label className="full-span">
+              Description
+              <input
+                value={serviceChargeForm.description}
+                onChange={(event) => setServiceChargeField("description", event.target.value)}
+                placeholder="Meter replacement fee, reconnection fee, inspection visit..."
+                required
+              />
+            </label>
+            <label className="full-span">
+              Notes
+              <textarea
+                value={serviceChargeForm.notes}
+                onChange={(event) => setServiceChargeField("notes", event.target.value)}
+                rows="2"
+                placeholder="Optional internal note"
+              />
+            </label>
+            <button className="primary-button" type="submit">
+              <Plus size={17} />
+              Post charge
+            </button>
+          </form>
+
+          <div className="table-wrap full-span">
+            <table>
+              <thead>
+                <tr>
+                  <th>Charge</th>
+                  <th>Type</th>
+                  <th>Date</th>
+                  <th>Amount</th>
+                  <th>Paid</th>
+                  <th>Balance</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {serviceCharges.length ? (
+                  serviceCharges.map((charge) => (
+                    <tr key={charge.id}>
+                      <td>
+                        <strong>{charge.charge_number || `Charge ${charge.id}`}</strong>
+                        <small>{charge.description}</small>
+                        {charge.bill_number ? <small>Bill {charge.bill_number}</small> : null}
+                      </td>
+                      <td>{serviceChargeTypes.find(([value]) => value === charge.charge_type)?.[1] || charge.charge_type}</td>
+                      <td>
+                        {new Date(charge.charge_date).toLocaleDateString()}
+                        <small>{charge.due_date ? `Due ${new Date(charge.due_date).toLocaleDateString()}` : "No due date"}</small>
+                      </td>
+                      <td>{money(charge.amount)}</td>
+                      <td>{money(charge.paid_amount)}</td>
+                      <td>{money(charge.balance_amount)}</td>
+                      <td>
+                        <span className={`status status-${charge.display_status || charge.status}`}>
+                          {String(charge.display_status || charge.status).replace("_", " ")}
+                        </span>
+                      </td>
+                      <td className="row-actions">
+                        {charge.status === "payable" && Number(charge.paid_amount || 0) === 0 ? (
+                          <>
+                            <button type="button" onClick={() => waiveServiceCharge(charge)}>
+                              Waive
+                            </button>
+                            {user.role === "admin" ? (
+                              <button className="danger-button" type="button" onClick={() => cancelServiceCharge(charge)}>
+                                Cancel
+                              </button>
+                            ) : null}
+                          </>
+                        ) : (
+                          <span className="muted">Locked</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <EmptyTableRow
+                    colSpan={8}
+                    title={loadingServiceCharges ? "Loading service charges" : "No service charges"}
+                    detail="Customer service charges will appear here after they are posted."
+                  />
+                )}
+              </tbody>
+            </table>
+          </div>
         </section>
       ) : null}
 

@@ -1,15 +1,30 @@
 const pool = require("../db/pool");
+const crypto = require("crypto");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
 const {
   openDocumentStream,
-  parseDocumentUpload,
-  removeDocumentFile,
-  storeDocumentFile
+  parseDocumentUpload
 } = require("../services/documentStorage.service");
 
 const activeEntityTypes = ["maintenance_request", "expense", "contractor_invoice"];
+
+const documentAuditData = (document) => ({
+  id: document.id,
+  entity_type: document.entity_type,
+  entity_id: document.entity_id,
+  original_name: document.original_name,
+  stored_name: document.stored_name,
+  storage_path: document.storage_path,
+  mime_type: document.mime_type,
+  file_size: document.file_size,
+  description: document.description,
+  uploaded_by: document.uploaded_by,
+  deleted_at: document.deleted_at,
+  deleted_by: document.deleted_by,
+  created_at: document.created_at
+});
 
 const normalizeEntityType = (value) => String(value || "").trim().toLowerCase();
 
@@ -83,31 +98,28 @@ const uploadDocument = asyncHandler(async (req, res) => {
   const description = String(req.body.description || "").trim() || null;
 
   const client = await pool.connect();
-  let stored = null;
   try {
     await client.query("BEGIN");
     await assertEntityExists(client, entityType, entityId);
-    stored = await storeDocumentFile({
-      buffer: parsed.buffer,
-      extension: parsed.extension,
-      entityType
-    });
+    const storedName = `${crypto.randomUUID()}.${parsed.extension}`;
 
     const { rows } = await client.query(
       `INSERT INTO supporting_documents (
         entity_type, entity_id, original_name, stored_name, storage_path,
-        mime_type, file_size, description, uploaded_by
+        mime_type, file_size, file_data, description, uploaded_by
       )
-      VALUES ($1::varchar, $2, $3::varchar, $4::varchar, $5, $6::varchar, $7, $8, $9)
-      RETURNING *`,
+      VALUES ($1::varchar, $2, $3::varchar, $4::varchar, $5, $6::varchar, $7, $8, $9, $10)
+      RETURNING id, entity_type, entity_id, original_name, stored_name, storage_path, mime_type,
+                file_size, description, uploaded_by, deleted_at, deleted_by, created_at`,
       [
         entityType,
         entityId,
         parsed.originalName,
-        stored.storedName,
-        stored.storagePath,
+        storedName,
+        `db/supporting_documents/${storedName}`,
         parsed.mimeType,
         parsed.buffer.length,
+        parsed.buffer,
         description,
         req.user.id
       ]
@@ -118,7 +130,7 @@ const uploadDocument = asyncHandler(async (req, res) => {
       action: "supporting_document.uploaded",
       entityType,
       entityId,
-      afterData: rows[0],
+      afterData: documentAuditData(rows[0]),
       reason: description
     });
 
@@ -126,11 +138,6 @@ const uploadDocument = asyncHandler(async (req, res) => {
     res.status(201).json(rows[0]);
   } catch (error) {
     await client.query("ROLLBACK");
-    if (stored?.storagePath) {
-      await removeDocumentFile(stored.storagePath).catch((removeError) =>
-        console.error("Failed to remove rolled-back supporting document.", removeError)
-      );
-    }
     throw error;
   } finally {
     client.release();
@@ -147,6 +154,12 @@ const downloadDocument = asyncHandler(async (req, res) => {
     const downloadName = String(document.original_name || "document").replace(/"/g, "");
     res.setHeader("Content-Type", document.mime_type);
     res.setHeader("Content-Disposition", `attachment; filename="${downloadName}"`);
+    if (document.file_data?.length) {
+      res.send(document.file_data);
+      return;
+    }
+
+    // Retain read access to documents uploaded before database-backed storage.
     openDocumentStream(document.storage_path)
       .on("error", (error) => {
         console.error("Document download failed.", error);
@@ -181,8 +194,8 @@ const deleteDocument = asyncHandler(async (req, res) => {
       action: "supporting_document.deleted",
       entityType: before.entity_type,
       entityId: before.entity_id,
-      beforeData: before,
-      afterData: rows[0]
+      beforeData: documentAuditData(before),
+      afterData: documentAuditData(rows[0])
     });
 
     await client.query("COMMIT");

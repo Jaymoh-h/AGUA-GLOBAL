@@ -8,13 +8,13 @@ This document defines the minimum operational process for protecting AGUA Global
 - Vercel environment variables.
 - GitHub repository.
 - Uploaded business logo data if using filesystem storage locally.
-- Supporting document files if using local filesystem document storage.
+- Supporting document binary data stored in PostgreSQL.
 - Knowledge base SOP/manual files stored in PostgreSQL.
 - Provider configuration records and approved WhatsApp template names.
 
 In production, use `LOGO_STORAGE_MODE=data-url` so business logos are stored in PostgreSQL and included in database backups.
 
-Supporting documents are tracked in PostgreSQL metadata but stored as files. If production uses filesystem document storage, back up both the database and the document storage directory together so metadata and files stay consistent.
+Supporting documents are stored in PostgreSQL with their metadata and binary data. They are included in database backups and operational JSON exports as base64 file data, so a database restore keeps the attachment with its maintenance request, expense, or contractor invoice.
 
 Knowledge base documents are stored in PostgreSQL and are included in database backups and operational JSON exports as base64 file data. Treat every operational backup export as sensitive.
 

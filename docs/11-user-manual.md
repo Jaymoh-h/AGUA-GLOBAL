@@ -46,6 +46,7 @@ Accountant typically:
 11. Posts approved contractor invoices to expenses.
 12. Publishes finance or operations documents in the Knowledge Base.
 13. Previews and sends operational reminders.
+14. Posts customer service charges for extra billable services.
 
 ## Meter Reader Workflow
 
@@ -115,6 +116,33 @@ Before posting:
 - Confirm receipt appears and bill status updates.
 
 If a wrong payment was posted, use edit or void workflows.
+
+## Customer Service Charges
+
+Admins and accountants can post extra billable services from the Customers page.
+
+Use this workflow for charges such as:
+
+- Meter replacement.
+- Reconnection.
+- New connection.
+- Inspection.
+- Repair.
+- Water delivery.
+- Admin fees.
+
+Recommended workflow:
+
+1. Open Customers.
+2. Find the customer account.
+3. Select Service Charges.
+4. Enter charge type, description, amount, charge date, due date, and optional notes.
+5. Post the charge.
+6. Confirm the charge appears in the service charge table and the customer balance.
+
+The system creates a linked payable bill for the charge. Payments, statements, receivables aging, and customer balances then treat it as part of the customer's payable portfolio. Accountant reports separate Customer Service Charges from ordinary water usage revenue.
+
+Unpaid service charges can be waived by admin/accountant with a reason. Admins can cancel unpaid service charges. Charges with payments are locked from waiver/cancellation and should be handled through the normal correction/payment reversal process.
 
 ## Communications
 
@@ -212,3 +240,4 @@ Supporting documents can be uploaded against:
 - Contractor invoices.
 
 Use attachments for invoices, photos, receipts, work evidence, or approval support.
+Files must be PDF, PNG, JPG, WEBP, DOCX, or XLSX and no larger than 3MB.

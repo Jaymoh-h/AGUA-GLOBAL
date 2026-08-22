@@ -12,6 +12,7 @@ const formatBytes = (value) => {
 };
 
 const date = (value) => value?.slice(0, 10) || "-";
+const maxDocumentBytes = 3 * 1024 * 1024;
 
 const readFileAsDataUrl = (file) =>
   new Promise((resolve, reject) => {
@@ -40,6 +41,11 @@ function SupportingDocumentsPanel({ entityType, entityId }) {
   const upload = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (file.size > maxDocumentBytes) {
+      event.target.value = "";
+      setMessage("Document file must be 3MB or smaller.");
+      return;
+    }
     setMessage("");
     setSaving(true);
     try {

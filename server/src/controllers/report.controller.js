@@ -85,6 +85,7 @@ const backupQueries = [
   ["rate_version_blocks", "SELECT * FROM rate_version_blocks ORDER BY rate_version_id, sort_order, id"],
   ["zones", "SELECT * FROM zones ORDER BY id"],
   ["bills", "SELECT * FROM bills ORDER BY id"],
+  ["customer_service_charges", "SELECT * FROM customer_service_charges ORDER BY id"],
   ["payments", "SELECT * FROM payments ORDER BY id"],
   ["payment_allocations", "SELECT * FROM payment_allocations ORDER BY id"],
   ["payment_suspense_items", "SELECT * FROM payment_suspense_items ORDER BY id"],
@@ -104,7 +105,14 @@ const backupQueries = [
   ["payroll_line_items", "SELECT * FROM payroll_line_items ORDER BY id"],
   ["contractors", "SELECT * FROM contractors ORDER BY id"],
   ["contractor_invoices", "SELECT * FROM contractor_invoices ORDER BY id"],
-  ["supporting_documents", "SELECT * FROM supporting_documents ORDER BY id"],
+  [
+    "supporting_documents",
+    `SELECT id, entity_type, entity_id, original_name, stored_name, storage_path, mime_type,
+            file_size, encode(file_data, 'base64') AS file_data_base64, description, uploaded_by,
+            deleted_at, deleted_by, created_at
+     FROM supporting_documents
+     ORDER BY id`
+  ],
   ["business_settings", "SELECT * FROM business_settings ORDER BY id"],
   ["portal_user_customers", "SELECT * FROM portal_user_customers ORDER BY id"],
   ["user_access_profiles", "SELECT * FROM user_access_profiles ORDER BY id"],
@@ -382,6 +390,8 @@ const buildProfitAndLoss = async (startDate, endDate) => {
         `SELECT
            COALESCE(SUM(
              CASE
+               WHEN bill_origin = 'service_charge'
+               THEN 0
                WHEN COALESCE(subtotal_amount, 0) = 0
                 AND COALESCE(fixed_charge_amount, 0) = 0
                 AND COALESCE(penalty_amount, 0) = 0
@@ -395,6 +405,7 @@ const buildProfitAndLoss = async (startDate, endDate) => {
            COALESCE(SUM(penalty_amount), 0) AS penalties,
            COALESCE(SUM(reconnection_fee_amount), 0) AS reconnection_fees,
            COALESCE(SUM(adjustment_amount), 0) AS adjustments,
+           COALESCE(SUM(COALESCE(NULLIF(total_amount, 0), amount)) FILTER (WHERE bill_origin = 'service_charge'), 0) AS service_charges,
            COALESCE(SUM(vat_amount), 0) AS vat_amount
          FROM bills
          WHERE bill_pay_status = 'payable'
@@ -454,6 +465,7 @@ const buildProfitAndLoss = async (startDate, endDate) => {
         line("Fixed charges", accrualRevenue.fixed_charges),
         line("Penalties", accrualRevenue.penalties),
         line("Reconnection fees", accrualRevenue.reconnection_fees),
+        line("Customer service charges", accrualRevenue.service_charges),
         line("Billing adjustments", accrualRevenue.adjustments)
       ],
       expenseLines: accrualExpenseLines,
@@ -864,13 +876,70 @@ const getAccountantReports = asyncHandler(async (req, res) => {
        COALESCE(NULLIF(b.total_amount, 0), b.amount) AS billed_amount,
        b.paid_amount,
        COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount) AS balance_amount,
-       b.status
+       b.status,
+       b.bill_origin,
+       sc.charge_number,
+       sc.charge_type,
+       sc.description AS service_charge_description
      FROM bills b
      JOIN customers c ON c.id = b.customer_id
      JOIN zones z ON z.id = c.zone_id
      LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
+     LEFT JOIN customer_service_charges sc ON sc.id = b.service_charge_id
      WHERE b.billing_month BETWEEN $1 AND $2
      ORDER BY b.billing_month DESC, c.acc_number ASC
+     LIMIT 500`,
+    dateParams
+  );
+
+  const serviceChargeTotals = await pool.query(
+    `SELECT
+       COUNT(sc.id) AS charge_count,
+       COALESCE(SUM(sc.amount), 0) AS charged_amount,
+       COALESCE(SUM(b.paid_amount), 0) AS paid_amount,
+       COALESCE(SUM(
+         CASE
+           WHEN sc.status = 'payable' AND b.status <> 'paid' AND b.bill_pay_status = 'payable'
+           THEN b.balance_amount
+           ELSE 0
+         END
+       ), 0) AS balance_amount,
+       COUNT(sc.id) FILTER (WHERE sc.status = 'waived') AS waived_count,
+       COUNT(sc.id) FILTER (WHERE sc.status = 'cancelled') AS cancelled_count
+     FROM customer_service_charges sc
+     LEFT JOIN bills b ON b.id = sc.bill_id
+     WHERE sc.charge_date BETWEEN $1 AND $2`,
+    dateParams
+  );
+
+  const serviceChargeRegister = await pool.query(
+    `SELECT
+       sc.id,
+       sc.charge_number,
+       sc.charge_type,
+       sc.description,
+       sc.amount,
+       sc.status,
+       sc.charge_date,
+       sc.due_date,
+       c.name AS customer_name,
+       c.acc_number,
+       z.name AS zone_name,
+       b.bill_number,
+       b.status AS bill_status,
+       b.bill_pay_status,
+       b.paid_amount,
+       CASE
+         WHEN sc.status = 'payable' AND b.status <> 'paid' AND b.bill_pay_status = 'payable'
+         THEN b.balance_amount
+         ELSE 0
+       END AS balance_amount
+     FROM customer_service_charges sc
+     JOIN customers c ON c.id = sc.customer_id
+     JOIN zones z ON z.id = c.zone_id
+     LEFT JOIN bills b ON b.id = sc.bill_id
+     WHERE sc.charge_date BETWEEN $1 AND $2
+     ORDER BY sc.charge_date DESC, sc.id DESC
      LIMIT 500`,
     dateParams
   );
@@ -1267,6 +1336,8 @@ const getAccountantReports = asyncHandler(async (req, res) => {
     billingByStatus: billingByStatus.rows,
     billingByZone: billingByZone.rows,
     billingRegister: billingRegister.rows,
+    serviceChargeTotals: serviceChargeTotals.rows[0],
+    serviceChargeRegister: serviceChargeRegister.rows,
     collectionsByChannel: collectionsByChannel.rows,
     receiptRegister: receiptRegister.rows,
     allocationLedger: allocationLedger.rows,
@@ -1323,6 +1394,7 @@ const getDataQualityChecks = asyncHandler(async (_req, res) => {
          'medium'
        FROM bills
        WHERE current_reading_id IS NULL
+         AND bill_origin NOT IN ('service_charge', 'opening_balance', 'manual_adjustment', 'account_closure')
        UNION ALL
        SELECT
          'payments_with_unallocated_credit',

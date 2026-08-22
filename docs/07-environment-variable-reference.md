@@ -49,6 +49,8 @@ Defined in `server/.env`.
 
 Production note: set `LOGO_STORAGE_MODE=data-url` on Vercel so uploaded logos survive serverless deployments.
 
+Supporting documents do not require a filesystem storage variable. They are stored in PostgreSQL so maintenance, expense, and contractor attachments remain available on Vercel deployments.
+
 If the client project serves public subdomains, include each browser origin in `CLIENT_ORIGIN`:
 
 ```text

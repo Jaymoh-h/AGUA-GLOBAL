@@ -65,6 +65,21 @@ Use these checklists before demos, production deployments, and major commits.
 - Void payment to suspense.
 - Reapply suspense.
 - Discard suspense as admin.
+- Post a service charge for a customer.
+- Confirm customer balance includes the service charge.
+- Post a payment and confirm it can allocate to the service-charge-backed bill.
+
+## Customer Service Charge Test
+
+- Create a service charge as admin/accountant.
+- Confirm a linked payable bill is created.
+- Confirm the customer statement shows the service charge description.
+- Confirm Bills and Reports show the linked bill with service-charge metadata.
+- Confirm accountant reports show Customer Service Charges separately from water usage revenue.
+- Waive an unpaid service charge with a reason.
+- Cancel an unpaid service charge as admin with a reason.
+- Confirm waived/cancelled charges no longer affect payable balance.
+- Confirm service charge create/waive/cancel actions appear in the audit trail.
 
 ## Billing Period And Penalty Test
 
@@ -132,6 +147,8 @@ Use these checklists before demos, production deployments, and major commits.
 - Upload document to expense as accountant.
 - Upload document to contractor invoice as accountant.
 - Download each document.
+- Download an uploaded document after a fresh browser session to confirm PostgreSQL-backed persistence.
+- Confirm a file larger than 3MB is rejected before upload.
 - Soft-delete a document.
 - Confirm deleted document no longer appears in active list.
 
@@ -185,7 +202,7 @@ Use these checklists before demos, production deployments, and major commits.
 
 - Run migration status and confirm no unapplied migrations remain.
 - Run the operational backup script.
-- Confirm backup export includes core tables, reminder logs, monitoring logs, restore drills, and knowledge documents.
+- Confirm backup export includes core tables, customer service charges, reminder logs, monitoring logs, restore drills, and knowledge documents.
 - Record a restore drill with backup reference, target environment, duration, dataset count, findings, and follow-up actions.
 - Confirm backup status shows latest drill and next quarterly due date.
 - Run backup retention pruning in a safe test backup directory.

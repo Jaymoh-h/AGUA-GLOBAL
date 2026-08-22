@@ -70,6 +70,7 @@ const accountantReportTitles = {
   collectionsChannel: "Collections By Channel",
   billingZone: "Billing By Zone",
   billingRegister: "Billing Register",
+  serviceCharges: "Customer Service Charges",
   meterConsumptionComparison: "Meter Consumption Comparison",
   receiptRegister: "Receipt Register",
   allocationLedger: "Payment Allocation Ledger",
@@ -160,6 +161,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
       ),
       outstanding: Number(accountantData.billingTotals?.balance_amount || 0),
       expenses: Number(accountantData.expenseTotals?.expense_amount || 0),
+      serviceCharges: Number(accountantData.serviceChargeTotals?.charged_amount || 0),
       deposits: accountantData.depositRegister.reduce((sum, row) => sum + Number(row.deposit_amount || 0), 0),
       payables: Number(accountantData.contractorPayablesTotals?.open_amount || 0),
       overduePayables: Number(accountantData.contractorPayablesTotals?.overdue_amount || 0)
@@ -213,7 +215,10 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
     ]
   });
   const billingRegisterTable = useTableControls(accountantData?.billingRegister || [], {
-    searchFields: ["bill_number", "billing_period_name", "billing_month", "customer_name", "acc_number", "zone_name", "balance_amount"]
+    searchFields: ["bill_number", "billing_period_name", "billing_month", "customer_name", "acc_number", "zone_name", "balance_amount", "service_charge_description"]
+  });
+  const serviceChargeRegisterTable = useTableControls(accountantData?.serviceChargeRegister || [], {
+    searchFields: ["charge_number", "charge_type", "description", "customer_name", "acc_number", "zone_name", "bill_number", "status", "bill_status"]
   });
   const meterConsumptionComparisonTable = useTableControls(accountantData?.meterConsumptionComparison || [], {
     searchFields: [
@@ -277,6 +282,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
     ? clientFinancialSummaryTable.filteredRows
     : clientFinancialSummaryTable.visibleRows;
   const billingRegisterRows = printAllRows ? billingRegisterTable.filteredRows : billingRegisterTable.visibleRows;
+  const serviceChargeRows = printAllRows ? serviceChargeRegisterTable.filteredRows : serviceChargeRegisterTable.visibleRows;
   const meterConsumptionComparisonRows = printAllRows
     ? meterConsumptionComparisonTable.filteredRows
     : meterConsumptionComparisonTable.visibleRows;
@@ -363,6 +369,12 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
     billed_amount: sumRows(billingRegisterRows, "billed_amount"),
     paid_amount: sumRows(billingRegisterRows, "paid_amount"),
     balance_amount: sumRows(billingRegisterRows, "balance_amount")
+  };
+  const serviceChargeRegisterTotals = {
+    charge_count: countRows(serviceChargeRows, "id"),
+    amount: sumRows(serviceChargeRows, "amount"),
+    paid_amount: sumRows(serviceChargeRows, "paid_amount"),
+    balance_amount: sumRows(serviceChargeRows, "balance_amount")
   };
   const meterConsumptionComparisonTotals = {
     client_units_used: sumRows(meterConsumptionComparisonRows, "client_units_used"),
@@ -464,6 +476,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
     { key: "collectionsChannel", title: "Collections By Channel", detail: `${money(collectionsByChannelTotals.received_amount)} received` },
     { key: "billingZone", title: "Billing By Zone", detail: `${number(billingByZoneTotals.bill_count)} bills by zone` },
     { key: "billingRegister", title: "Billing Register", detail: `${number(billingRegisterTable.total)} bill rows` },
+    { key: "serviceCharges", title: "Customer Service Charges", detail: `${number(serviceChargeRegisterTable.total)} charges | ${money(accountantData?.serviceChargeTotals?.balance_amount)} open` },
     { key: "meterConsumptionComparison", title: "Meter Consumption Comparison", detail: `${number(meterConsumptionComparisonTable.total)} source meter row(s)` },
     { key: "receiptRegister", title: "Receipt Register", detail: `${number(receiptRegisterTable.total)} receipt rows` },
     { key: "allocationLedger", title: "Payment Allocation Ledger", detail: `${money(allocationLedgerTotals.allocated_amount)} allocated` },
@@ -1299,6 +1312,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
               <StatCard label="Period billed" value={money(accountantTotals.billed)} detail="Billing register total" />
               <StatCard label="Period collected" value={money(accountantTotals.collected)} detail="Posted receipts" />
               <StatCard label="Period balance" value={money(accountantTotals.outstanding)} detail="Bill balances" />
+              <StatCard label="Service charges" value={money(accountantTotals.serviceCharges)} detail="Chargeable customer services" />
               <StatCard label="Period expenses" value={money(accountantTotals.expenses)} detail="Operating costs" />
               <StatCard label="Open payables" value={money(accountantTotals.payables)} detail="Contractor invoices not posted/paid" />
               <StatCard label="Overdue payables" value={money(accountantTotals.overduePayables)} detail="Past due contractor invoices" />
@@ -1535,6 +1549,69 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
                         </>
                       ) : (
                         <EmptyRow colSpan={14} />
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className={reportSectionClass("panel full-span report-section report-section-serviceCharges", showAccountantReport("serviceCharges"))}>
+                <div className="panel-heading">
+                  <h3>Customer Service Charges</h3>
+                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "serviceCharges")} title="Print customer service charges">
+                    <Printer size={17} />
+                  </button>
+                </div>
+                <TableControls table={serviceChargeRegisterTable} label="service charges" placeholder="Search service charges" />
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Charge</th>
+                        <th>Customer</th>
+                        <th>Type</th>
+                        <th>Date</th>
+                        <th>Amount</th>
+                        <th>Paid</th>
+                        <th>Balance</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {serviceChargeRegisterTable.total ? (
+                        <>
+                          {serviceChargeRows.map((row) => (
+                            <tr key={row.id}>
+                              <td>
+                                {row.charge_number || `Charge ${row.id}`}
+                                <small>{row.description}</small>
+                                {row.bill_number ? <small>Bill {row.bill_number}</small> : null}
+                              </td>
+                              <td>
+                                {row.customer_name}
+                                <small>{row.acc_number} | {row.zone_name}</small>
+                              </td>
+                              <td>{label(row.charge_type)}</td>
+                              <td>
+                                {date(row.charge_date)}
+                                <small>{row.due_date ? `Due ${date(row.due_date)}` : "-"}</small>
+                              </td>
+                              <td>{money(row.amount)}</td>
+                              <td>{money(row.paid_amount)}</td>
+                              <td>{money(row.balance_amount)}</td>
+                              <td>{label(row.status === "payable" ? row.bill_status || row.status : row.status)}</td>
+                            </tr>
+                          ))}
+                          <tr className="muted-total">
+                            <td colSpan="4"><strong>Total</strong></td>
+                            <td><strong>{money(serviceChargeRegisterTotals.amount)}</strong></td>
+                            <td><strong>{money(serviceChargeRegisterTotals.paid_amount)}</strong></td>
+                            <td><strong>{money(serviceChargeRegisterTotals.balance_amount)}</strong></td>
+                            <td><strong>{number(serviceChargeRegisterTotals.charge_count)} charges</strong></td>
+                          </tr>
+                        </>
+                      ) : (
+                        <EmptyRow colSpan={8} />
                       )}
                     </tbody>
                   </table>

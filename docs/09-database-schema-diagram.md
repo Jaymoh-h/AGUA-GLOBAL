@@ -11,6 +11,7 @@ erDiagram
   customers ||--o{ meters : owns
   customers ||--o{ meter_readings : receives
   customers ||--o{ bills : billed
+  customers ||--o{ customer_service_charges : charged
   customers ||--o{ payments : pays
   customers ||--o{ maintenance_requests : raises
   customers ||--o{ portal_user_customers : linked_to
@@ -31,6 +32,7 @@ erDiagram
   meter_readings ||--o| bills : generates
 
   bills ||--o{ payment_allocations : allocated
+  bills ||--o| customer_service_charges : service_charge_bill
   payments ||--o{ payment_allocations : splits
   payments ||--o{ payment_suspense_items : voids
 
@@ -75,6 +77,7 @@ Metering and billing:
 - `billing_periods`
 - `billing_settings`
 - `bills`
+- `customer_service_charges`
 - `source_billing_requests`
 - `bill_penalty_applications`
 
@@ -132,6 +135,7 @@ Migration and operations ledger:
 - A customer may have many meters, but only one should be active for normal billing.
 - A meter reading belongs to a customer, optional billing period, and optional meter.
 - A bill belongs to a customer and can reference previous and current readings.
+- A customer service charge belongs to a customer and posts a linked bill with `bill_origin = 'service_charge'`.
 - A payment belongs to a customer and can allocate across many bills.
 - A payment allocation links one payment to one bill.
 - A source billing request represents a reviewed backup/source-meter bill decision.
@@ -140,7 +144,7 @@ Migration and operations ledger:
 - Communication campaigns store bulk-send history and recipient results.
 - Portal users are linked to customer records through `portal_user_customers`.
 - Access profiles give a user one or more selectable operating contexts.
-- Supporting documents attach files to maintenance requests, expenses, and contractor invoices.
+- Supporting documents attach files to maintenance requests, expenses, and contractor invoices, with binary file data stored in PostgreSQL.
 - Contractor invoices can be reviewed and posted into expenses.
 - Knowledge documents store private SOP/manual/deployment files, role visibility, sensitivity, file metadata, and binary file data.
 - Operational reminder logs record reminder sends by type, reminder key, recipient, channel, and due date to prevent duplicate sends.
@@ -160,4 +164,4 @@ npm.cmd run db:migrate:status
 npm.cmd run db:migrate
 ```
 
-The latest known migration is `048_operational_hardening.sql`.
+The latest known migration is `051_supporting_document_file_data.sql`.

@@ -59,6 +59,7 @@ Database:
 - Customers, rates, zones, and account closure
 - Meters, meter replacements, and meter readings
 - Billing periods, bills, penalties, waivers, and source billing review
+- Customer service charges for extra billable customer services
 - Payments, allocations, receipts, suspense, and payment imports
 - Expenses and operational cost tracking
 - Maintenance requests and maintenance-linked expenses
@@ -68,7 +69,7 @@ Database:
 - Payroll payees, payroll runs, approvals, and expense posting
 - Contractor register, contractor invoices, approval, expense posting, and contractor reporting
 - Communications, invoice alerts, campaigns, reusable templates, and delivery logs
-- Supporting documents linked to maintenance requests, expenses, and contractor invoices
+- Supporting documents linked to maintenance requests, expenses, and contractor invoices, with binary data stored in PostgreSQL
 - Private knowledge base for SOPs, manuals, deployment notes, and internal records
 - Operational reminder engine for pending work, reading windows, production readings, billing preparation, contractor invoices, and payroll preparation
 - Application monitoring, public status checks, client error capture, alert snapshots, and email/SMS monitoring alerts

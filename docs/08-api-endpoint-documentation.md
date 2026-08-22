@@ -122,6 +122,18 @@ Authorization: Bearer <token>
 | `POST` | `/payments/:id/email` | admin, accountant | Email receipt |
 | `POST` | `/payments/:id/sms` | admin, accountant | SMS receipt |
 
+## Customer Service Charges
+
+Customer service charges are extra customer receivables for billable services outside normal water consumption. Creating a charge posts a linked payable bill so existing payment allocation, balances, statements, aging, and receipts continue to work.
+
+| Method | Endpoint | Roles | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/customer-service-charges` | admin, accountant, business_viewer | List customer service charges; accepts `customer_id` and `status` filters |
+| `GET` | `/customer-service-charges/:id` | admin, accountant, business_viewer | Get service charge detail |
+| `POST` | `/customer-service-charges` | admin, accountant | Create payable service charge and linked bill |
+| `PATCH` | `/customer-service-charges/:id/waive` | admin, accountant | Waive an unpaid service charge with reason |
+| `PATCH` | `/customer-service-charges/:id/cancel` | admin | Cancel an unpaid service charge with reason |
+
 ## Operations
 
 | Method | Endpoint | Roles | Purpose |
@@ -233,7 +245,7 @@ Authorization: Bearer <token>
 | `GET` | `/knowledge-documents/:id/download` | admin, accountant, meter_reader, business_viewer | Download and audit access |
 | `DELETE` | `/knowledge-documents/:id` | admin, accountant | Archive private document |
 
-Documents can currently link to maintenance requests, expenses, and contractor invoices. Expense and contractor invoice documents are restricted to admin/accountant by controller-level checks.
+Documents can currently link to maintenance requests, expenses, and contractor invoices. Expense and contractor invoice documents are restricted to admin/accountant by controller-level checks. Files must be PDF, PNG, JPG, WEBP, DOCX, or XLSX and no larger than 3MB. Supporting document bytes are stored in PostgreSQL for Vercel-safe persistence.
 
 Knowledge documents are separate from public `/docs`. Admins can see and manage all records; non-admin staff can only see active records whose `allowed_roles` includes their current access role. Restricted knowledge documents are admin-managed.
 
