@@ -74,6 +74,8 @@ Operations:
 Production:
 
 - Source production meters.
+- Production meter editing for operational details, tariff, zone, notes, active/inactive/faulty status, and rematching a customer-source meter to an active source-backup meter for the same customer; physical replacement remains a separate audited workflow.
+- Customer-meter replacement supports both client-billing and source-backup meters, preserves the source role, and automatically rematches active linked production meters when a source-backup meter is replaced.
 - Weekly production readings.
 - Electricity top-ups.
 - Top-ups post linked expenses.
@@ -84,6 +86,8 @@ Production:
 Payroll:
 
 - Payroll payees.
+- Context-scoped session drafts for production setup and payroll forms, cleared after save or cancellation.
+- Dated payroll payee termination/cancellation dialog with reason capture and audit history.
 - Recurring employees/subscriptions.
 - Period-only casuals/contractors.
 - Payee termination.

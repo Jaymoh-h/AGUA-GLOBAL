@@ -21,6 +21,22 @@ Users assigned more than one active access context can change workspaces without
 
 Only active contexts assigned to the logged-in account are listed. The switch is recorded in the audit trail.
 
+## Unfinished Forms
+
+Production setup and payroll forms retain unfinished entries while you move between pages in the same browser session. Drafts are specific to your active workspace. Saving or cancelling the form clears its draft.
+
+## Production Meters
+
+Admins and accountants can select Edit from the Production Meters register to update a meter's display name, zone, tariff, notes, or operating status. For a customer-source production meter, the exact active source-backup meter can be rematched to another source meter for the same customer. Meter number, type, and customer linkage remain protected; use Replace Source Meter when the physical production meter changes.
+
+## Replacing Customer Meters
+
+In Readings, use Replace Meter to select the exact active customer meter being changed. This includes source-backup meters. The replacement keeps the same meter role and, for a replaced source-backup meter, automatically rematches active linked production meters to the new source meter.
+
+## Ending Payroll Payees
+
+Admins can terminate recurring employees or cancel recurring service-provider subscriptions from the Payroll register. Enter the effective end date and a reason. The payee remains in historical payroll runs but is excluded from future automatic payroll runs.
+
 ## Admin Workflow
 
 Admin typically:

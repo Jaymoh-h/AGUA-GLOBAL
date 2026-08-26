@@ -108,6 +108,9 @@ Use these checklists before demos, production deployments, and major commits.
 ## Production Test
 
 - Create production source meter.
+- Edit a production meter's display name, zone, tariff, notes, or operational status and confirm the history remains intact.
+- For a customer-source production meter, rematch the exact linked source meter and confirm it must be an active source-backup meter for the same customer.
+- Confirm meter number, type, and linked customer stay protected; use replacement when the physical production meter changes.
 - Add weekly production reading.
 - Add electricity top-up.
 - Confirm linked expense is created.
@@ -118,6 +121,7 @@ Use these checklists before demos, production deployments, and major commits.
 - Confirm weekly summary print remains summary-only.
 - Replace production meter.
 - Confirm event history remains visible.
+- Replace an active source-backup meter from Readings, confirm the new meter remains source-backup, and confirm active linked production meters are rematched.
 
 ## Payroll Test
 
@@ -130,7 +134,15 @@ Use these checklists before demos, production deployments, and major commits.
 - Mark run paid.
 - Confirm expenses are posted.
 - Terminate recurring payee as admin.
+- Enter an effective termination date and reason for an employee or recurring service provider.
 - Confirm future run excludes terminated payee.
+
+## Form Draft Test
+
+- Enter data in a production meter, meter replacement, electricity top-up, payroll run, recurring payee, or period-payee form.
+- Navigate to another page and return; confirm the unfinished form is restored for the same user and access context.
+- Submit the form, or cancel an edit where available, and confirm its draft is cleared.
+- Switch workspace and confirm drafts from the previous access context are not shown.
 
 ## Contractor Invoice Test
 

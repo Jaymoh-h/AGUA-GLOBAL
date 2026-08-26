@@ -7,6 +7,7 @@ import TableControls, { useTableControls } from "../components/TableControls";
 import { useToastMessage } from "../components/ToastProvider";
 import { api, assetUrl } from "../services/api";
 import { withPrintTitle } from "../utils/exportNames";
+import useScopedDraft from "../utils/useScopedDraft";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const number = (value) => Number(value || 0).toLocaleString();
@@ -47,6 +48,33 @@ const nextWeeklyReadingDate = (weeks) => {
   )[0];
   return latest?.reading_date ? addDays(latest.reading_date, 7) : new Date().toISOString().slice(0, 10);
 };
+const blankMeterForm = () => ({
+  meter_type: "shared_source",
+  meter_number: "",
+  name: "",
+  zone_id: "",
+  customer_id: "",
+  meter_id: "",
+  rate_id: "",
+  notes: "",
+  status: "active",
+  editing_meter_id: ""
+});
+const blankReplacementForm = () => ({
+  production_meter_id: "",
+  event_date: new Date().toISOString().slice(0, 10),
+  old_final_reading: "",
+  new_meter_number: "",
+  new_initial_reading: "0",
+  reason: ""
+});
+const blankTopupForm = () => ({
+  topup_date: new Date().toISOString().slice(0, 10),
+  kwh_units: "",
+  total_cost: "",
+  reference: "",
+  notes: ""
+});
 
 function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [meters, setMeters] = useState([]);
@@ -59,31 +87,13 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [report, setReport] = useState({ weeks: [] });
   const [businessSettings, setBusinessSettings] = useState(null);
   const [, setMessage] = useToastMessage();
-  const [meterForm, setMeterForm] = useState({
-    meter_type: "shared_source",
-    meter_number: "",
-    name: "",
-    zone_id: "",
-    customer_id: "",
-    meter_id: "",
-    rate_id: "",
-    notes: ""
-  });
-  const [replacementForm, setReplacementForm] = useState({
-    production_meter_id: "",
-    event_date: new Date().toISOString().slice(0, 10),
-    old_final_reading: "",
-    new_meter_number: "",
-    new_initial_reading: "0",
-    reason: ""
-  });
-  const [topupForm, setTopupForm] = useState({
-    topup_date: new Date().toISOString().slice(0, 10),
-    kwh_units: "",
-    total_cost: "",
-    reference: "",
-    notes: ""
-  });
+  const [meterForm, setMeterForm, clearMeterDraft] = useScopedDraft(user, "production-meter", blankMeterForm);
+  const [replacementForm, setReplacementForm, clearReplacementDraft] = useScopedDraft(
+    user,
+    "production-meter-replacement",
+    blankReplacementForm
+  );
+  const [topupForm, setTopupForm, clearTopupDraft] = useScopedDraft(user, "production-electricity-topup", blankTopupForm);
   const [weeklyForm, setWeeklyForm] = useState({
     reading_date: new Date().toISOString().slice(0, 10),
     prepaid_kwh_balance: "",
@@ -107,6 +117,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
   const canRecordProduction = ["admin", "accountant", "meter_reader"].includes(user?.role);
   const focusKey = navigationIntent?.page === "production" ? navigationIntent.focus : "";
   const hasProductionFocus = focusKey === "production_gap";
+  const editingMeterId = meterForm.editing_meter_id;
 
   const load = async () => {
     const [meterRows, rateRows, zoneRows, customerRows, topupRows, weekRows, reportRows, settingsRows] = await Promise.all([
@@ -357,28 +368,46 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
     event.preventDefault();
     setMessage("");
     try {
-      await api.production.createMeter({
-        ...meterForm,
-        zone_id: meterForm.zone_id || null,
-        customer_id: meterForm.meter_type === "customer_source" ? Number(meterForm.customer_id) : null,
-        meter_id: meterForm.meter_type === "customer_source" ? Number(meterForm.meter_id) : null,
-        rate_id: meterForm.meter_type === "shared_source" ? Number(meterForm.rate_id) : null
-      });
-      setMeterForm({
-        meter_type: "shared_source",
-        meter_number: "",
-        name: "",
-        zone_id: "",
-        customer_id: "",
-        meter_id: "",
-        rate_id: "",
-        notes: ""
-      });
+      if (editingMeterId) {
+        await api.production.updateMeter(editingMeterId, {
+          name: meterForm.name,
+          zone_id: meterForm.zone_id || null,
+          meter_id: meterForm.meter_type === "customer_source" ? Number(meterForm.meter_id) : null,
+          rate_id: meterForm.meter_type === "shared_source" ? Number(meterForm.rate_id) : null,
+          notes: meterForm.notes,
+          status: meterForm.status
+        });
+      } else {
+        await api.production.createMeter({
+          ...meterForm,
+          zone_id: meterForm.zone_id || null,
+          customer_id: meterForm.meter_type === "customer_source" ? Number(meterForm.customer_id) : null,
+          meter_id: meterForm.meter_type === "customer_source" ? Number(meterForm.meter_id) : null,
+          rate_id: meterForm.meter_type === "shared_source" ? Number(meterForm.rate_id) : null
+        });
+      }
+      clearMeterDraft();
       await load();
-      setMessage("Production meter registered.");
+      setMessage(editingMeterId ? "Production meter updated." : "Production meter registered.");
     } catch (err) {
       setMessage(err.message);
     }
+  };
+
+  const editMeter = (meter) => {
+    setMeterForm({
+      meter_type: meter.meter_type,
+      meter_number: meter.meter_number || "",
+      name: meter.name || "",
+      zone_id: String(meter.zone_id || ""),
+      customer_id: String(meter.customer_id || ""),
+      meter_id: String(meter.meter_id || ""),
+      rate_id: String(meter.rate_id || ""),
+      notes: meter.notes || "",
+      status: meter.status || "active",
+      editing_meter_id: String(meter.id)
+    });
+    setMessage(`${meter.meter_number} loaded for editing.`);
   };
 
   const prefillReplacement = (meter) => {
@@ -402,14 +431,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
         new_initial_reading: Number(replacementForm.new_initial_reading || 0),
         reason: replacementForm.reason
       });
-      setReplacementForm({
-        production_meter_id: "",
-        event_date: new Date().toISOString().slice(0, 10),
-        old_final_reading: "",
-        new_meter_number: "",
-        new_initial_reading: "0",
-        reason: ""
-      });
+      clearReplacementDraft();
       await load();
       setMessage("Source meter replacement recorded.");
     } catch (err) {
@@ -426,13 +448,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
         kwh_units: Number(topupForm.kwh_units),
         total_cost: Number(topupForm.total_cost)
       });
-      setTopupForm({
-        topup_date: new Date().toISOString().slice(0, 10),
-        kwh_units: "",
-        total_cost: "",
-        reference: "",
-        notes: ""
-      });
+      clearTopupDraft();
       await load();
       setMessage("Electricity top-up recorded and posted to expenses.");
     } catch (err) {
@@ -609,21 +625,23 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
             <CollapsibleSection
               as="form"
               className="form-grid production-meter-form"
+              defaultOpen={Boolean(editingMeterId)}
               icon={<Gauge size={18} />}
+              key={editingMeterId || "new"}
               onSubmit={submitMeter}
               summary={`${meters.filter((meter) => meter.status === "active").length.toLocaleString()} active meter(s)`}
-              title="Production Meter"
+              title={editingMeterId ? "Edit Production Meter" : "Production Meter"}
             >
               <label>
                 Type
-                <select value={meterForm.meter_type} onChange={(event) => setMeterField("meter_type", event.target.value)}>
+                <select value={meterForm.meter_type} onChange={(event) => setMeterField("meter_type", event.target.value)} disabled={Boolean(editingMeterId)}>
                   <option value="shared_source">Shared source</option>
                   <option value="customer_source">Customer source</option>
                 </select>
               </label>
               <label>
                 Meter number
-                <input value={meterForm.meter_number} onChange={(event) => setMeterField("meter_number", event.target.value)} required />
+                <input value={meterForm.meter_number} onChange={(event) => setMeterField("meter_number", event.target.value)} disabled={Boolean(editingMeterId)} required />
               </label>
               <label>
                 Display name
@@ -642,7 +660,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 <>
                   <label>
                     Linked customer
-                    <select value={meterForm.customer_id} onChange={(event) => setMeterField("customer_id", event.target.value)} required>
+                  <select value={meterForm.customer_id} onChange={(event) => setMeterField("customer_id", event.target.value)} disabled={Boolean(editingMeterId)} required>
                       <option value="">Select customer</option>
                       {customers.map((customer) => (
                         <option key={customer.id} value={customer.id}>
@@ -653,7 +671,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                   </label>
                   <label>
                     Linked source meter
-                    <select value={meterForm.meter_id} onChange={(event) => setMeterField("meter_id", event.target.value)} required>
+                  <select value={meterForm.meter_id} onChange={(event) => setMeterField("meter_id", event.target.value)} required>
                       <option value="">Select exact source meter</option>
                       {customerMeters.map((meter) => (
                         <option key={meter.id} value={meter.id}>{meter.meter_number}</option>
@@ -679,10 +697,26 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                 Notes
                 <textarea value={meterForm.notes} onChange={(event) => setMeterField("notes", event.target.value)} rows="2" />
               </label>
+              {editingMeterId ? (
+                <label>
+                  Status
+                  <select value={meterForm.status} onChange={(event) => setMeterField("status", event.target.value)}>
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                    <option value="faulty">Faulty</option>
+                  </select>
+                </label>
+              ) : null}
               <button className="primary-button" type="submit">
                 <Save size={17} />
-                Register meter
+                {editingMeterId ? "Save meter" : "Register meter"}
               </button>
+              {editingMeterId ? (
+                <button type="button" onClick={clearMeterDraft}>
+                  <X size={16} />
+                  Cancel
+                </button>
+              ) : null}
             </CollapsibleSection>
           ) : null}
 
@@ -1145,11 +1179,19 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
                         <td>{meter.rate_name || "-"}</td>
                         <td><span className={`status status-${meter.status}`}>{meter.status}</span></td>
                         <td>
-                          {canConfigure && meter.status === "active" ? (
-                            <button type="button" onClick={() => prefillReplacement(meter)}>
-                              <RotateCcw size={14} />
-                              Replace
-                            </button>
+                          {canConfigure && !["replaced", "removed"].includes(meter.status) ? (
+                            <div className="row-actions">
+                              <button type="button" onClick={() => editMeter(meter)} title="Edit production meter">
+                                <Edit2 size={14} />
+                                Edit
+                              </button>
+                              {meter.status === "active" ? (
+                                <button type="button" onClick={() => prefillReplacement(meter)}>
+                                  <RotateCcw size={14} />
+                                  Replace
+                                </button>
+                              ) : null}
+                            </div>
                           ) : (
                             "-"
                           )}

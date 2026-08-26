@@ -56,6 +56,7 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
   });
   const [replacementForm, setReplacementForm] = useState({
     customer_id: "",
+    old_meter_id: "",
     old_final_reading: "",
     new_meter_number: "",
     new_initial_reading: "0",
@@ -180,7 +181,11 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
   };
   const setMeterField = (field, value) => setMeterForm((current) => ({ ...current, [field]: value }));
   const setReplacementField = (field, value) =>
-    setReplacementForm((current) => ({ ...current, [field]: value }));
+    setReplacementForm((current) =>
+      field === "customer_id"
+        ? { ...current, customer_id: value, old_meter_id: "", old_final_reading: "" }
+        : { ...current, [field]: value }
+    );
   const setEventField = (field, value) => setEventForm((current) => ({ ...current, [field]: value }));
   const restrictedReadingPeriod = ["closed", "locked"].includes(readingContext?.billingPeriod?.status);
   const restrictedSourcePeriod = ["closed", "locked"].includes(sourceContext?.billingPeriod?.status);
@@ -255,14 +260,16 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
     }
 
     api.readings
-      .context(replacementForm.customer_id, replacementForm.event_date)
+      .context(replacementForm.customer_id, replacementForm.event_date, replacementForm.old_meter_id)
       .then((context) => {
         if (!ignore) {
           setReplacementContext(context);
           setReplacementForm((current) => {
-            if (current.old_final_reading) return current;
+            const nextMeterId = current.old_meter_id || String(context.activeMeter?.id || "");
+            if (current.old_final_reading && current.old_meter_id === nextMeterId) return current;
             return {
               ...current,
+              old_meter_id: nextMeterId,
               old_final_reading: context.previousReading?.reading_value || ""
             };
           });
@@ -278,7 +285,7 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
     return () => {
       ignore = true;
     };
-  }, [replacementForm.customer_id, replacementForm.event_date]);
+  }, [replacementForm.customer_id, replacementForm.event_date, replacementForm.old_meter_id]);
 
   const submit = async (event) => {
     event.preventDefault();
@@ -471,6 +478,7 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
     try {
       await api.meters.replace({
         customer_id: Number(replacementForm.customer_id),
+        old_meter_id: Number(replacementForm.old_meter_id || replacementContext?.activeMeter?.id),
         old_final_reading: Number(replacementForm.old_final_reading),
         new_meter_number: replacementForm.new_meter_number.trim(),
         new_initial_reading: Number(replacementForm.new_initial_reading || 0),
@@ -479,6 +487,7 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
       });
       setReplacementForm({
         customer_id: "",
+        old_meter_id: "",
         old_final_reading: "",
         new_meter_number: "",
         new_initial_reading: "0",
@@ -917,6 +926,22 @@ function ReadingsPage({ user, navigationIntent, onClearNavigationIntent }) {
                 ))}
               </select>
             </label>
+            {replacementContext?.availableMeters?.length ? (
+              <label>
+                Meter to replace
+                <select
+                  value={replacementForm.old_meter_id}
+                  onChange={(event) => setReplacementField("old_meter_id", event.target.value)}
+                  required
+                >
+                  {replacementContext.availableMeters.map((meter) => (
+                    <option key={meter.id} value={meter.id}>
+                      {meter.meter_number} - {meterRoleLabels[meter.meter_role] || meter.meter_role}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             {replacementContext ? (
               <div className="reading-context">
                 <div>

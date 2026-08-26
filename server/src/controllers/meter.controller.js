@@ -150,6 +150,7 @@ const createMeter = asyncHandler(async (req, res) => {
 const replaceMeter = asyncHandler(async (req, res) => {
   const {
     customer_id,
+    old_meter_id,
     old_final_reading,
     new_meter_number,
     new_initial_reading = 0,
@@ -187,7 +188,23 @@ const replaceMeter = asyncHandler(async (req, res) => {
       throw new ApiError(404, "Customer not found.");
     }
 
-    const oldMeter = await ensureActiveMeter(client, customer);
+    let oldMeter;
+    if (old_meter_id) {
+      const oldMeterResult = await client.query(
+        `SELECT *
+         FROM meters
+         WHERE id = $1
+           AND customer_id = $2
+           AND meter_role IN ('client_billing', 'source_backup')
+         FOR UPDATE`,
+        [old_meter_id, customer.id]
+      );
+      oldMeter = oldMeterResult.rows[0];
+      if (!oldMeter) throw new ApiError(400, "Selected meter is not an eligible meter for this customer.");
+      if (oldMeter.status !== "active") throw new ApiError(400, "Only active meters can be replaced.");
+    } else {
+      oldMeter = await ensureActiveMeter(client, customer);
+    }
     const previous = await getPreviousReadingForMeter(client, oldMeter.id, event_date);
 
     if (previous && oldFinalReading < Number(previous.reading_value)) {
@@ -300,9 +317,9 @@ const replaceMeter = asyncHandler(async (req, res) => {
       `INSERT INTO meters (
         customer_id, meter_number, meter_role, installed_at, initial_reading, status, notes
       )
-      VALUES ($1, $2, 'client_billing', $3, $4, 'active', $5)
+      VALUES ($1, $2, $3, $4, $5, 'active', $6)
       RETURNING *`,
-      [customer.id, new_meter_number, event_date, newInitialReading, reason || "Meter replacement"]
+      [customer.id, new_meter_number, oldMeter.meter_role, event_date, newInitialReading, reason || "Meter replacement"]
     );
     await recordAuditEvent(client, {
       req,
@@ -312,6 +329,41 @@ const replaceMeter = asyncHandler(async (req, res) => {
       afterData: newMeterResult.rows[0],
       reason: correctionReason || "Meter replacement"
     });
+
+    const linkedProductionResult = await client.query(
+      `SELECT *
+       FROM production_source_meters
+       WHERE meter_id = $1
+         AND meter_type = 'customer_source'
+         AND status NOT IN ('replaced', 'removed')
+       FOR UPDATE`,
+      [oldMeter.id]
+    );
+    const linkedProductionMeters = linkedProductionResult.rows;
+    if (linkedProductionMeters.length) {
+      const rematchedProductionResult = await client.query(
+        `UPDATE production_source_meters
+         SET meter_id = $1,
+             updated_at = NOW()
+         WHERE meter_id = $2
+           AND meter_type = 'customer_source'
+           AND status NOT IN ('replaced', 'removed')
+         RETURNING *`,
+        [newMeterResult.rows[0].id, oldMeter.id]
+      );
+      for (const rematchedMeter of rematchedProductionResult.rows) {
+        const beforeProductionMeter = linkedProductionMeters.find((meter) => meter.id === rematchedMeter.id);
+        await recordAuditEvent(client, {
+          req,
+          action: "production_meter.source_meter_rematched",
+          entityType: "production_source_meter",
+          entityId: rematchedMeter.id,
+          beforeData: beforeProductionMeter,
+          afterData: rematchedMeter,
+          reason: "Linked source meter replaced"
+        });
+      }
+    }
 
     const newBaselineReadingResult = await client.query(
       `INSERT INTO meter_readings (

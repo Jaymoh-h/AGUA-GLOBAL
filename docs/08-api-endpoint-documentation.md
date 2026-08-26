@@ -80,7 +80,7 @@ Authorization: Bearer <token>
 | `GET` | `/meters` | admin, accountant, meter_reader | List meters |
 | `GET` | `/meters/events` | admin, accountant, meter_reader | List meter events |
 | `POST` | `/meters` | admin, accountant | Create meter |
-| `POST` | `/meters/replace` | admin, accountant, meter_reader | Replace meter |
+| `POST` | `/meters/replace` | admin, accountant, meter_reader | Replace an active client-billing or source-backup meter, preserving its role and rematching active linked production meters when applicable |
 | `PUT` | `/meters/events/:id` | admin, accountant, meter_reader | Update meter event |
 
 ## Billing And Bills
@@ -191,6 +191,7 @@ Customer service charges are extra customer receivables for billable services ou
 | --- | --- | --- | --- |
 | `GET` | `/production/meters` | admin, accountant, meter_reader, business_viewer | List production meters |
 | `POST` | `/production/meters` | admin, accountant | Create production meter |
+| `PATCH` | `/production/meters/:id` | admin, accountant | Update operational details, tariff, zone, notes, status, or the active exact customer source-meter link; the linked customer, production meter number, and type remain fixed |
 | `POST` | `/production/meters/:id/replace` | admin, accountant | Replace production meter |
 | `GET` | `/production/electricity-topups` | admin, accountant, meter_reader, business_viewer | List top-ups |
 | `POST` | `/production/electricity-topups` | admin, accountant | Create top-up and expense |

@@ -24,6 +24,7 @@ import { useToastMessage } from "../components/ToastProvider";
 import { api } from "../services/api";
 import { downloadCsvRows } from "../utils/csvTemplate";
 import { downloadBlobFile, namedExport } from "../utils/exportNames";
+import useScopedDraft from "../utils/useScopedDraft";
 
 const payeeTypes = ["employee", "casual", "contractor", "subscription"];
 const recurringPayeeTypes = ["employee", "subscription"];
@@ -61,6 +62,27 @@ const blankPayeeForm = () => ({
   default_units: "",
   start_date: today
 });
+const blankPayeeDraft = () => ({ editing_payee_id: "", values: blankPayeeForm() });
+const blankPeriodPayeeForm = () => ({
+  payee_type: "casual",
+  name: "",
+  code: "",
+  title: "",
+  rate_amount: "",
+  rate_basis: "daily",
+  source_units: "",
+  additions: "",
+  deductions: "",
+  payment_channel: "mpesa_paybill",
+  notes: ""
+});
+const blankRunForm = () => ({
+  name: "",
+  period_start: firstDay,
+  period_end: today,
+  payee_type: "",
+  notes: ""
+});
 
 const payeeToForm = (payee) => ({
   payee_type: payee.payee_type || "employee",
@@ -83,29 +105,23 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [typeFilter, setTypeFilter] = useState("");
   const [, setMessage] = useToastMessage();
   const [loading, setLoading] = useState(false);
-  const [editingPayeeId, setEditingPayeeId] = useState(null);
-  const [payeeForm, setPayeeForm] = useState(blankPayeeForm);
-  const [periodPayeeForm, setPeriodPayeeForm] = useState({
-    payee_type: "casual",
-    name: "",
-    code: "",
-    title: "",
-    rate_amount: "",
-    rate_basis: "daily",
-    source_units: "",
-    additions: "",
-    deductions: "",
-    payment_channel: "mpesa_paybill",
-    notes: ""
-  });
-  const [runForm, setRunForm] = useState({
-    name: "",
-    period_start: firstDay,
-    period_end: today,
-    payee_type: "",
-    notes: ""
-  });
+  const [payeeDraft, setPayeeDraft, clearPayeeDraft] = useScopedDraft(user, "payroll-recurring-payee", blankPayeeDraft);
+  const [periodPayeeForm, setPeriodPayeeForm, clearPeriodPayeeDraft] = useScopedDraft(
+    user,
+    `payroll-period-payee:${selectedRun?.id || "unselected"}`,
+    blankPeriodPayeeForm
+  );
+  const [runForm, setRunForm, clearRunDraft] = useScopedDraft(user, "payroll-run", blankRunForm);
   const [lineDraft, setLineDraft] = useState(null);
+  const [terminationPayee, setTerminationPayee] = useState(null);
+  const [terminationForm, setTerminationForm] = useState({ end_date: today, termination_reason: "" });
+  const editingPayeeId = payeeDraft.editing_payee_id;
+  const payeeForm = payeeDraft.values;
+  const setPayeeForm = (updater) =>
+    setPayeeDraft((current) => ({
+      ...current,
+      values: typeof updater === "function" ? updater(current.values) : updater
+    }));
 
   const recurringPayees = useMemo(
     () =>
@@ -209,13 +225,11 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
   const setRunField = (field, value) => setRunForm((current) => ({ ...current, [field]: value }));
 
   const resetPayeeForm = () => {
-    setEditingPayeeId(null);
-    setPayeeForm(blankPayeeForm());
+    clearPayeeDraft();
   };
 
   const editPayee = (payee) => {
-    setEditingPayeeId(payee.id);
-    setPayeeForm(payeeToForm(payee));
+    setPayeeDraft({ editing_payee_id: String(payee.id), values: payeeToForm(payee) });
     setMessage(`${payee.name} loaded for editing.`);
   };
 
@@ -259,19 +273,7 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
         deductions: Number(periodPayeeForm.deductions || 0),
         metadata
       });
-      setPeriodPayeeForm({
-        payee_type: "casual",
-        name: "",
-        code: "",
-        title: "",
-        rate_amount: "",
-        rate_basis: "daily",
-        source_units: "",
-        additions: "",
-        deductions: "",
-        payment_channel: "mpesa_paybill",
-        notes: ""
-      });
+      clearPeriodPayeeDraft();
       await load(updated.id);
       setMessage("Period payee added to this run.");
     } catch (err) {
@@ -284,7 +286,7 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
     setMessage("");
     try {
       const run = await api.payroll.createRun(runForm);
-      setRunForm((current) => ({ ...current, name: "", notes: "" }));
+      clearRunDraft();
       await load(run.id);
       setMessage("Draft payroll run created.");
     } catch (err) {
@@ -314,18 +316,25 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
     }
   };
 
-  const terminatePayee = async (payee) => {
-    const actionLabel = payee.payee_type === "subscription" ? "cancellation" : "termination";
-    const reason = window.prompt(`Enter ${actionLabel} reason for ${payee.name}`);
-    if (!reason) return;
+  const openTermination = (payee) => {
+    setTerminationPayee(payee);
+    setTerminationForm({ end_date: today, termination_reason: "" });
+  };
+
+  const terminatePayee = async (event) => {
+    event.preventDefault();
+    if (!terminationPayee) return;
     setMessage("");
     try {
-      await api.payroll.terminatePayee(payee.id, {
-        end_date: today,
-        termination_reason: reason
+      await api.payroll.terminatePayee(terminationPayee.id, {
+        end_date: terminationForm.end_date,
+        termination_reason: terminationForm.termination_reason
       });
       await load(selectedRun?.id);
-      setMessage(`${payee.name} marked as ${payee.payee_type === "subscription" ? "cancelled" : "terminated"}.`);
+      setMessage(
+        `${terminationPayee.name} marked as ${terminationPayee.payee_type === "subscription" ? "cancelled" : "terminated"}.`
+      );
+      setTerminationPayee(null);
     } catch (err) {
       setMessage(err.message);
     }
@@ -915,7 +924,7 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
                               Edit
                             </button>
                             {user.role === "admin" && payee.status === "active" ? (
-                              <button type="button" onClick={() => terminatePayee(payee)}>
+                              <button type="button" onClick={() => openTermination(payee)} title="Terminate payee">
                                 <UserMinus size={15} />
                                 {payee.payee_type === "subscription" ? "Cancel" : "Terminate"}
                               </button>
@@ -983,6 +992,56 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
           ) : null}
         </div>
       </section>
+      {terminationPayee ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => setTerminationPayee(null)}>
+          <form
+            className="modal-panel override-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="terminate-payee-title"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={terminatePayee}
+          >
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Payroll Payee</p>
+                <h3 id="terminate-payee-title">
+                  {terminationPayee.payee_type === "subscription" ? "Cancel service provider" : "Terminate payee"}
+                </h3>
+              </div>
+            </div>
+            <p className="muted">{terminationPayee.name}</p>
+            <label>
+              Effective date
+              <input
+                value={terminationForm.end_date}
+                onChange={(event) => setTerminationForm((current) => ({ ...current, end_date: event.target.value }))}
+                type="date"
+                required
+              />
+            </label>
+            <label>
+              Reason
+              <textarea
+                value={terminationForm.termination_reason}
+                onChange={(event) => setTerminationForm((current) => ({ ...current, termination_reason: event.target.value }))}
+                rows="3"
+                required
+              />
+            </label>
+            <div className="row-actions">
+              <button className="primary-button" type="submit" disabled={loading || !terminationForm.termination_reason.trim()}>
+                <UserMinus size={16} />
+                {terminationPayee.payee_type === "subscription" ? "Confirm cancellation" : "Confirm termination"}
+              </button>
+              <button type="button" onClick={() => setTerminationPayee(null)} disabled={loading}>
+                <X size={16} />
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </section>
   );
 }

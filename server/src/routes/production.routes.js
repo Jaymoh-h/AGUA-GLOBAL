@@ -11,6 +11,7 @@ const {
   listProductionMeters,
   listWeeklyReadings,
   replaceProductionMeter,
+  updateProductionMeter,
   updateWeeklyReading
 } = require("../controllers/production.controller");
 const { authenticate, authorize } = require("../middleware/auth");
@@ -20,6 +21,7 @@ const router = express.Router();
 router.use(authenticate);
 router.get("/meters", authorize("admin", "accountant", "meter_reader", "business_viewer"), listProductionMeters);
 router.post("/meters", authorize("admin", "accountant"), createProductionMeter);
+router.patch("/meters/:id", authorize("admin", "accountant"), updateProductionMeter);
 router.post("/meters/:id/replace", authorize("admin", "accountant"), replaceProductionMeter);
 router.get("/electricity-topups", authorize("admin", "accountant", "meter_reader", "business_viewer"), listElectricityTopups);
 router.post("/electricity-topups", authorize("admin", "accountant"), createElectricityTopup);

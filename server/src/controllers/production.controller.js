@@ -138,6 +138,108 @@ const createProductionMeter = asyncHandler(async (req, res) => {
   }
 });
 
+const updateProductionMeter = asyncHandler(async (req, res) => {
+  const { name, zone_id, meter_id, rate_id, notes, status } = req.body;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const beforeResult = await client.query(
+      "SELECT * FROM production_source_meters WHERE id = $1 FOR UPDATE",
+      [req.params.id]
+    );
+    const before = beforeResult.rows[0];
+    if (!before) throw new ApiError(404, "Production meter not found.");
+    if (before.status === "replaced" || before.status === "removed") {
+      throw new ApiError(400, "Replaced or removed meters cannot be edited.");
+    }
+
+    const nextStatus = status === undefined ? before.status : String(status);
+    if (!["active", "inactive", "faulty"].includes(nextStatus)) {
+      throw new ApiError(400, "Meter status must be active, inactive, or faulty.");
+    }
+
+    const nextZoneId = zone_id === undefined ? before.zone_id : zone_id ? Number(zone_id) : null;
+    if (nextZoneId !== null && (!Number.isInteger(nextZoneId) || nextZoneId <= 0)) {
+      throw new ApiError(400, "Zone must be a valid zone ID.");
+    }
+    if (nextZoneId) {
+      const zoneResult = await client.query("SELECT id FROM zones WHERE id = $1", [nextZoneId]);
+      if (!zoneResult.rows[0]) throw new ApiError(404, "Zone not found.");
+    }
+
+    let nextMeterId = before.meter_id;
+    if (before.meter_type === "customer_source") {
+      nextMeterId = meter_id === undefined ? before.meter_id : meter_id ? Number(meter_id) : null;
+      if (!Number.isInteger(nextMeterId) || nextMeterId <= 0) {
+        throw new ApiError(400, "Link an active source meter for this customer.");
+      }
+      const meterResult = await client.query(
+        "SELECT id, status FROM meters WHERE id = $1 AND customer_id = $2 AND meter_role = 'source_backup'",
+        [nextMeterId, before.customer_id]
+      );
+      const linkedMeter = meterResult.rows[0];
+      if (!linkedMeter) throw new ApiError(400, "Linked meter must be a source backup meter for this customer.");
+      if (linkedMeter.status !== "active") {
+        throw new ApiError(400, "Linked source meter is not active. Link the current active source meter.");
+      }
+    }
+
+    let nextRateId = before.rate_id;
+    if (before.meter_type === "shared_source") {
+      nextRateId = rate_id === undefined ? before.rate_id : rate_id ? Number(rate_id) : null;
+      if (!nextRateId) throw new ApiError(400, "Default tariff is required for a shared source meter.");
+      if (!Number.isInteger(nextRateId) || nextRateId <= 0) {
+        throw new ApiError(400, "Default tariff must be a valid tariff ID.");
+      }
+      const rateResult = await client.query("SELECT id FROM rates WHERE id = $1 AND is_active = TRUE", [nextRateId]);
+      if (!rateResult.rows[0]) throw new ApiError(404, "Tariff not found or inactive.");
+    }
+
+    const result = await client.query(
+      `UPDATE production_source_meters
+       SET zone_id = $1,
+           meter_id = $2,
+           rate_id = $3,
+           name = NULLIF($4, ''),
+           notes = NULLIF($5, ''),
+           status = $6,
+           updated_at = NOW()
+       WHERE id = $7
+       RETURNING *`,
+      [
+        nextZoneId,
+        before.meter_type === "customer_source" ? nextMeterId : null,
+        before.meter_type === "shared_source" ? nextRateId : null,
+        name === undefined ? before.name || "" : String(name || "").trim(),
+        notes === undefined ? before.notes || "" : String(notes || "").trim(),
+        nextStatus,
+        before.id
+      ]
+    );
+
+    await recordAuditEvent(client, {
+      req,
+      action: "production_meter.updated",
+      entityType: "production_source_meter",
+      entityId: before.id,
+      beforeData: before,
+      afterData: result.rows[0],
+      reason:
+        Number(nextMeterId || 0) !== Number(before.meter_id || 0)
+          ? "Production meter linked source meter updated"
+          : "Production meter details updated"
+    });
+
+    await client.query("COMMIT");
+    res.json(result.rows[0]);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 const replaceProductionMeter = asyncHandler(async (req, res) => {
   const {
     new_meter_number,
@@ -1003,5 +1105,6 @@ module.exports = {
   listProductionMeters,
   listWeeklyReadings,
   replaceProductionMeter,
+  updateProductionMeter,
   updateWeeklyReading
 };

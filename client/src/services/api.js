@@ -359,6 +359,7 @@ export const api = {
   production: {
     meters: () => request("/production/meters"),
     createMeter: (payload) => request("/production/meters", { method: "POST", body: payload }),
+    updateMeter: (id, payload) => request(`/production/meters/${id}`, { method: "PATCH", body: payload }),
     replaceMeter: (id, payload) => request(`/production/meters/${id}/replace`, { method: "POST", body: payload }),
     topups: () => request("/production/electricity-topups"),
     createTopup: (payload) => request("/production/electricity-topups", { method: "POST", body: payload }),

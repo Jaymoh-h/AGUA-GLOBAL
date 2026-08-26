@@ -67,10 +67,25 @@ const login = async (email, password) => {
     body: { email, password }
   });
   assert.equal(response.status, 200, data.message || "login failed");
+  let sessionData = data;
+  if (data.requires_context_selection) {
+    assert.ok(data.context_selection_token, "multi-context login should include a selection token");
+    assert.ok(data.contexts?.length, "multi-context login should include active contexts");
+    const selected = await request("/api/auth/select-context", {
+      session,
+      method: "POST",
+      body: {
+        context_selection_token: data.context_selection_token,
+        access_profile_id: data.contexts[0].id
+      }
+    });
+    assert.equal(selected.response.status, 200, selected.data.message || "context selection failed");
+    sessionData = selected.data;
+  }
   assert.ok(session.cookie, "login response should set a session cookie");
-  assert.ok(data.csrf_token, "login response should include a CSRF token");
-  assert.equal(data.token, undefined, "login response should not expose a bearer token");
-  return { ...data, session };
+  assert.ok(sessionData.csrf_token, "login response should include a CSRF token");
+  assert.equal(sessionData.token, undefined, "login response should not expose a bearer token");
+  return { ...sessionData, session };
 };
 
 describe("AGUA Global API smoke", { skip: !shouldRun }, () => {
@@ -129,6 +144,36 @@ describe("AGUA Global API smoke", { skip: !shouldRun }, () => {
       body: { access_profile_id: 2147483647 }
     });
     assert.equal(switchAttempt.response.status, 403);
+  });
+
+  it("exposes the guarded production meter update route", async (t) => {
+    const email = process.env.TEST_ADMIN_EMAIL || "admin@agua.local";
+    const password = process.env.TEST_ADMIN_PASSWORD || "Admin@123";
+    const { session } = await login(email, password);
+
+    const updateAttempt = await request("/api/production/meters/2147483647", {
+      session,
+      method: "PATCH",
+      body: {}
+    });
+    assert.equal(updateAttempt.response.status, 404);
+
+    const meterList = await request("/api/production/meters", { session });
+    assert.equal(meterList.response.status, 200, meterList.data.message || "production meters failed");
+    const customerSourceMeter = meterList.data.find(
+      (meter) => meter.meter_type === "customer_source" && meter.status === "active"
+    );
+    if (!customerSourceMeter) {
+      t.skip("No active customer-source production meter is available for the link validation check.");
+      return;
+    }
+
+    const invalidLinkAttempt = await request(`/api/production/meters/${customerSourceMeter.id}`, {
+      session,
+      method: "PATCH",
+      body: { meter_id: 2147483647 }
+    });
+    assert.equal(invalidLinkAttempt.response.status, 400);
   });
 
   it("requires CSRF token for cookie-authenticated writes", async () => {
