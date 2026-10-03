@@ -47,7 +47,26 @@ function Invoke-JsonEndpoint {
     if ($response.StatusCode -lt 200 -or $response.StatusCode -gt 299) {
       throw "$Url returned HTTP $($response.StatusCode)"
     }
-    Write-Host $response.Content
+    try {
+      $payload = $response.Content | ConvertFrom-Json
+    } catch {
+      throw "$Url did not return valid JSON."
+    }
+
+    if ($Name -eq "API health" -and ($payload.status -ne "ok" -or $payload.service -ne "agua-global-api")) {
+      throw "$Url returned an unexpected health payload."
+    }
+
+    if ($Name -eq "API status") {
+      if ($payload.status -ne "ok" -or $payload.api -ne "ok" -or $payload.database -ne "ok") {
+        throw "$Url reported an unhealthy API or database state."
+      }
+      if ($null -eq $payload.response_ms -or [int]$payload.response_ms -lt 0) {
+        throw "$Url did not return a valid response time."
+      }
+    }
+
+    Write-Host ($payload | ConvertTo-Json -Compress)
   }
 }
 
@@ -89,13 +108,19 @@ if ($Production) {
 }
 
 if (-not $SkipSmoke) {
-  if ($env:TEST_DATABASE_URL) {
+  $serverEnvPath = Join-Path $ServerDir ".env"
+  $hasTestDatabaseUrl = [bool]$env:TEST_DATABASE_URL
+  if (-not $hasTestDatabaseUrl -and (Test-Path $serverEnvPath)) {
+    $hasTestDatabaseUrl = Select-String -Path $serverEnvPath -Pattern '^\s*TEST_DATABASE_URL\s*=\s*\S+' -Quiet
+  }
+
+  if ($hasTestDatabaseUrl) {
     Invoke-Step "Smoke tests" {
       npm.cmd run test:smoke
     } $ServerDir
   } else {
     Write-Host ""
-    Write-Host "Skipping smoke tests: TEST_DATABASE_URL is not set." -ForegroundColor Yellow
+    Write-Host "Skipping smoke tests: TEST_DATABASE_URL is not set in the environment or server/.env." -ForegroundColor Yellow
   }
 }
 
@@ -123,6 +148,9 @@ if ($ClientUrl) {
     if ($response.StatusCode -lt 200 -or $response.StatusCode -gt 299) {
       throw "$ClientUrl returned HTTP $($response.StatusCode)"
     }
+    if ($response.Content -notmatch '<div id="root"></div>') {
+      throw "$ClientUrl did not return the expected application shell."
+    }
     Write-Host "Client returned HTTP $($response.StatusCode)."
   }
 } else {
@@ -132,4 +160,3 @@ if ($ClientUrl) {
 
 Write-Host ""
 Write-Host "Release check completed." -ForegroundColor Green
-

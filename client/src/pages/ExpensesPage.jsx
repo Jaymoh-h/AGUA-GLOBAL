@@ -1,12 +1,16 @@
 import { Banknote, Download, Eye, FileText, FileUp, Save } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
+import EntryPanel from "../components/EntryPanel";
 import { EmptyTableRow } from "../components/EmptyState";
+import ReviewDialog from "../components/ReviewDialog";
 import TableControls, { useTableControls } from "../components/TableControls";
 import SupportingDocumentsPanel from "../components/SupportingDocumentsPanel";
 import { useToastMessage } from "../components/ToastProvider";
+import WorkspaceState from "../components/WorkspaceState";
 import { api } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
 import { namedExport } from "../utils/exportNames";
+import { lastConcludedMonth } from "../utils/reportPeriodPresets";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const expenseImportHeaders = [
@@ -37,11 +41,18 @@ function ExpensesPage({ user }) {
   const [csvText, setCsvText] = useState("expense_date,category,vendor,description,amount,payment_channel,reference,receipt_number,notes\n");
   const [importPreview, setImportPreview] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [expenseImportReviewOpen, setExpenseImportReviewOpen] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState("");
   const [channelFilter, setChannelFilter] = useState("");
   const [dateFromFilter, setDateFromFilter] = useState("");
   const [dateToFilter, setDateToFilter] = useState("");
   const [activeDocumentExpenseId, setActiveDocumentExpenseId] = useState(null);
+  const [expenseEntryOpen, setExpenseEntryOpen] = useState(false);
+  const [importEntryOpen, setImportEntryOpen] = useState(false);
+  const [expenseReviewOpen, setExpenseReviewOpen] = useState(false);
+  const [expenseReviewBusy, setExpenseReviewBusy] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [initialError, setInitialError] = useState("");
   const [, setMessage] = useToastMessage();
   const canManageExpenses = ["admin", "accountant"].includes(user.role);
 
@@ -50,36 +61,64 @@ function ExpensesPage({ user }) {
     [importPreview]
   );
 
-  const load = async () => {
-    setExpenses(await api.expenses.list());
+  const load = async ({ showState = false } = {}) => {
+    if (showState) {
+      setInitialLoading(true);
+      setInitialError("");
+    }
+    try {
+      setExpenses(await api.expenses.list());
+    } catch (err) {
+      if (showState) setInitialError(err.message || "The operating expense ledger could not be loaded.");
+      throw err;
+    } finally {
+      if (showState) setInitialLoading(false);
+    }
   };
 
   useEffect(() => {
-    load().catch((err) => setMessage(err.message));
+    load({ showState: true }).catch(() => {});
   }, []);
 
   const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
 
-  const submit = async (event) => {
+  const resetForm = () => {
+    setForm({
+      expense_date: new Date().toISOString().slice(0, 10),
+      category: "",
+      vendor: "",
+      description: "",
+      amount: "",
+      payment_channel: "cash",
+      reference: "",
+      receipt_number: "",
+      notes: ""
+    });
+  };
+
+  const submit = (event) => {
     event.preventDefault();
+    setExpenseReviewOpen(true);
+  };
+
+  const closeExpenseReview = () => {
+    if (!expenseReviewBusy) setExpenseReviewOpen(false);
+  };
+
+  const confirmExpenseReview = async (reviewNotes) => {
     setMessage("");
+    setExpenseReviewBusy(true);
     try {
-      await api.expenses.create({ ...form, amount: Number(form.amount) });
-      setForm({
-        expense_date: new Date().toISOString().slice(0, 10),
-        category: "",
-        vendor: "",
-        description: "",
-        amount: "",
-        payment_channel: "cash",
-        reference: "",
-        receipt_number: "",
-        notes: ""
-      });
+      await api.expenses.create({ ...form, amount: Number(form.amount), review_notes: reviewNotes });
+      resetForm();
+      setExpenseEntryOpen(false);
       await load();
+      setExpenseReviewOpen(false);
       setMessage("Expense recorded.");
     } catch (err) {
       setMessage(err.message);
+    } finally {
+      setExpenseReviewBusy(false);
     }
   };
 
@@ -108,12 +147,22 @@ function ExpensesPage({ user }) {
     }
   };
 
-  const commitImport = async () => {
+  const requestImportCommit = () => {
+    if (importReady) setExpenseImportReviewOpen(true);
+  };
+
+  const closeImportReview = () => {
+    if (!importing) setExpenseImportReviewOpen(false);
+  };
+
+  const commitImport = async (reviewNotes) => {
     setMessage("");
     setImporting(true);
     try {
-      const result = await api.expenses.commitImport(csvText);
+      const result = await api.expenses.commitImport(csvText, reviewNotes);
       setImportPreview(null);
+      setExpenseImportReviewOpen(false);
+      setImportEntryOpen(false);
       await load();
       setMessage(`Imported ${result.summary.imported} expense(s), total ${money(result.summary.totalAmount)}.`);
     } catch (err) {
@@ -144,6 +193,17 @@ function ExpensesPage({ user }) {
       "recorded_by_name"
     ]
   });
+  if (initialLoading) {
+    return <WorkspaceState title="Preparing expense control" detail="Retrieving the operating expense ledger and supporting evidence register." />;
+  }
+  if (initialError) {
+    return <WorkspaceState state="error" title="Expense control could not load" detail={initialError} onRetry={() => load({ showState: true }).catch(() => {})} />;
+  }
+  const filteredExpenseTotal = expenseTable.filteredRows.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+  const concludedMonth = lastConcludedMonth();
+  const concludedMonthTotal = expenses
+    .filter((expense) => String(expense.expense_date || "").startsWith(concludedMonth.key))
+    .reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
   const exportExpenses = () => {
     downloadCsvRows(
       namedExport("expense-register", "csv", [
@@ -167,22 +227,55 @@ function ExpensesPage({ user }) {
   };
 
   return (
-    <section className="page-stack">
-      <header className="page-header">
+    <section className="page-stack expense-control-page">
+      <header className="page-header expense-control-header">
         <div>
           <p className="eyebrow">Accounts</p>
-          <h2>Expenses</h2>
+          <h2>Expense control</h2>
+          <p>Record every operating cost, keep its evidence close, and give finance a clean view of spend.</p>
         </div>
       </header>
 
-      <section className={canManageExpenses ? "workspace-grid" : "page-stack"}>
+      <section className="expense-control-metrics" aria-label="Expense overview">
+        <div>
+          <span>Recorded last month</span>
+          <strong>{money(concludedMonthTotal)}</strong>
+          <small>{concludedMonth.start_date} to {concludedMonth.end_date}</small>
+        </div>
+        <div>
+          <span>Filtered spend</span>
+          <strong>{money(filteredExpenseTotal)}</strong>
+          <small>{expenseTable.filteredRows.length} matching expense{expenseTable.filteredRows.length === 1 ? "" : "s"}</small>
+        </div>
+        <div>
+          <span>Spend categories</span>
+          <strong>{expenseCategories.length}</strong>
+          <small>Used in recorded expenses</small>
+        </div>
+        <div>
+          <span>Import status</span>
+          <strong>{importPreview ? `${importPreview.summary.valid} ready` : "No file staged"}</strong>
+          <small>{importPreview?.summary.invalid ? `${importPreview.summary.invalid} row(s) need correction` : "CSV imports remain reviewable"}</small>
+        </div>
+      </section>
+
+      <section className={canManageExpenses ? "workspace-grid entry-led-workspace expense-control-workspace" : "page-stack expense-control-workspace"}>
         {canManageExpenses ? (
-        <div className="page-stack">
-          <form className="panel form-grid" onSubmit={submit}>
-            <div className="panel-heading">
-              <h3>Record Expense</h3>
-              <Banknote size={18} />
-            </div>
+        <>
+          <EntryPanel
+            actionLabel="Record expense"
+            className="expense-entry-panel"
+            disabled={expenseReviewBusy || expenseReviewOpen}
+            icon={<Banknote size={17} />}
+            onOpenChange={(open) => {
+              setExpenseEntryOpen(open);
+              if (!open) resetForm();
+            }}
+            open={expenseEntryOpen}
+            summary="Capture a verified operating cost"
+            title="Expense entry"
+          >
+          <form className="form-grid" onSubmit={submit}>
             <label>
               Date
               <input value={form.expense_date} onChange={(event) => setField("expense_date", event.target.value)} type="date" required />
@@ -229,10 +322,21 @@ function ExpensesPage({ user }) {
               Save expense
             </button>
           </form>
+          </EntryPanel>
 
-          <div className="panel form-grid">
-            <div className="panel-heading">
-              <h3>Import Expenses CSV</h3>
+          <EntryPanel
+            actionLabel="Import CSV"
+            className="expense-import-panel"
+            disabled={importing || expenseImportReviewOpen}
+            icon={<FileUp size={17} />}
+            onOpenChange={setImportEntryOpen}
+            open={importEntryOpen}
+            summary="Preview and review a batch before posting it"
+            title="Expense CSV import"
+          >
+          <div className="form-grid">
+            <div className="entry-form-context">
+              <span>Use the template to preserve review-ready ledger data.</span>
               <button
                 type="button"
                 onClick={() => downloadCsvTemplate("expenses-import-template.csv", expenseImportHeaders)}
@@ -280,17 +384,18 @@ function ExpensesPage({ user }) {
               <Eye size={17} />
               Preview CSV
             </button>
-            <button type="button" onClick={commitImport} disabled={!importReady || importing}>
+            <button type="button" onClick={requestImportCommit} disabled={!importReady || importing}>
               <FileUp size={17} />
               Import valid rows
             </button>
           </div>
-        </div>
+          </EntryPanel>
+        </>
         ) : null}
 
         <div className="page-stack wide-panel">
           {importPreview ? (
-            <div className="panel">
+            <div className="panel expense-preview-panel">
               <div className="panel-heading">
                 <h3>CSV Preview</h3>
                 <FileUp size={18} />
@@ -331,7 +436,7 @@ function ExpensesPage({ user }) {
             </div>
           ) : null}
 
-          <div className="panel">
+          <div className="panel expense-history-panel">
             <div className="panel-heading">
               <h3>Expense History</h3>
               <button type="button" onClick={exportExpenses}>
@@ -432,6 +537,53 @@ function ExpensesPage({ user }) {
           </div>
         </div>
       </section>
+      <ReviewDialog
+        open={expenseImportReviewOpen}
+        eyebrow="Expense import review"
+        title="Import reviewed expense rows"
+        description="This creates one operating-expense record for every valid row shown in the staged preview. It does not initiate or confirm payments."
+        confirmLabel="Import expenses"
+        cancelLabel="Keep preview open"
+        reasonLabel="Import approval note"
+        reasonPlaceholder="State the source and verification basis for this imported expense batch"
+        busy={importing}
+        busyLabel="Importing expenses..."
+        onCancel={closeImportReview}
+        onConfirm={commitImport}
+      >
+        {importPreview ? (
+          <div className="reading-context">
+            <div><span>Valid rows</span><strong>{Number(importPreview.summary.valid || 0).toLocaleString()}</strong></div>
+            <div><span>Total amount</span><strong>{money(importPreview.summary.totalAmount)}</strong></div>
+            <div><span>Invalid rows</span><strong>{Number(importPreview.summary.invalid || 0).toLocaleString()}</strong></div>
+            <div><span>Source</span><strong>Staged CSV preview</strong></div>
+          </div>
+        ) : null}
+      </ReviewDialog>
+      <ReviewDialog
+        open={expenseReviewOpen}
+        eyebrow="Direct expense review"
+        title="Record operating expense"
+        description="This records an operating expense in the finance ledger. It does not initiate or confirm a cash, bank, or M-Pesa transfer."
+        confirmLabel="Record expense"
+        cancelLabel="Keep editing"
+        reasonLabel="Finance approval note"
+        reasonPlaceholder="State the evidence or decision basis for the expense audit trail"
+        busy={expenseReviewBusy}
+        busyLabel="Recording expense..."
+        onCancel={closeExpenseReview}
+        onConfirm={confirmExpenseReview}
+      >
+        <div className="reading-context">
+          <div><span>Date</span><strong>{form.expense_date || "-"}</strong></div>
+          <div><span>Category</span><strong>{form.category || "-"}</strong></div>
+          <div><span>Vendor / payee</span><strong>{form.vendor || "Not recorded"}</strong></div>
+          <div><span>Amount</span><strong>{money(form.amount)}</strong></div>
+          <div><span>Channel</span><strong>{String(form.payment_channel || "-").replaceAll("_", " ")}</strong></div>
+          <div><span>Reference</span><strong>{form.reference || form.receipt_number || "Not recorded"}</strong></div>
+          <div><span>Description</span><strong>{form.description || "-"}</strong></div>
+        </div>
+      </ReviewDialog>
     </section>
   );
 }

@@ -773,6 +773,10 @@ const downloadPayslip = asyncHandler(async (req, res) => {
 const updateRunStatus = asyncHandler(async (req, res) => {
   const { status, notes = "" } = req.body;
   if (!runStatuses.includes(status)) throw new ApiError(400, "Payroll status is invalid.");
+  const reviewNotes = String(notes || "").trim();
+  if (["approved", "paid"].includes(status) && !reviewNotes) {
+    throw new ApiError(400, "Approval and payment posting notes are required for payroll runs.");
+  }
 
   const client = await pool.connect();
   try {
@@ -821,7 +825,7 @@ const updateRunStatus = asyncHandler(async (req, res) => {
        RETURNING *`,
       [
         status,
-        String(notes || "").trim(),
+        reviewNotes,
         statusPatch.approved_by,
         statusPatch.approved_at,
         statusPatch.paid_by,
@@ -854,7 +858,7 @@ const updateRunStatus = asyncHandler(async (req, res) => {
         run: result.rows[0],
         postedExpenses
       },
-      reason: notes || null
+      reason: reviewNotes || null
     });
 
     await client.query("COMMIT");

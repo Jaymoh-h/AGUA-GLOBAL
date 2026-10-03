@@ -61,6 +61,7 @@ JWT_EXPIRES_IN=8h
 SESSION_COOKIE_SECURE=true
 SESSION_COOKIE_SAME_SITE=none
 CRON_SECRET=<long-random-secret-for-vercel-cron>
+API_RATE_LIMIT_STORE=database
 AUTH_RATE_LIMIT_STORE=database
 MONITORING_ALERT_EMAILS=<ops-email-list>
 MONITORING_ALERT_PHONES=<optional-ops-sms-list>
@@ -144,6 +145,8 @@ Add the subdomains to the client Vercel project, configure DNS using Vercel's in
 - Business Settings restore drill ledger can record a staging restore result.
 - Business Settings > Print Page Defaults saves and a bill/receipt print dialog opens with the expected page setup.
 - CORS is correct: `CLIENT_ORIGIN` includes every frontend origin that calls the API.
+- SMTP sender identity is verified, `SMTP_REQUIRE_TLS=true`, and the first commissioning sends are restricted with `SMTP_ALLOWED_RECIPIENT_DOMAINS`.
+- Each live provider result is recorded in Business Settings > Operations Readiness with its external evidence reference; do not store provider credentials in AGUA.
 
 ## Release Discipline
 
@@ -165,6 +168,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\vercel-release-check.ps1
 ```
 
 The default run is a dry run. It checks Git status, audits server/client dependencies, runs targeted server syntax checks, and builds the client. It only runs smoke tests when `TEST_DATABASE_URL` is set.
+
+When `AGUA_API_URL` and `AGUA_CLIENT_URL` are supplied, the same check also requires valid API health/status JSON, an `ok` database result, a non-negative response time, and the expected client application shell. It never prints environment variable values.
 
 For a production-oriented check after loading the API project's production environment variables locally:
 
@@ -267,3 +272,14 @@ If a deployment database is behind, bring it current with:
 ```powershell
 npm.cmd run db:migrate
 ```
+# M-Pesa Confirmation Pilot
+
+The callback receiver is disabled until both `MPESA_CALLBACK_TOKEN` and the business paybill are configured. Put the token only in the deployment secret store and configure a secure gateway to forward M-Pesa confirmations to `POST /api/payments/mpesa/confirmation` with that value in the `X-AGUA-CALLBACK-TOKEN` header. Forward the provider `BusinessShortCode` unchanged: the receiver requires it to match the configured paybill before it creates a receipt. It also requires a valid transaction ID, customer account reference, and amount; repeated transaction IDs return an idempotent success response.
+
+The Payments workspace exposes callback readiness and the latest authenticated posting, duplicate, and rejection outcomes. It records transaction reference, account reference, amount, shortcode, and a rejection reason, but never stores the callback token or payer phone/name in that operational queue. Rejected callbacks do not create suspense items or receipts; resolve the account/reference issue through the normal statement reconciliation workflow.
+
+## Live Delivery Commissioning
+
+Set integration secrets only in the production host's secret manager. For SMTP, begin with `SMTP_REQUIRE_TLS=true` and a temporary `SMTP_ALLOWED_RECIPIENT_DOMAINS` value covering only approved test recipients. Send a bill or receipt to those recipients from the reviewed delivery workflow, confirm provider acceptance and rendered PDF quality, then save the provider message ID or ticket reference in Operations Readiness. Remove the recipient-domain restriction only after the business approves normal customer delivery.
+
+For SMS and WhatsApp, use provider sandbox or approved test recipients first. Confirm sender identity, opt-out behavior, delivery status, and retry behavior before enabling campaign sends. For M-Pesa, exercise only the provider's sandbox or controlled pilot paybill until callback authenticity, shortcode matching, idempotency, and settlement reconciliation are signed off.

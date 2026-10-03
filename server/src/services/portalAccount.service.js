@@ -81,7 +81,7 @@ const assertPortalCustomerAccess = async (client, user, customerId) => {
 const resolvePortalCustomer = async (client, req) => {
   const accounts = await listPortalAccounts(client, req.user.id);
   const fallbackId = accounts.find((account) => account.is_primary)?.id || req.user.customer_id || accounts[0]?.id || null;
-  const requestedId = req.query.customer_id || req.body.customer_id || fallbackId;
+  const requestedId = req.query?.customer_id || req.body?.customer_id || fallbackId;
   const customerId = await assertPortalCustomerAccess(client, req.user, requestedId);
   const activeAccount = accounts.find((account) => Number(account.id) === Number(customerId)) || null;
   return { customerId, accounts, activeAccount };

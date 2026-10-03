@@ -5,6 +5,11 @@ const { recordAuditEvent } = require("../services/audit.service");
 
 const tariffTypes = ["flat", "block"];
 const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+const requireReviewNotes = (value, action) => {
+  const reviewNotes = String(value || "").trim();
+  if (!reviewNotes) throw new ApiError(400, `Pricing approval notes are required before ${action}.`);
+  return reviewNotes;
+};
 
 const numberOrZero = (value) => {
   const number = Number(value || 0);
@@ -232,6 +237,7 @@ const replaceRateVersionBlocks = async (client, rateVersionId, blocks) => {
 };
 
 const createRate = asyncHandler(async (req, res) => {
+  const reviewNotes = requireReviewNotes(req.body.review_notes, "creating a tariff");
   const payload = normalizeRatePayload(req.body);
   const client = await pool.connect();
 
@@ -266,7 +272,8 @@ const createRate = asyncHandler(async (req, res) => {
       action: "rate.created",
       entityType: "rate",
       entityId: created.id,
-      afterData: created
+      afterData: created,
+      reason: reviewNotes
     });
     await client.query("COMMIT");
     res.status(201).json(created);
@@ -279,6 +286,7 @@ const createRate = asyncHandler(async (req, res) => {
 });
 
 const updateRate = asyncHandler(async (req, res) => {
+  const reviewNotes = requireReviewNotes(req.body.review_notes, "updating a tariff");
   const payload = normalizeRatePayload(req.body);
   const client = await pool.connect();
 
@@ -336,7 +344,8 @@ const updateRate = asyncHandler(async (req, res) => {
       entityType: "rate",
       entityId: updated.id,
       beforeData: before,
-      afterData: updated
+      afterData: updated,
+      reason: reviewNotes
     });
 
     await client.query("COMMIT");
@@ -350,6 +359,7 @@ const updateRate = asyncHandler(async (req, res) => {
 });
 
 const replaceTariffBlocks = asyncHandler(async (req, res) => {
+  const reviewNotes = requireReviewNotes(req.body.review_notes, "updating tariff blocks");
   const blocks = normalizeBlocks(req.body.blocks);
   const effectiveFrom = req.body.effective_from;
   if (effectiveFrom && !isDateOnly(effectiveFrom)) {
@@ -393,7 +403,8 @@ const replaceTariffBlocks = asyncHandler(async (req, res) => {
       entityType: "rate",
       entityId: updated.id,
       beforeData: before,
-      afterData: updated
+      afterData: updated,
+      reason: reviewNotes
     });
 
     await client.query("COMMIT");

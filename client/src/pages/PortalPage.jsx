@@ -1,27 +1,28 @@
-import { Download, FileText, LifeBuoy, Printer, ReceiptText, Send, X } from "lucide-react";
+import { FileText, Printer, ReceiptText, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import {
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from "recharts";
+import DocumentPrintHeader from "../components/DocumentPrintHeader";
 import { EmptyTableRow } from "../components/EmptyState";
-import StatCard from "../components/StatCard";
+import PortalAccountSnapshot from "../components/PortalAccountSnapshot";
+import PortalDeliveryPreferencesPanel from "../components/PortalDeliveryPreferencesPanel";
+import PortalReadingSubmissionWorkspace from "../components/PortalReadingSubmissionWorkspace";
+import PortalServiceRequestWorkspace from "../components/PortalServiceRequestWorkspace";
+import PortalStatementWorkspace from "../components/PortalStatementWorkspace";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { useToastMessage } from "../components/ToastProvider";
-import { api, assetUrl } from "../services/api";
+import WorkspaceState from "../components/WorkspaceState";
+import { api } from "../services/api";
 import { downloadBlobFile, getPrintPageDimensionsMm, namedExport, normalizePrintSettings, withPrintTitle } from "../utils/exportNames";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const moneyAbs = (value) => `KES ${Math.abs(Number(value || 0)).toLocaleString()}`;
 const number = (value) => Number(value || 0).toLocaleString();
 const date = (value) => value?.slice(0, 10) || "-";
+const todayLocal = () => {
+  const current = new Date();
+  const timezoneOffset = current.getTimezoneOffset() * 60000;
+  return new Date(current.getTime() - timezoneOffset).toISOString().slice(0, 10);
+};
 const label = (value) => String(value || "-").replaceAll("_", " ");
 const accountPositionLabel = (value) => (Number(value || 0) < 0 ? "Customer credit" : "Amount due");
 const formatCompact = (value) => {
@@ -38,6 +39,7 @@ const paddedChartMax = (dataMax) => {
   return Math.ceil((max + headroom) / roundedStep) * roundedStep;
 };
 const moneyTooltip = (value, name) => [money(value), String(name || "").replaceAll("_", " ")];
+const unitsTooltip = (value, name) => [`${number(value)} units`, String(name || "").replaceAll("_", " ")];
 const nonZeroChargeRows = (bill) =>
   [
     ["Usage subtotal", bill?.subtotal_amount || bill?.total_amount],
@@ -53,6 +55,33 @@ const blankRequest = {
   priority: "normal",
   description: ""
 };
+
+const blankPaymentPlanProposal = () => ({
+  installment_amount: "",
+  frequency: "monthly",
+  preferred_first_due_date: ""
+});
+
+const blankBillingDispute = () => ({
+  bill_id: "",
+  reason: "usage"
+});
+
+const blankConnectionRequest = () => ({
+  request_type: "new_connection",
+  site_location: "",
+  landmark: "",
+  access_contact_name: "",
+  access_contact_phone: "",
+  preferred_inspection_date: "",
+  access_notes: ""
+});
+
+const blankReadingSubmission = () => ({
+  reading_value: "",
+  reading_date: todayLocal(),
+  notes: ""
+});
 
 const pdfEscape = (value) => String(value ?? "").replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
 const mmToPoints = (value) => Number(value || 0) * 2.8346456693;
@@ -71,31 +100,104 @@ const statementPdfConfig = (settings = {}) => {
   return { width, height, margin, fontSize, lineHeight, charsPerLine, linesPerPage };
 };
 
-const downloadTextPdf = (filename, pages, printSettings = {}) => {
+const pdfDocumentText = (value, maxLength = 120) =>
+  String(value ?? "")
+    .normalize("NFKD")
+    .replace(/[^\x20-\x7E]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+const pdfColor = (color) => color.map((value) => Number(value).toFixed(3)).join(" ");
+const pdfFillRect = (x, y, width, height, color) => `q ${pdfColor(color)} rg ${x.toFixed(2)} ${y.toFixed(2)} ${width.toFixed(2)} ${height.toFixed(2)} re f Q`;
+const pdfTextAt = (font, size, x, y, value, color = [0.094, 0.141, 0.227], maxLength = 120) =>
+  `BT /${font} ${size.toFixed(2)} Tf ${pdfColor(color)} rg 1 0 0 1 ${x.toFixed(2)} ${y.toFixed(2)} Tm (${pdfEscape(pdfDocumentText(value, maxLength))}) Tj ET`;
+const pdfMoney = (value) => `KES ${Math.abs(Number(value || 0)).toLocaleString()}`;
+
+const downloadStatementPdf = (filename, statement, businessSettings = {}, printSettings = {}) => {
   const config = statementPdfConfig(printSettings);
+  const teal = [0.059, 0.463, 0.431];
+  const ink = [0.094, 0.141, 0.227];
+  const muted = [0.278, 0.384, 0.451];
+  const paleTeal = [0.898, 0.949, 0.937];
+  const paleGray = [0.969, 0.976, 0.980];
+  const border = [0.790, 0.847, 0.863];
+  const contentWidth = config.width - config.margin * 2;
+  const tableY = config.height - config.margin - 116;
+  const rowHeight = 20;
+  const rowsPerPage = Math.max(8, Math.floor((tableY - config.margin - 46) / rowHeight));
+  const entries = statement.transactions || [];
+  const transactionPages = [];
+  for (let index = 0; index < entries.length; index += rowsPerPage) transactionPages.push(entries.slice(index, index + rowsPerPage));
+  if (!transactionPages.length) transactionPages.push([]);
   const objects = [];
   const addObject = (body) => {
     objects.push(body);
     return objects.length;
   };
-  const fontId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  const regularFontId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  const boldFontId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
   const pageIds = [];
 
-  pages.forEach((lines) => {
-    const content = [
-      "BT",
-      `/F1 ${config.fontSize.toFixed(2)} Tf`,
-      `${config.lineHeight.toFixed(2)} TL`,
-      ...lines.map(
-        (line, index) =>
-          `1 0 0 1 ${config.margin.toFixed(2)} ${(config.height - config.margin - config.fontSize - index * config.lineHeight).toFixed(2)} Tm (${pdfEscape(line).slice(0, config.charsPerLine)}) Tj`
-      ),
-      "ET"
-    ].join("\n");
+  transactionPages.forEach((pageRows, pageIndex) => {
+    const commands = [];
+    const headerBottom = config.height - config.margin - 46;
+    const balanceLabel = accountPositionLabel(statement.totals.closing_balance);
+    const amountWidth = Math.max(55, Math.min(78, contentWidth * 0.17));
+    const dateWidth = Math.max(42, Math.min(56, contentWidth * 0.11));
+    const columns = {
+      date: config.margin + 8,
+      reference: config.margin + dateWidth + 8,
+      debit: config.margin + contentWidth - amountWidth * 3,
+      credit: config.margin + contentWidth - amountWidth * 2,
+      balance: config.margin + contentWidth - amountWidth
+    };
+    const referenceLength = Math.max(16, Math.floor((columns.debit - columns.reference - 8) / 4.1));
+
+    commands.push(pdfFillRect(config.margin, headerBottom, contentWidth, 46, paleGray));
+    commands.push(pdfFillRect(config.margin, headerBottom, 4, 46, teal));
+    commands.push(pdfTextAt("F2", 13, config.margin + 14, headerBottom + 29, businessSettings.business_name || "Water Billing", ink));
+    commands.push(pdfTextAt("F1", 7.5, config.margin + 14, headerBottom + 15, businessSettings.legal_name || businessSettings.physical_address || "Customer account statement", muted));
+    commands.push(pdfTextAt("F2", 7.5, config.margin + contentWidth - 145, headerBottom + 29, "Customer Statement", teal));
+    commands.push(pdfTextAt("F1", 7.5, config.margin + contentWidth - 145, headerBottom + 15, pageIndex === 0 ? "Account ledger" : "Continued ledger", muted));
+
+    commands.push(pdfTextAt("F2", 9.5, config.margin, headerBottom - 15, statement.customer.name || "Customer"));
+    commands.push(pdfTextAt("F1", 7.5, config.margin, headerBottom - 27, `Account ${statement.customer.acc_number || "-"} | Zone ${statement.customer.zone_name || "-"}`, muted));
+    commands.push(pdfTextAt("F1", 7.5, config.margin, headerBottom - 39, statement.period.lifetime ? "Period: Lifetime" : `Period: ${statement.period.start_date || "Start"} to ${statement.period.end_date || "End"}`, muted));
+    commands.push(pdfTextAt("F2", 8.5, config.margin + contentWidth - 158, headerBottom - 15, balanceLabel, ink));
+    commands.push(pdfTextAt("F2", 10.5, config.margin + contentWidth - 158, headerBottom - 29, pdfMoney(statement.totals.closing_balance), teal));
+
+    commands.push(pdfFillRect(config.margin, tableY, contentWidth, 18, paleTeal));
+    commands.push(pdfFillRect(config.margin, tableY, contentWidth, 0.8, border));
+    commands.push(pdfTextAt("F2", 7.5, columns.date, tableY + 6, "DATE", muted));
+    commands.push(pdfTextAt("F2", 7.5, columns.reference, tableY + 6, "REFERENCE", muted));
+    commands.push(pdfTextAt("F2", 7.5, columns.debit, tableY + 6, "DEBIT", muted));
+    commands.push(pdfTextAt("F2", 7.5, columns.credit, tableY + 6, "CREDIT", muted));
+    commands.push(pdfTextAt("F2", 7.5, columns.balance, tableY + 6, "BALANCE", muted));
+
+    pageRows.forEach((row, rowIndex) => {
+      const rowY = tableY - (rowIndex + 1) * rowHeight;
+      if (rowIndex % 2 === 1) commands.push(pdfFillRect(config.margin, rowY, contentWidth, rowHeight, paleGray));
+      commands.push(pdfFillRect(config.margin, rowY, contentWidth, 0.35, border));
+      commands.push(pdfTextAt("F1", 8, columns.date, rowY + 7, date(row.transaction_date), ink));
+      commands.push(pdfTextAt("F1", 8, columns.reference, rowY + 7, row.reference || "-", ink, referenceLength));
+      commands.push(pdfTextAt("F1", 8, columns.debit, rowY + 7, Number(row.debit || 0) ? pdfMoney(row.debit) : "-", ink));
+      commands.push(pdfTextAt("F1", 8, columns.credit, rowY + 7, Number(row.credit || 0) ? pdfMoney(row.credit) : "-", ink));
+      commands.push(pdfTextAt("F2", 8, columns.balance, rowY + 7, pdfMoney(row.running_balance), ink));
+    });
+
+    if (pageIndex === transactionPages.length - 1) {
+      const totalY = config.margin + 22;
+      commands.push(pdfFillRect(config.margin, totalY, contentWidth, 32, paleTeal));
+      commands.push(pdfTextAt("F2", 8, config.margin + 8, totalY + 19, `Total debits ${pdfMoney(statement.totals.debit)}`, ink));
+      commands.push(pdfTextAt("F2", 8, config.margin + contentWidth / 3 + 8, totalY + 19, `Total credits ${pdfMoney(statement.totals.credit)}`, ink));
+      commands.push(pdfTextAt("F2", 8, config.margin + (contentWidth * 2) / 3 + 8, totalY + 19, `${balanceLabel} ${pdfMoney(statement.totals.closing_balance)}`, teal));
+    }
+    commands.push(pdfTextAt("F1", 7, config.margin, config.margin + 5, `${businessSettings.business_name || "Water Billing"} | Customer statement`, muted));
+    commands.push(pdfTextAt("F1", 7, config.margin + contentWidth - 65, config.margin + 5, `Page ${pageIndex + 1} of ${transactionPages.length}`, muted));
+
+    const content = commands.join("\n");
     const contentId = addObject(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
-    const pageId = addObject(
-      `<< /Type /Page /Parent 0 0 R /MediaBox [0 0 ${config.width.toFixed(2)} ${config.height.toFixed(2)}] /Resources << /Font << /F1 ${fontId} 0 R >> >> /Contents ${contentId} 0 R >>`
-    );
+    const pageId = addObject(`<< /Type /Page /Parent 0 0 R /MediaBox [0 0 ${config.width.toFixed(2)} ${config.height.toFixed(2)}] /Resources << /Font << /F1 ${regularFontId} 0 R /F2 ${boldFontId} 0 R >> >> /Contents ${contentId} 0 R >>`);
     pageIds.push(pageId);
   });
 
@@ -114,49 +216,31 @@ const downloadTextPdf = (filename, pages, printSettings = {}) => {
   chunks.push(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`);
   offsets.slice(1).forEach((offset) => chunks.push(`${String(offset).padStart(10, "0")} 00000 n \n`));
   chunks.push(`trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
-
-  const blob = new Blob([chunks.join("")], { type: "application/pdf" });
-  downloadBlobFile(blob, filename, "pdf");
-};
-
-const buildStatementPdfPages = (statement, printSettings = {}) => {
-  const { linesPerPage } = statementPdfConfig(printSettings);
-  const header = [
-    `${statement.customer.name} Statement`,
-    `Account: ${statement.customer.acc_number} | Zone: ${statement.customer.zone_name}`,
-    statement.period.lifetime ? "Period: Lifetime" : `Period: ${statement.period.start_date || "Start"} to ${statement.period.end_date || "End"}`,
-    `Opening Balance: ${money(statement.opening_balance)}`,
-    ""
-  ];
-  const rows = statement.transactions.map(
-    (row) =>
-      `${date(row.transaction_date)} | ${row.reference} | Dr ${money(row.debit)} | Cr ${money(row.credit)} | Bal ${money(row.running_balance)}`
-  );
-  const footer = [
-    "",
-    `Total Debits: ${money(statement.totals.debit)}`,
-    `Total Credits: ${money(statement.totals.credit)}`,
-    `${accountPositionLabel(statement.totals.closing_balance)}: ${moneyAbs(statement.totals.closing_balance)}`
-  ];
-  const allLines = [...header, ...rows, ...footer];
-  const pages = [];
-  for (let index = 0; index < allLines.length; index += linesPerPage) {
-    pages.push(allLines.slice(index, index + linesPerPage));
-  }
-  return pages.length ? pages : [header];
+  downloadBlobFile(new Blob([chunks.join("")], { type: "application/pdf" }), filename, "pdf");
 };
 
 function PortalPage({ view = "overview" }) {
   const [data, setData] = useState(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [initialError, setInitialError] = useState("");
   const [requestForm, setRequestForm] = useState(blankRequest);
+  const [paymentPlanProposal, setPaymentPlanProposal] = useState(blankPaymentPlanProposal);
+  const [billingDispute, setBillingDispute] = useState(blankBillingDispute);
+  const [connectionRequest, setConnectionRequest] = useState(blankConnectionRequest);
+  const [readingSubmissionForm, setReadingSubmissionForm] = useState(blankReadingSubmission);
   const [selectedBill, setSelectedBill] = useState(null);
   const [selectedReceipt, setSelectedReceipt] = useState(null);
+  const [selectedRequest, setSelectedRequest] = useState(null);
+  const [selectedReadingSubmission, setSelectedReadingSubmission] = useState(null);
   const [statement, setStatement] = useState(null);
   const [statementFilters, setStatementFilters] = useState({ start_date: "", end_date: "" });
   const [printTarget, setPrintTarget] = useState("");
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
+  const [deliveryPreferences, setDeliveryPreferences] = useState(null);
   const [, setMessage] = useToastMessage();
   const [saving, setSaving] = useState(false);
+  const [readingSubmissionSaving, setReadingSubmissionSaving] = useState(false);
+  const [deliveryPreferencesSaving, setDeliveryPreferencesSaving] = useState(false);
 
   const openBalance = useMemo(() => Number(data?.summary?.balance_due || 0), [data]);
   const activeRequests = useMemo(() => Number(data?.summary?.active_requests || 0), [data]);
@@ -171,6 +255,14 @@ function PortalPage({ view = "overview" }) {
       ),
     [consumptionPaymentTrend]
   );
+  const consumptionTrendMax = useMemo(
+    () => paddedChartMax(consumptionPaymentTrend.reduce((max, row) => Math.max(max, Number(row.units_used || 0)), 0)),
+    [consumptionPaymentTrend]
+  );
+  const hasConsumptionData = consumptionPaymentTrend.some((row) => Number(row.units_used || 0) > 0);
+  const usageBenchmark = data?.usageBenchmark || null;
+  const usageVariance = Number(usageBenchmark?.variance_percent || 0);
+  const usagePosition = usageVariance > 5 ? "higher" : usageVariance < -5 ? "lower" : "in line";
   const billTable = useTableControls(data?.bills || [], {
     searchFields: ["bill_number", "billing_period_name", "billing_month", "due_date", "status"]
   });
@@ -180,6 +272,9 @@ function PortalPage({ view = "overview" }) {
   const requestTable = useTableControls(data?.serviceRequests || [], {
     searchFields: ["request_number", "title", "category", "status", "reported_at"]
   });
+  const readingSubmissionTable = useTableControls(data?.readingSubmissions || [], {
+    searchFields: ["meter_number", "reading_date", "reading_value", "notes", "status"]
+  });
   const viewTitles = {
     overview: data?.customer?.name || "Portal",
     bills: "Bills",
@@ -187,15 +282,30 @@ function PortalPage({ view = "overview" }) {
     requests: "Requests"
   };
 
-  const load = async (customerId = selectedCustomerId) => {
-    const nextData = await api.portal.dashboard(customerId);
-    setData(nextData);
-    setSelectedCustomerId(String(nextData.activeCustomerId || nextData.customer?.id || ""));
+  const load = async (customerId = selectedCustomerId, { showInitialState = false } = {}) => {
+    if (showInitialState) {
+      setInitialLoading(true);
+      setInitialError("");
+    }
+    try {
+      const nextData = await api.portal.dashboard(customerId);
+      setData(nextData);
+      setSelectedCustomerId(String(nextData.activeCustomerId || nextData.customer?.id || ""));
+    } catch (err) {
+      if (showInitialState) setInitialError(err.message || "Your account information could not be loaded.");
+      throw err;
+    } finally {
+      if (showInitialState) setInitialLoading(false);
+    }
   };
 
   useEffect(() => {
-    load().catch((err) => setMessage(err.message));
+    load(undefined, { showInitialState: true }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (data?.deliveryPreferences) setDeliveryPreferences(data.deliveryPreferences);
+  }, [data?.activeCustomerId, data?.deliveryPreferences]);
 
   useEffect(() => {
     const clearPrintTarget = () => setPrintTarget("");
@@ -207,6 +317,8 @@ function PortalPage({ view = "overview" }) {
     setMessage("");
     setSelectedBill(null);
     setSelectedReceipt(null);
+    setSelectedRequest(null);
+    setSelectedReadingSubmission(null);
     setStatement(null);
     setPrintTarget("");
     setSelectedCustomerId(customerId);
@@ -221,6 +333,22 @@ function PortalPage({ view = "overview" }) {
     setRequestForm((current) => ({ ...current, [field]: value }));
   };
 
+  const setPaymentPlanProposalField = (field, value) => {
+    setPaymentPlanProposal((current) => ({ ...current, [field]: value }));
+  };
+
+  const setBillingDisputeField = (field, value) => {
+    setBillingDispute((current) => ({ ...current, [field]: value }));
+  };
+
+  const setConnectionRequestField = (field, value) => {
+    setConnectionRequest((current) => ({ ...current, [field]: value }));
+  };
+
+  const setReadingSubmissionField = (field, value) => {
+    setReadingSubmissionForm((current) => ({ ...current, [field]: value }));
+  };
+
   const submitRequest = async (event) => {
     event.preventDefault();
     setMessage("");
@@ -228,16 +356,101 @@ function PortalPage({ view = "overview" }) {
       setMessage("Please add a few details before submitting.");
       return;
     }
+    if (requestForm.category === "payment_plan") {
+      if (!Number.isFinite(Number(paymentPlanProposal.installment_amount)) || Number(paymentPlanProposal.installment_amount) <= 0) {
+        setMessage("Enter the instalment amount you can pay.");
+        return;
+      }
+      if (!paymentPlanProposal.preferred_first_due_date) {
+        setMessage("Choose your preferred first payment date.");
+        return;
+      }
+    }
+    if (requestForm.category === "billing_dispute") {
+      if (!billingDispute.bill_id) {
+        setMessage("Select the bill you want staff to review.");
+        return;
+      }
+      if (!billingDispute.reason) {
+        setMessage("Choose why you are disputing this bill.");
+        return;
+      }
+    }
+    if (requestForm.category === "connection") {
+      if (!connectionRequest.site_location.trim()) {
+        setMessage("Add the site or location for the connection inspection.");
+        return;
+      }
+    }
     setSaving(true);
     try {
-      await api.portal.createServiceRequest({ ...requestForm, customer_id: selectedCustomerId || data.customer.id });
+      const request = await api.portal.createServiceRequest({
+        ...requestForm,
+        customer_id: selectedCustomerId || data.customer.id,
+        payment_plan_proposal: requestForm.category === "payment_plan" ? paymentPlanProposal : undefined,
+        billing_dispute: requestForm.category === "billing_dispute" ? billingDispute : undefined,
+        connection_request: requestForm.category === "connection" ? connectionRequest : undefined
+      });
       setRequestForm(blankRequest);
+      setPaymentPlanProposal(blankPaymentPlanProposal());
+      setBillingDispute(blankBillingDispute());
+      setConnectionRequest(blankConnectionRequest());
       await load();
-      setMessage("Service request submitted.");
+      setSelectedRequest(request);
+      setMessage("Service request submitted. You can now attach supporting files.");
     } catch (err) {
       setMessage(err.message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const submitReadingSubmission = async (event) => {
+    event.preventDefault();
+    setMessage("");
+    if (readingSubmissionForm.reading_value === "") {
+      setMessage("Enter the meter reading before submitting.");
+      return;
+    }
+    setReadingSubmissionSaving(true);
+    try {
+      const submission = await api.portal.createReadingSubmission({
+        reading_value: Number(readingSubmissionForm.reading_value),
+        reading_date: readingSubmissionForm.reading_date,
+        notes: readingSubmissionForm.notes.trim()
+      });
+      setReadingSubmissionForm(blankReadingSubmission());
+      await load();
+      setSelectedReadingSubmission(submission);
+      setMessage("Meter reading submitted for review. Billing will update only after approval.");
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setReadingSubmissionSaving(false);
+    }
+  };
+
+  const updateDeliveryPreference = (field, value) => setDeliveryPreferences((current) => ({ ...current, [field]: value }));
+
+  const submitDeliveryPreferences = async (event) => {
+    event.preventDefault();
+    if (!deliveryPreferences || deliveryPreferencesSaving) return;
+    setDeliveryPreferencesSaving(true);
+    setMessage("");
+    try {
+      const updated = await api.portal.updateDeliveryPreferences({
+        preferred_delivery_channel: deliveryPreferences.preferred_delivery_channel,
+        email_delivery_enabled: Boolean(deliveryPreferences.email_delivery_enabled),
+        sms_delivery_enabled: Boolean(deliveryPreferences.sms_delivery_enabled),
+        whatsapp_delivery_enabled: Boolean(deliveryPreferences.whatsapp_delivery_enabled)
+      });
+      setDeliveryPreferences(updated);
+      setData((current) => ({ ...current, deliveryPreferences: updated }));
+      setMessage("Delivery preferences updated.");
+    } catch (error) {
+      setMessage(error.message);
+    } finally {
+      setDeliveryPreferencesSaving(false);
     }
   };
 
@@ -294,12 +507,13 @@ function PortalPage({ view = "overview" }) {
     setMessage("");
     try {
       const nextStatement = statement || (await fetchStatement());
-      downloadTextPdf(
+      downloadStatementPdf(
         namedExport("customer-statement", "pdf", [
           nextStatement.customer.acc_number,
           nextStatement.period.lifetime ? "lifetime" : `${nextStatement.period.start_date || "start"} to ${nextStatement.period.end_date || "end"}`
         ]),
-        buildStatementPdfPages(nextStatement, data?.business),
+        nextStatement,
+        data?.business,
         data?.business
       );
       setMessage("Statement PDF downloaded.");
@@ -318,17 +532,32 @@ function PortalPage({ view = "overview" }) {
     }
   };
 
+  if (initialLoading) {
+    return <WorkspaceState detail="Retrieving your account, bills, receipts, and service activity." title="Preparing your water account" />;
+  }
+
+  if (initialError) {
+    return (
+      <WorkspaceState
+        detail={initialError}
+        onRetry={() => load(undefined, { showInitialState: true }).catch(() => {})}
+        state="error"
+        title="Your water account could not load"
+      />
+    );
+  }
+
   if (!data) {
-    return <p className="muted">Loading portal...</p>;
+    return <WorkspaceState detail="Retrieving your account information." title="Preparing your water account" />;
   }
 
   return (
-    <section className="page-stack">
-      <header className="page-header">
+    <section className={`page-stack customer-portal-page customer-portal-${view}`}>
+      <header className="page-header customer-portal-header">
         <div>
           <p className="eyebrow">Customer Portal</p>
-          <h2>{viewTitles[view] || data.customer.name}</h2>
-          <p className="muted">
+          <h2>{view === "overview" ? "Your water account" : viewTitles[view] || data.customer.name}</h2>
+          <p>
             {data.customer.acc_number} | {data.customer.zone_name}
           </p>
         </div>
@@ -348,224 +577,51 @@ function PortalPage({ view = "overview" }) {
 
       {view === "overview" ? (
         <>
-          <div className="stat-grid">
-            <StatCard label={accountPositionLabel(openBalance)} value={moneyAbs(openBalance)} detail="Net account position" />
-            <StatCard label="Open bills" value={number(data.summary.open_bills)} detail="Unpaid or partial bills" />
-            <StatCard label="Available credit" value={money(data.summary.credit_balance)} detail="Auto-applies to new bills" />
-            <StatCard label="Open requests" value={number(activeRequests)} detail="Service requests in progress" />
-          </div>
+          <PortalAccountSnapshot
+            accountPositionLabel={accountPositionLabel}
+            activeRequests={activeRequests}
+            consumptionPaymentTrend={consumptionPaymentTrend}
+            consumptionPaymentTrendMax={consumptionPaymentTrendMax}
+            consumptionTrendMax={consumptionTrendMax}
+            data={data}
+            date={date}
+            formatCompact={formatCompact}
+            hasConsumptionData={hasConsumptionData}
+            label={label}
+            money={money}
+            moneyAbs={moneyAbs}
+            moneyTooltip={moneyTooltip}
+            number={number}
+            openBalance={openBalance}
+            unitsTooltip={unitsTooltip}
+            usageBenchmark={usageBenchmark}
+            usagePosition={usagePosition}
+            usageVariance={usageVariance}
+          />
 
-          <div className="panel chart-panel">
-            <div className="panel-heading">
-              <div>
-                <h3>Billing vs Payments</h3>
-                <small>Last six months</small>
-              </div>
-            </div>
-            {consumptionPaymentTrend.length ? (
-              <div className="dashboard-chart">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={consumptionPaymentTrend} margin={{ top: 18, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
-                    <YAxis domain={[0, consumptionPaymentTrendMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
-                    <Tooltip formatter={moneyTooltip} />
-                    <Legend />
-                    <Line type="monotone" dataKey="billed_amount" name="Billed" stroke="#0f766e" strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="paid_amount" name="Paid" stroke="#2563eb" strokeWidth={2} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            ) : (
-              <div className="empty-state">
-                <strong>No billing trend yet</strong>
-                <span>Bills and payments will appear here once posted.</span>
-              </div>
-            )}
-          </div>
-
-          <div className="panel portal-profile-panel">
-            <div className="panel-heading">
-              <h3>Account Summary</h3>
-            </div>
-            <div className="portal-profile-grid">
-              <div>
-                <span>Account</span>
-                <strong>{data.customer.acc_number}</strong>
-              </div>
-              <div>
-                <span>Phone</span>
-                <strong>{data.customer.phone || "-"}</strong>
-              </div>
-              <div>
-                <span>Zone</span>
-                <strong>{data.customer.zone_name}</strong>
-              </div>
-              <div>
-                <span>Tariff</span>
-                <strong>{data.customer.rate_name}</strong>
-                <small>{money(data.customer.rate_amount)}</small>
-              </div>
-              <div>
-                <span>Deposit</span>
-                <strong>{data.customer.deposit_paid ? "Paid" : "Not paid"}</strong>
-                <small>{money(data.customer.deposit_amount)}</small>
-              </div>
-              <div>
-                <span>Latest Reading</span>
-                <strong>{data.latestReading ? number(data.latestReading.reading_value) : "-"}</strong>
-                <small>{data.latestReading ? `${data.latestReading.meter_number || "Meter"} | ${date(data.latestReading.reading_date)}` : "No reading yet"}</small>
-              </div>
-              <div>
-                <span>Account Status</span>
-                <strong>{label(data.customer.status)}</strong>
-              </div>
-              <div>
-                <span>Total Paid</span>
-                <strong>{money(data.summary.lifetime_paid)}</strong>
-              </div>
-              <div>
-                <span>Customer Credit</span>
-                <strong>{money(data.summary.credit_balance)}</strong>
-              </div>
-            </div>
-          </div>
-
-          <div className={`panel portal-statement-panel ${printTarget === "statement" ? "active-print-surface" : ""}`}>
-            <div className="panel-heading">
-              <h3>Statement</h3>
-              <FileText size={18} />
-            </div>
-            <div className="statement-filter screen-only">
-              <label>
-                From
-                <input
-                  value={statementFilters.start_date}
-                  onChange={(event) => {
-                    setStatement(null);
-                    setStatementFilters((current) => ({ ...current, start_date: event.target.value }));
-                  }}
-                  type="date"
-                />
-              </label>
-              <label>
-                To
-                <input
-                  value={statementFilters.end_date}
-                  onChange={(event) => {
-                    setStatement(null);
-                    setStatementFilters((current) => ({ ...current, end_date: event.target.value }));
-                  }}
-                  type="date"
-                />
-              </label>
-              <button type="button" onClick={previewStatement}>
-                Preview
-              </button>
-            </div>
-            <div className="row-actions screen-only">
-              <button type="button" onClick={downloadStatement}>
-                <Download size={16} />
-                Statement PDF
-              </button>
-              <button type="button" onClick={printStatement}>
-                <Printer size={16} />
-                Print statement
-              </button>
-            </div>
-            {statement ? (
-              <>
-                <div className="receipt-header">
-                  {data.business?.logo_url ? (
-                    <img className="receipt-logo" src={assetUrl(data.business.logo_url)} alt="Business logo" />
-                  ) : (
-                    <div className="receipt-logo-mark">{data.business?.business_name?.slice(0, 2) || "AG"}</div>
-                  )}
-                  <div>
-                    <h3>{data.business?.business_name || "Water Billing"}</h3>
-                    {data.business?.legal_name ? <p>{data.business.legal_name}</p> : null}
-                    <p>{[data.business?.phone, data.business?.email].filter(Boolean).join(" | ")}</p>
-                    {data.business?.tax_pin ? <p>PIN: {data.business.tax_pin}</p> : null}
-                  </div>
-                </div>
-                <div className="receipt-title">
-                  <div>
-                    <span>Statement</span>
-                    <strong>{statement.customer.acc_number}</strong>
-                  </div>
-                  <div>
-                    <span>Period</span>
-                    <strong>
-                      {statement.period.lifetime
-                        ? "Lifetime"
-                        : `${statement.period.start_date || "Start"} to ${statement.period.end_date || "End"}`}
-                    </strong>
-                  </div>
-                </div>
-                <div className="receipt-info-grid">
-                  <div>
-                    <span>Customer</span>
-                    <strong>{statement.customer.name}</strong>
-                  </div>
-                  <div>
-                    <span>Zone</span>
-                    <strong>{statement.customer.zone_name}</strong>
-                  </div>
-                  <div>
-                    <span>Opening balance</span>
-                    <strong>{money(statement.opening_balance)}</strong>
-                  </div>
-                  <div>
-                    <span>{accountPositionLabel(statement.totals.closing_balance)}</span>
-                    <strong>{moneyAbs(statement.totals.closing_balance)}</strong>
-                  </div>
-                </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Date</th>
-                        <th>Reference</th>
-                        <th>Description</th>
-                        <th>Debit</th>
-                        <th>Credit</th>
-                        <th>Balance</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {statement.transactions.length ? (
-                        statement.transactions.map((row, index) => (
-                          <tr key={`${row.transaction_type}-${row.id}-${index}`}>
-                            <td>{date(row.transaction_date)}</td>
-                            <td>{row.reference}</td>
-                            <td>{row.description}</td>
-                            <td>{money(row.debit)}</td>
-                            <td>{money(row.credit)}</td>
-                            <td>{money(row.running_balance)}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <EmptyTableRow colSpan={6} title="No statement activity" detail="No bills or payments were found for this period." />
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="receipt-total">
-                  <span>Total debits</span>
-                  <strong>{money(statement.totals.debit)}</strong>
-                </div>
-                <div className="receipt-total muted-total">
-                  <span>Total credits</span>
-                  <strong>{money(statement.totals.credit)}</strong>
-                </div>
-              </>
-            ) : (
-              <div className="empty-state">
-                <strong>Statement not loaded</strong>
-                <span>Preview or print to generate the current account statement.</span>
-              </div>
-            )}
-          </div>
+          <PortalDeliveryPreferencesPanel
+            onFieldChange={updateDeliveryPreference}
+            onSubmit={submitDeliveryPreferences}
+            preferences={deliveryPreferences}
+            saving={deliveryPreferencesSaving}
+          />
+          <PortalStatementWorkspace
+            accountPositionLabel={accountPositionLabel}
+            data={data}
+            date={date}
+            filters={statementFilters}
+            money={money}
+            moneyAbs={moneyAbs}
+            onDownload={downloadStatement}
+            onFilterChange={(field, value) => {
+              setStatement(null);
+              setStatementFilters((current) => ({ ...current, [field]: value }));
+            }}
+            onPreview={previewStatement}
+            onPrint={printStatement}
+            printActive={printTarget === "statement"}
+            statement={statement}
+          />
         </>
       ) : null}
 
@@ -686,92 +742,52 @@ function PortalPage({ view = "overview" }) {
       {view === "requests" ? (
         <section className="workspace-grid portal-workspace-grid">
           <div className="page-stack">
-          <form className="panel form-grid" onSubmit={submitRequest}>
-            <div className="panel-heading">
-              <h3>Submit Request</h3>
-              <LifeBuoy size={18} />
-            </div>
-            <label>
-              Category
-              <select value={requestForm.category} onChange={(event) => setRequestField("category", event.target.value)}>
-                <option value="leak">Leak</option>
-                <option value="meter_fault">Meter fault</option>
-                <option value="no_water">No water</option>
-                <option value="low_pressure">Low pressure</option>
-                <option value="water_quality">Water quality</option>
-                <option value="connection">Connection</option>
-                <option value="billing_support">Billing support</option>
-                <option value="other">Other</option>
-              </select>
-            </label>
-            <label>
-              Priority
-              <select value={requestForm.priority} onChange={(event) => setRequestField("priority", event.target.value)}>
-                <option value="low">Low</option>
-                <option value="normal">Normal</option>
-                <option value="high">High</option>
-                <option value="urgent">Urgent</option>
-              </select>
-            </label>
-            <label>
-              Details
-              <textarea
-                value={requestForm.description}
-                onChange={(event) => setRequestField("description", event.target.value)}
-                rows="4"
-                maxLength={2000}
-                placeholder="Add location details, when the issue started, and any useful notes."
-                required
-              />
-            </label>
-            <p className="muted">Requests are sent to the operations team and will appear in your request history.</p>
-            <button className="primary-button" type="submit" disabled={saving}>
-              <Send size={17} />
-              Submit request
-            </button>
-          </form>
+          <PortalServiceRequestWorkspace
+            bills={data?.bills || []}
+            billingDispute={billingDispute}
+            connectionRequest={connectionRequest}
+            currentDate={todayLocal()}
+            customerId={selectedCustomerId || data.customer.id}
+            date={date}
+            label={label}
+            money={money}
+            onBillingDisputeChange={setBillingDisputeField}
+            onCategoryChange={(category) => {
+              setRequestField("category", category);
+              if (category !== "payment_plan") setPaymentPlanProposal(blankPaymentPlanProposal());
+              if (category !== "billing_dispute") setBillingDispute(blankBillingDispute());
+              if (category !== "connection") setConnectionRequest(blankConnectionRequest());
+            }}
+            onCloseRequest={() => setSelectedRequest(null)}
+            onConnectionChange={setConnectionRequestField}
+            onPaymentPlanChange={setPaymentPlanProposalField}
+            onRequestFieldChange={setRequestField}
+            onSelectRequest={setSelectedRequest}
+            onSubmit={submitRequest}
+            openBalance={openBalance}
+            paymentPlanProposal={paymentPlanProposal}
+            requestForm={requestForm}
+            saving={saving}
+            selectedRequest={selectedRequest}
+            table={requestTable}
+          >
+            <PortalReadingSubmissionWorkspace
+              customerId={selectedCustomerId || data.customer.id}
+              currentDate={todayLocal()}
+              data={data}
+              date={date}
+              form={readingSubmissionForm}
+              number={number}
+              onCloseEvidence={() => setSelectedReadingSubmission(null)}
+              onEvidence={setSelectedReadingSubmission}
+              onFieldChange={setReadingSubmissionField}
+              onSubmit={submitReadingSubmission}
+              saving={readingSubmissionSaving}
+              selectedSubmission={selectedReadingSubmission}
+              table={readingSubmissionTable}
+            />
+          </PortalServiceRequestWorkspace>
 
-          <div className="panel">
-            <div className="panel-heading">
-              <h3>Service Requests</h3>
-            </div>
-            <TableControls table={requestTable} label="requests" placeholder="Search requests" />
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Request</th>
-                    <th>Category</th>
-                    <th>Status</th>
-                    <th>Reported</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {requestTable.visibleRows.length ? (
-                    requestTable.visibleRows.map((request) => (
-                      <tr key={request.id}>
-                        <td>
-                          {request.request_number || `Request ${request.id}`}
-                          <small>{request.title}</small>
-                        </td>
-                        <td>{label(request.category)}</td>
-                        <td>
-                          <StatusBadge status={request.status} />
-                        </td>
-                        <td>{date(request.reported_at)}</td>
-                      </tr>
-                    ))
-                  ) : (
-                    <EmptyTableRow
-                      colSpan={4}
-                      title="No service requests yet"
-                      detail="Use the request form above to report leaks, meter faults, or supply concerns."
-                    />
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
         </div>
         </section>
       ) : null}
@@ -789,20 +805,12 @@ function PortalPage({ view = "overview" }) {
             </button>
           </div>
 
-          <div className="receipt-header">
-            {data.business?.logo_url ? (
-              <img className="receipt-logo" src={assetUrl(data.business.logo_url)} alt="Business logo" />
-            ) : (
-              <div className="receipt-logo-mark">{data.business?.business_name?.slice(0, 2) || "AG"}</div>
-            )}
-            <div>
-              <h3>{data.business?.business_name || "Water Billing"}</h3>
-              {data.business?.legal_name ? <p>{data.business.legal_name}</p> : null}
-              {data.business?.physical_address ? <p>{data.business.physical_address}</p> : null}
-              <p>{[data.business?.phone, data.business?.email].filter(Boolean).join(" | ")}</p>
-              {data.business?.tax_pin ? <p>PIN: {data.business.tax_pin}</p> : null}
-            </div>
-          </div>
+          <DocumentPrintHeader
+            businessSettings={data.business}
+            dateLabel={`Due ${date(selectedBill.due_date)}`}
+            documentLabel="Customer bill"
+            documentNumber={selectedBill.bill_number || `Bill ${selectedBill.id}`}
+          />
 
           <div className="receipt-title">
             <div>
@@ -910,20 +918,12 @@ function PortalPage({ view = "overview" }) {
             </button>
           </div>
 
-          <div className="receipt-header">
-            {data.business?.logo_url ? (
-              <img className="receipt-logo" src={assetUrl(data.business.logo_url)} alt="Business logo" />
-            ) : (
-              <div className="receipt-logo-mark">{data.business?.business_name?.slice(0, 2) || "AG"}</div>
-            )}
-            <div>
-              <h3>{data.business?.business_name || "Water Billing"}</h3>
-              {data.business?.legal_name ? <p>{data.business.legal_name}</p> : null}
-              {data.business?.physical_address ? <p>{data.business.physical_address}</p> : null}
-              <p>{[data.business?.phone, data.business?.email].filter(Boolean).join(" | ")}</p>
-              {data.business?.tax_pin ? <p>PIN: {data.business.tax_pin}</p> : null}
-            </div>
-          </div>
+          <DocumentPrintHeader
+            businessSettings={data.business}
+            dateLabel={date(selectedReceipt.payment.payment_date)}
+            documentLabel="Receipt"
+            documentNumber={selectedReceipt.payment.receipt_number || `RCPT-${selectedReceipt.payment.id}`}
+          />
 
           <div className="receipt-title">
             <div>

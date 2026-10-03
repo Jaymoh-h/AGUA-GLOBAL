@@ -10,6 +10,37 @@ const { recordAuditEvent } = require("../services/audit.service");
 
 const meterRoles = ["client_billing", "source_backup", "shared_source_monitoring"];
 
+const searchMeters = asyncHandler(async (req, res) => {
+  const search = String(req.query.search || "").trim();
+  if (search.length < 2) {
+    res.json([]);
+    return;
+  }
+
+  const pattern = `%${search}%`;
+  const { rows } = await pool.query(
+    `SELECT m.id, m.customer_id, m.meter_number, m.meter_role, m.status,
+            c.name AS customer_name, c.acc_number,
+            latest.reading_value AS latest_reading_value,
+            latest.reading_date AS latest_reading_date
+     FROM meters m
+     JOIN customers c ON c.id = m.customer_id
+     LEFT JOIN LATERAL (
+       SELECT reading_value, reading_date
+       FROM meter_readings
+       WHERE meter_id = m.id
+       ORDER BY reading_date DESC, created_at DESC
+       LIMIT 1
+     ) latest ON TRUE
+     WHERE m.meter_number ILIKE $1 OR c.acc_number ILIKE $1 OR c.name ILIKE $1
+     ORDER BY CASE WHEN m.status = 'active' THEN 0 ELSE 1 END, m.meter_number ASC
+     LIMIT 50`,
+    [pattern]
+  );
+
+  res.json(rows);
+});
+
 const listMeters = asyncHandler(async (req, res) => {
   const customerId = Number(req.query.customer_id);
   if (!customerId) {
@@ -557,5 +588,6 @@ module.exports = {
   listMeterEvents,
   listMeters,
   replaceMeter,
+  searchMeters,
   updateMeterEvent
 };

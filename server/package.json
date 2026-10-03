@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "test:smoke": "node --test test/smoke.test.js",
+    "test:smoke": "node -r dotenv/config --test test/smoke.test.js test/rateLimit.test.js test/styledPdf.test.js test/email.service.test.js test/crossAccountPayment.test.js",
     "test:smoke:current": "node test/run-current-smoke.js",
     "test:backup:current": "node test/backup-validation.js",
     "db:check": "node src/db/check.js",
@@ -21,19 +21,20 @@
     "db:backup:monthly": "node src/db/backup.js monthly",
     "ops:reminders": "node src/jobs/sendOperationalReminders.js",
     "payment:check": "node src/db/paymentCheck.js",
-    "db:seed": "node src/db/seed.js"
+    "db:seed": "node src/db/seed.js",
+    "db:seed:scenarios": "node src/db/seedScenarios.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "express": "^4.22.2",
+    "express": "^5.2.1",
     "helmet": "^8.2.0",
     "jsonwebtoken": "^9.0.2",
-    "morgan": "^1.11.0",
-    "nodemailer": "^8.0.11",
+    "morgan": "^1.12.1",
+    "nodemailer": "^10.0.10",
     "pg": "^8.21.0",
-    "qs": "^6.15.2"
+    "qs": "^6.16.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.9"

@@ -12,6 +12,7 @@ const {
 } = require("../services/billingPeriodGuard.service");
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
+const READING_COMPLETION_RECOMMENDATION_THRESHOLD = 0.95;
 
 const resolveApplicationDate = (value) => {
   const date = value || new Date().toISOString().slice(0, 10);
@@ -119,6 +120,182 @@ const readinessCheck = ({ key, label, level, count, detail, page, focus, amount 
   focus,
   passed: toNumber(count) === 0
 });
+
+const getCloseBlockerSnapshot = async (client, period) => {
+  const periodIdParams = [period.id];
+  const periodDateParams = [period.period_start, period.period_end];
+  let queuedQuery = Promise.resolve();
+  const runQuery = (...args) => {
+    const result = queuedQuery.then(() => client.query(...args));
+    queuedQuery = result.catch(() => undefined);
+    return result;
+  };
+  const [
+    activeMeteredCustomers,
+    missingReadings,
+    readingsWithoutBills,
+    pendingSourceBilling,
+    heldBills,
+    suspensePayments,
+    pendingAdjustments,
+    periodBalances
+  ] = await Promise.all([
+    runQuery(
+      `SELECT COUNT(*) AS count
+       FROM customers c
+       WHERE c.status = 'active'
+         AND EXISTS (
+           SELECT 1 FROM meters m
+           WHERE m.customer_id = c.id AND m.status = 'active'
+         )`
+    ),
+    runQuery(
+      `SELECT COUNT(*) AS count
+       FROM customers c
+       WHERE c.status = 'active'
+         AND EXISTS (
+           SELECT 1 FROM meters m
+           WHERE m.customer_id = c.id AND m.status = 'active'
+         )
+         AND NOT EXISTS (
+           SELECT 1
+           FROM meter_readings mr
+           WHERE mr.customer_id = c.id
+             AND mr.reading_date >= $1::date
+             AND mr.reading_date <= $2::date
+         )`,
+      periodDateParams
+    ),
+    runQuery(
+      `SELECT COUNT(*) AS count
+       FROM meter_readings mr
+       LEFT JOIN bills b ON b.current_reading_id = mr.id
+       WHERE mr.billing_period_id = $1
+         AND mr.previous_reading_id IS NOT NULL
+         AND b.id IS NULL`,
+      periodIdParams
+    ),
+    runQuery(
+      `SELECT COUNT(*) AS count
+       FROM source_billing_requests
+       WHERE billing_period_id = $1
+         AND status = 'pending'`,
+      periodIdParams
+    ),
+    runQuery(
+      `SELECT COUNT(*) AS count,
+              COALESCE(SUM(COALESCE(NULLIF(balance_amount, 0), amount - paid_amount)), 0) AS amount
+       FROM bills
+       WHERE billing_period_id = $1
+         AND bill_pay_status = 'held'`,
+      periodIdParams
+    ),
+    runQuery(
+      `SELECT COUNT(*) AS count,
+              COALESCE(SUM(amount), 0) AS amount
+       FROM payment_suspense_items
+       WHERE status = 'held'`
+    ),
+    runQuery(
+      `SELECT COUNT(*) AS count,
+              COALESCE(SUM(amount), 0) AS amount
+       FROM customer_adjustments
+       WHERE status = 'pending'
+         AND adjustment_date >= $1::date
+         AND adjustment_date <= $2::date`,
+      periodDateParams
+    ),
+    runQuery(
+      `SELECT COUNT(*) FILTER (WHERE bill_pay_status = 'payable') AS bill_count,
+              COALESCE(SUM(COALESCE(NULLIF(total_amount, 0), amount)) FILTER (WHERE bill_pay_status = 'payable'), 0) AS billed_amount,
+              COALESCE(SUM(COALESCE(NULLIF(balance_amount, 0), amount - paid_amount)) FILTER (WHERE bill_pay_status = 'payable' AND status <> 'paid'), 0) AS balance_amount
+       FROM bills
+       WHERE billing_period_id = $1`,
+      periodIdParams
+    )
+  ]);
+
+  const activeMeteredCustomerCount = toNumber(activeMeteredCustomers.rows[0]?.count);
+  const billingTotals = periodBalances.rows[0] || {};
+  const checks = [
+    readinessCheck({
+      key: "no_period_bills",
+      label: "No payable bills generated",
+      level: "block",
+      count: activeMeteredCustomerCount > 0 && toNumber(billingTotals.bill_count) === 0 ? activeMeteredCustomerCount : 0,
+      detail: "A billing period with active metered customers should have payable bills before it is closed.",
+      page: "readings",
+      focus: "missing_readings"
+    }),
+    readinessCheck({
+      key: "missing_readings",
+      label: "Missing period readings",
+      level: "block",
+      count: missingReadings.rows[0]?.count,
+      detail: "Active metered customers should have a reading before the period is closed.",
+      page: "readings",
+      focus: "missing_readings"
+    }),
+    readinessCheck({
+      key: "readings_without_bills",
+      label: "Readings without bills",
+      level: "block",
+      count: readingsWithoutBills.rows[0]?.count,
+      detail: "Readings with previous readings should normally have generated bills.",
+      page: "readings",
+      focus: "missing_readings"
+    }),
+    readinessCheck({
+      key: "pending_source_billing",
+      label: "Pending source billing reviews",
+      level: "block",
+      count: pendingSourceBilling.rows[0]?.count,
+      detail: "Source-side bills need approval or rejection before close.",
+      page: "readings",
+      focus: "pending_source_billing"
+    }),
+    readinessCheck({
+      key: "held_bills",
+      label: "Held bills",
+      level: "block",
+      count: heldBills.rows[0]?.count,
+      amount: heldBills.rows[0]?.amount,
+      detail: "Held bills are generated but not payable, so balances are not final.",
+      page: "bills",
+      focus: "held_bills"
+    }),
+    readinessCheck({
+      key: "suspense_payments",
+      label: "Held suspense payments",
+      level: "block",
+      count: suspensePayments.rows[0]?.count,
+      amount: suspensePayments.rows[0]?.amount,
+      detail: "Held suspense should be reapplied or discarded before final close reporting.",
+      page: "payments",
+      focus: "suspense_payments"
+    }),
+    readinessCheck({
+      key: "pending_adjustments",
+      label: "Pending adjustments",
+      level: "block",
+      count: pendingAdjustments.rows[0]?.count,
+      amount: pendingAdjustments.rows[0]?.amount,
+      detail: "Pending credits or debits can change customer balances.",
+      page: "payments",
+      focus: "pending_adjustments"
+    })
+  ];
+
+  const blockers = checks.filter((check) => !check.passed);
+  return {
+    active_metered_customers: activeMeteredCustomerCount,
+    bill_count: toNumber(billingTotals.bill_count),
+    billed_amount: toNumber(billingTotals.billed_amount),
+    balance_amount: toNumber(billingTotals.balance_amount),
+    blockers: blockers.length,
+    checks
+  };
+};
 
 const getBillingPeriodReadiness = asyncHandler(async (req, res) => {
   const periodResult = await pool.query("SELECT * FROM billing_periods WHERE id = $1", [req.params.id]);
@@ -276,6 +453,8 @@ const getBillingPeriodReadiness = asyncHandler(async (req, res) => {
   ]);
 
   const activeCustomerCount = toNumber(activeMeteredCustomers.rows[0]?.count);
+  const completedReadingCount = Math.max(activeCustomerCount - toNumber(missingReadings.rows[0]?.count), 0);
+  const readingCompletionRate = activeCustomerCount > 0 ? completedReadingCount / activeCustomerCount : 1;
   const billingTotals = periodBalances.rows[0] || {};
   const checks = [
     readinessCheck({
@@ -419,6 +598,10 @@ const getBillingPeriodReadiness = asyncHandler(async (req, res) => {
     period,
     summary: {
       active_metered_customers: activeCustomerCount,
+      completed_readings: completedReadingCount,
+      reading_completion_rate: readingCompletionRate,
+      reading_completion_recommendation_threshold: READING_COMPLETION_RECOMMENDATION_THRESHOLD,
+      reading_completion_recommendation_met: readingCompletionRate >= READING_COMPLETION_RECOMMENDATION_THRESHOLD,
       bill_count: toNumber(billingTotals.bill_count),
       billed_amount: toNumber(billingTotals.billed_amount),
       balance_amount: toNumber(billingTotals.balance_amount),
@@ -430,11 +613,85 @@ const getBillingPeriodReadiness = asyncHandler(async (req, res) => {
   });
 });
 
+const getRevenueAssurance = asyncHandler(async (req, res) => {
+  const periodResult = await pool.query("SELECT * FROM billing_periods WHERE id = $1", [req.params.id]);
+  const period = periodResult.rows[0];
+  if (!period) throw new ApiError(404, "Billing period not found.");
+
+  const [unbilledConsumption, heldBills, missingReadings] = await Promise.all([
+    pool.query(
+      `SELECT mr.id AS reading_id, c.id AS customer_id, c.name AS customer_name, c.acc_number, z.name AS zone_name,
+              m.id AS meter_id, m.meter_number, mr.reading_date, mr.reading_value, previous.reading_value AS previous_reading_value,
+              GREATEST(mr.reading_value - previous.reading_value, 0) AS units_used
+       FROM meter_readings mr
+       JOIN meter_readings previous ON previous.id = mr.previous_reading_id
+       JOIN customers c ON c.id = mr.customer_id
+       JOIN meters m ON m.id = mr.meter_id
+       LEFT JOIN zones z ON z.id = c.zone_id
+       LEFT JOIN bills b ON b.current_reading_id = mr.id
+       WHERE mr.billing_period_id = $1 AND m.meter_role = 'client_billing' AND b.id IS NULL
+       ORDER BY units_used DESC, c.acc_number ASC`,
+      [period.id]
+    ),
+    pool.query(
+      `SELECT b.id AS bill_id, b.bill_number, c.id AS customer_id, c.name AS customer_name, c.acc_number, z.name AS zone_name,
+              m.id AS meter_id, m.meter_number, b.units_used, COALESCE(NULLIF(b.total_amount, 0), b.amount, 0) AS amount
+       FROM bills b
+       JOIN customers c ON c.id = b.customer_id
+       LEFT JOIN meters m ON m.id = b.billing_meter_id
+       LEFT JOIN zones z ON z.id = c.zone_id
+       WHERE b.billing_period_id = $1 AND b.bill_pay_status = 'held'
+       ORDER BY amount DESC, c.acc_number ASC`,
+      [period.id]
+    ),
+    pool.query(
+      `SELECT DISTINCT ON (c.id) c.id AS customer_id, c.name AS customer_name, c.acc_number, z.name AS zone_name,
+              m.id AS meter_id, m.meter_number
+       FROM customers c
+       JOIN meters m ON m.customer_id = c.id AND m.status = 'active' AND m.meter_role = 'client_billing'
+       LEFT JOIN zones z ON z.id = c.zone_id
+       WHERE c.status = 'active'
+         AND NOT EXISTS (
+           SELECT 1 FROM meter_readings mr
+           WHERE mr.customer_id = c.id AND mr.reading_date >= $1::date AND mr.reading_date <= $2::date
+         )
+       ORDER BY c.id, m.installed_at DESC, m.id DESC`,
+      [period.period_start, period.period_end]
+    )
+  ]);
+
+  const rows = [
+    ...unbilledConsumption.rows.map((row) => ({ ...row, issue_type: "unbilled_consumption" })),
+    ...heldBills.rows.map((row) => ({ ...row, issue_type: "held_bill" })),
+    ...missingReadings.rows.map((row) => ({ ...row, issue_type: "missing_reading" }))
+  ].sort((left, right) => {
+    const rank = { unbilled_consumption: 0, held_bill: 1, missing_reading: 2 };
+    return rank[left.issue_type] - rank[right.issue_type] || String(left.acc_number || "").localeCompare(String(right.acc_number || ""));
+  });
+
+  res.json({
+    period,
+    summary: {
+      unbilled_consumption_count: unbilledConsumption.rows.length,
+      unbilled_units: unbilledConsumption.rows.reduce((sum, row) => sum + toNumber(row.units_used), 0),
+      held_bill_count: heldBills.rows.length,
+      held_bill_value: heldBills.rows.reduce((sum, row) => sum + toNumber(row.amount), 0),
+      missing_reading_count: missingReadings.rows.length,
+      actionable_count: rows.length
+    },
+    rows
+  });
+});
+
 const createBillingPeriod = asyncHandler(async (req, res) => {
   const { period_start, status = "open" } = req.body;
   const reason = normalizeCorrectionReason(req.body);
+  const reviewNotes = String(req.body.review_notes || "").trim();
   if (!period_start) {
     throw new ApiError(400, "Period start date is required.");
+  }
+  if (!reviewNotes) {
+    throw new ApiError(400, "Cycle-start approval notes are required before opening or updating a billing period.");
   }
 
   if (!["draft", "open", "closed", "locked"].includes(status)) {
@@ -482,7 +739,7 @@ const createBillingPeriod = asyncHandler(async (req, res) => {
       entityId: rows[0].id,
       beforeData: before,
       afterData: rows[0],
-      reason: reason || null
+      reason: [reason, reviewNotes].filter(Boolean).join(" | ") || null
     });
     await client.query("COMMIT");
     res.status(201).json(rows[0]);
@@ -497,8 +754,13 @@ const createBillingPeriod = asyncHandler(async (req, res) => {
 const updateBillingPeriodStatus = asyncHandler(async (req, res) => {
   const { status } = req.body;
   const reason = normalizeCorrectionReason(req.body);
+  const reviewNotes = String(req.body.review_notes || "").trim();
   if (!["draft", "open", "closed", "locked"].includes(status)) {
     throw new ApiError(400, "Status must be draft, open, closed, or locked.");
+  }
+  const finalizingPeriod = ["closed", "locked"].includes(status);
+  if (finalizingPeriod && !reviewNotes) {
+    throw new ApiError(400, "Month-end approval notes are required before closing or locking a billing period.");
   }
 
   const client = await pool.connect();
@@ -510,6 +772,15 @@ const updateBillingPeriodStatus = asyncHandler(async (req, res) => {
       throw new ApiError(404, "Billing period not found.");
     }
     assertBillingPeriodEditable(before, req, reason, "change this billing period status");
+    const closeReadiness = ["closed", "locked"].includes(status)
+      ? await getCloseBlockerSnapshot(client, before)
+      : null;
+    if (closeReadiness?.blockers > 0 && !reason) {
+      throw new ApiError(
+        400,
+        "A close override reason is required before closing or locking a billing period with unresolved blockers."
+      );
+    }
     const { rows } = await client.query(
       `UPDATE billing_periods
        SET status = $1,
@@ -524,8 +795,11 @@ const updateBillingPeriodStatus = asyncHandler(async (req, res) => {
       entityType: "billing_period",
       entityId: rows[0].id,
       beforeData: before,
-      afterData: rows[0],
-      reason: reason || null
+      afterData: closeReadiness ? { ...rows[0], close_readiness: closeReadiness } : rows[0],
+      reason: [
+        finalizingPeriod ? `Month-end approval: ${reviewNotes}` : null,
+        reason ? `Correction or close override: ${reason}` : null
+      ].filter(Boolean).join(" | ") || null
     });
     await client.query("COMMIT");
     res.json(rows[0]);
@@ -547,6 +821,8 @@ const getBillingSettings = asyncHandler(async (_req, res) => {
 });
 
 const updateBillingSettings = asyncHandler(async (req, res) => {
+  const reviewNotes = String(req.body.review_notes || "").trim();
+  if (!reviewNotes) throw new ApiError(400, "Configuration approval notes are required before updating billing settings.");
   const {
     penalty_grace_days = 0,
     penalty_type = "none",
@@ -634,7 +910,8 @@ const updateBillingSettings = asyncHandler(async (req, res) => {
       entityType: "billing_settings",
       entityId: rows[0].id,
       beforeData: before,
-      afterData: rows[0]
+      afterData: rows[0],
+      reason: reviewNotes
     });
     await client.query("COMMIT");
     res.json(rows[0]);
@@ -1444,6 +1721,7 @@ module.exports = {
   applyPenaltyApplications,
   createBillingPeriod,
   getBillingPeriodReadiness,
+  getRevenueAssurance,
   getBillingSettings,
   listPenaltyApplications,
   listBillingPeriods,

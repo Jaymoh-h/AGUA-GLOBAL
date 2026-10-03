@@ -97,51 +97,6 @@ const effectivePrintScale = (settings = {}) => {
   return (normalized.print_fit_to_page ? Math.min(normalized.print_scale_percent, 95) : normalized.print_scale_percent) / 100;
 };
 
-const printablePageHeightPx = (settings = {}) => {
-  const normalized = normalizePrintSettings(settings);
-  const page = getPrintPageDimensionsMm(normalized);
-  const scale = effectivePrintScale(normalized);
-  return (((page.height - normalized.print_margin_mm * 2) * 96) / 25.4) / scale;
-};
-
-const clearPrintFooterSpacers = () => {
-  document.querySelectorAll(".print-footer-spacer").forEach((spacer) => spacer.remove());
-};
-
-const preparePrintFooterSpacing = (settings = {}) => {
-  clearPrintFooterSpacers();
-  const pageHeight = printablePageHeightPx(settings);
-  const surfaces = document.querySelectorAll(".active-print-surface.report-print, .receipt-print");
-  surfaces.forEach((surface) => {
-    const footer = surface.querySelector(".report-print-footer, .receipt-footer");
-    if (!footer) return;
-
-    const previousDisplay = surface.style.display;
-    const previousVisibility = surface.style.visibility;
-    const wasHidden = window.getComputedStyle(surface).display === "none";
-    if (wasHidden) {
-      surface.style.display = "block";
-      surface.style.visibility = "hidden";
-    }
-
-    const spacer = document.createElement("div");
-    spacer.className = "print-footer-spacer";
-    spacer.setAttribute("aria-hidden", "true");
-    spacer.style.height = "0px";
-    footer.parentNode.insertBefore(spacer, footer);
-
-    const totalHeight = surface.scrollHeight;
-    const remainder = totalHeight % pageHeight;
-    const spacerHeight = remainder > 1 ? pageHeight - remainder : 0;
-    spacer.style.height = `${Math.max(0, spacerHeight)}px`;
-
-    if (wasHidden) {
-      surface.style.display = previousDisplay;
-      surface.style.visibility = previousVisibility;
-    }
-  });
-};
-
 const applyBrowserPrintSettings = (settings = {}) => {
   const normalized = normalizePrintSettings(settings);
   const style = document.createElement("style");
@@ -171,14 +126,12 @@ export const withPrintTitle = (title, printCallback = () => window.print(), prin
   const previousTitle = document.title;
   const clearDynamicPrintSettings = applyBrowserPrintSettings(printSettings);
   document.title = slugifyFilenamePart(title, "print");
-  preparePrintFooterSpacing(printSettings);
   let restored = false;
   const restore = () => {
     if (restored) return;
     restored = true;
     document.title = previousTitle;
     clearDynamicPrintSettings();
-    clearPrintFooterSpacers();
     window.removeEventListener("afterprint", restore);
     window.removeEventListener("focus", delayedRestore);
     document.removeEventListener("visibilitychange", restoreWhenVisible);

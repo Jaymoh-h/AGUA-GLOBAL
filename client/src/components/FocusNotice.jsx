@@ -1,4 +1,4 @@
-function FocusNotice({ title, detail, onClear }) {
+function FocusNotice({ title, detail, actionLabel, onAction, onClear }) {
   if (!title) return null;
 
   return (
@@ -7,11 +7,10 @@ function FocusNotice({ title, detail, onClear }) {
         <strong>{title}</strong>
         {detail ? <small>{detail}</small> : null}
       </div>
-      {onClear ? (
-        <button type="button" onClick={onClear}>
-          Clear focus
-        </button>
-      ) : null}
+      <div className="focus-notice-actions">
+        {onAction && actionLabel ? <button type="button" onClick={onAction}>{actionLabel}</button> : null}
+        {onClear ? <button type="button" onClick={onClear}>Clear focus</button> : null}
+      </div>
     </div>
   );
 }

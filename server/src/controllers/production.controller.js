@@ -399,6 +399,8 @@ const createElectricityTopup = asyncHandler(async (req, res) => {
   const cost = toNumber(total_cost);
   if (!Number.isFinite(units) || units <= 0) throw new ApiError(400, "kWh units must be greater than zero.");
   if (!Number.isFinite(cost) || cost <= 0) throw new ApiError(400, "Total cost must be greater than zero.");
+  const reviewNotes = String(req.body.review_notes || "").trim();
+  if (!reviewNotes) throw new ApiError(400, "Finance approval notes are required before recording an electricity top-up.");
   const costPerUnit = units > 0 ? roundMoney(cost / units) : 0;
 
   const client = await pool.connect();
@@ -426,7 +428,7 @@ const createElectricityTopup = asyncHandler(async (req, res) => {
         reference: topup.reference || `PROD-TOPUP-${topup.id}`,
         notes: topup.notes || `Posted from production electricity top-up #${topup.id}.`
       },
-      { auditReason: `Production electricity top-up #${topup.id}` }
+      { auditReason: reviewNotes }
     );
     const updatedResult = await client.query(
       `UPDATE production_electricity_topups
@@ -445,7 +447,7 @@ const createElectricityTopup = asyncHandler(async (req, res) => {
         topup: updatedResult.rows[0],
         expense
       },
-      reason: futureOverrideReason
+      reason: reviewNotes || futureOverrideReason
     });
 
     await client.query("COMMIT");

@@ -151,6 +151,7 @@ Migration and operations ledger:
 - System event logs record operational errors, client events, failed logins, monitoring signals, and resolution state.
 - Monitoring alert logs record alert send attempts, channel, recipients, payload snapshot, and cooldown history.
 - Backup restore drills record quarterly recovery exercises, backup reference, target environment, duration, dataset count, findings, and follow-up actions.
+- Integration commissioning checks retain reviewed provider and hosting evidence, verification date, outcome, findings, follow-up actions, and the recording user.
 - `business_settings` also stores print/PDF defaults such as page size, orientation, margin, scale, and fit-to-page behavior.
 - `schema_migrations` records applied numbered SQL migrations with checksum, runtime, timestamp, and operator metadata.
 

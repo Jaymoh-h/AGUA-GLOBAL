@@ -1,4 +1,4 @@
-import { Download, FileText, Trash2, Upload } from "lucide-react";
+import { Download, FileText, MapPin, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useToastMessage } from "./ToastProvider";
 import { api } from "../services/api";
@@ -22,21 +22,45 @@ const readFileAsDataUrl = (file) =>
     reader.readAsDataURL(file);
   });
 
-function SupportingDocumentsPanel({ entityType, entityId }) {
+const readCurrentLocation = () =>
+  new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("This device cannot provide location evidence."));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) =>
+        resolve({
+          type: "field_photo",
+          location_consent: true,
+          captured_at: new Date(position.timestamp).toISOString(),
+          location: {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            accuracy_m: position.coords.accuracy
+          }
+        }),
+      () => reject(new Error("Location evidence was not captured. Check device permission and try again.")),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
+  });
+
+function SupportingDocumentsPanel({ entityType, entityId, customerId = "" }) {
   const [documents, setDocuments] = useState([]);
   const [description, setDescription] = useState("");
+  const [captureLocation, setCaptureLocation] = useState(false);
   const [, setMessage] = useToastMessage();
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
-    setDocuments(await api.documents.list(entityType, entityId));
+    setDocuments(await api.documents.list(entityType, entityId, customerId));
   };
 
   useEffect(() => {
     if (entityType && entityId) {
       load().catch((err) => setMessage(err.message));
     }
-  }, [entityType, entityId]);
+  }, [entityType, entityId, customerId]);
 
   const upload = async (event) => {
     const file = event.target.files?.[0];
@@ -49,17 +73,24 @@ function SupportingDocumentsPanel({ entityType, entityId }) {
     setMessage("");
     setSaving(true);
     try {
+      if (captureLocation && !file.type.startsWith("image/")) {
+        throw new Error("Location evidence can only be attached to a photo.");
+      }
+      const evidenceMetadata = captureLocation ? await readCurrentLocation() : undefined;
       const data = await readFileAsDataUrl(file);
       await api.documents.upload({
         entity_type: entityType,
         entity_id: entityId,
+        customer_id: customerId || undefined,
         original_name: file.name,
         mime_type: file.type,
         data,
-        description
+        description,
+        evidence_metadata: evidenceMetadata
       });
       event.target.value = "";
       setDescription("");
+      setCaptureLocation(false);
       await load();
       setMessage("Document uploaded.");
     } catch (err) {
@@ -72,7 +103,7 @@ function SupportingDocumentsPanel({ entityType, entityId }) {
   const download = async (document) => {
     setMessage("");
     try {
-      downloadBlobFile(await api.documents.download(document.id), document.original_name || "document");
+      downloadBlobFile(await api.documents.download(document.id, customerId), document.original_name || "document");
     } catch (err) {
       setMessage(err.message);
     }
@@ -81,7 +112,7 @@ function SupportingDocumentsPanel({ entityType, entityId }) {
   const remove = async (document) => {
     setMessage("");
     try {
-      await api.documents.remove(document.id);
+      await api.documents.remove(document.id, customerId);
       await load();
       setMessage("Document removed.");
     } catch (err) {
@@ -110,6 +141,20 @@ function SupportingDocumentsPanel({ entityType, entityId }) {
             disabled={saving}
           />
         </label>
+        {["maintenance_request", "customer_reading_submission"].includes(entityType) && (
+          <label className="document-location-consent">
+            <input
+              type="checkbox"
+              checked={captureLocation}
+              onChange={(event) => setCaptureLocation(event.target.checked)}
+              disabled={saving}
+            />
+            <span>
+              <MapPin size={15} /> Attach current location to this photo
+              <small>Use only with consent. Permitted staff can review coordinates for 90 days; expired coordinates are removed when the record is next accessed.</small>
+            </span>
+          </label>
+        )}
       </div>
       <div className="table-wrap">
         <table>
@@ -119,6 +164,7 @@ function SupportingDocumentsPanel({ entityType, entityId }) {
               <th>Size</th>
               <th>Uploaded</th>
               <th>Notes</th>
+              <th>Evidence</th>
               <th>Actions</th>
             </tr>
           </thead>
@@ -134,6 +180,13 @@ function SupportingDocumentsPanel({ entityType, entityId }) {
                   </td>
                   <td>{document.description || "-"}</td>
                   <td>
+                    {document.evidence_metadata?.location ? (
+                      <span className="document-evidence-location" title="Field location retained for review">
+                        <MapPin size={14} /> GPS
+                      </span>
+                    ) : "-"}
+                  </td>
+                  <td>
                     <div className="row-actions">
                       <button className="icon-button" type="button" onClick={() => download(document)} title="Download document">
                         <Download size={16} />
@@ -147,7 +200,7 @@ function SupportingDocumentsPanel({ entityType, entityId }) {
               ))
             ) : (
               <tr>
-                <td colSpan="5" className="muted">
+                <td colSpan="6" className="muted">
                   No supporting documents attached.
                 </td>
               </tr>

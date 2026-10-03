@@ -43,6 +43,8 @@ const knowledgeDocumentRoutes = require("./routes/knowledgeDocument.routes");
 const operationalReminderRoutes = require("./routes/operationalReminder.routes");
 const monitoringRoutes = require("./routes/monitoring.routes");
 const customerServiceChargeRoutes = require("./routes/customerServiceCharge.routes");
+const paymentArrangementRoutes = require("./routes/paymentArrangement.routes");
+const standingOrderRoutes = require("./routes/standingOrder.routes");
 const { recordSystemEvent } = require("./services/systemEvent.service");
 
 const app = express();
@@ -158,6 +160,8 @@ app.use("/api/knowledge-documents", knowledgeDocumentRoutes);
 app.use("/api/reminders", operationalReminderRoutes);
 app.use("/api/monitoring", monitoringRoutes);
 app.use("/api/customer-service-charges", customerServiceChargeRoutes);
+app.use("/api/payment-arrangements", paymentArrangementRoutes);
+app.use("/api/standing-orders", standingOrderRoutes);
 
 app.use(errorHandler);
 

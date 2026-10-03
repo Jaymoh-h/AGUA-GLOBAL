@@ -87,11 +87,13 @@ const listUsers = asyncHandler(async (_req, res) => {
 });
 
 const createUser = asyncHandler(async (req, res) => {
-  const { name, email, phone, role, password, customer_id, linked_customer_ids, is_active = true } = req.body;
+  const { name, email, phone, role, password, customer_id, linked_customer_ids, is_active = true, review_notes } = req.body;
 
   if (!name || !email || !role || !password) {
     throw new ApiError(400, "Name, email, role, and password are required.");
   }
+  const reviewNotes = String(review_notes || "").trim();
+  if (!reviewNotes) throw new ApiError(400, "Access approval notes are required before creating a user account.");
 
   if (!roles.includes(role)) {
     throw new ApiError(400, "Invalid role.");
@@ -142,7 +144,8 @@ const createUser = asyncHandler(async (req, res) => {
       action: "user.created",
       entityType: "user",
       entityId: userResult.rows[0].id,
-      afterData: userResult.rows[0]
+      afterData: userResult.rows[0],
+      reason: reviewNotes
     });
     await client.query("COMMIT");
     res.status(201).json(userResult.rows[0]);
@@ -155,7 +158,9 @@ const createUser = asyncHandler(async (req, res) => {
 });
 
 const updateUser = asyncHandler(async (req, res) => {
-  const { name, email, phone, role, is_active, customer_id, linked_customer_ids, password } = req.body;
+  const { name, email, phone, role, is_active, customer_id, linked_customer_ids, password, review_notes } = req.body;
+  const reviewNotes = String(review_notes || "").trim();
+  if (!reviewNotes) throw new ApiError(400, "Access approval notes are required before changing a user account.");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -259,7 +264,8 @@ const updateUser = asyncHandler(async (req, res) => {
       entityType: "user",
       entityId: afterResult.rows[0].id,
       beforeData: before,
-      afterData: afterResult.rows[0]
+      afterData: afterResult.rows[0],
+      reason: reviewNotes
     });
     await client.query("COMMIT");
     res.json(afterResult.rows[0]);
@@ -272,6 +278,10 @@ const updateUser = asyncHandler(async (req, res) => {
 });
 
 const createUserAccessProfile = asyncHandler(async (req, res) => {
+  const reviewNotes = String(req.body?.review_notes || "").trim();
+  if (!reviewNotes) {
+    throw new ApiError(400, "Access-context approval notes are required before creating a user access context.");
+  }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -295,7 +305,8 @@ const createUserAccessProfile = asyncHandler(async (req, res) => {
       action: "user.access_profile.created",
       entityType: "user",
       entityId: account.id,
-      afterData: { profile }
+      afterData: { profile },
+      reason: reviewNotes
     });
     await client.query("COMMIT");
     res.status(201).json(afterResult.rows[0]);
@@ -308,6 +319,10 @@ const createUserAccessProfile = asyncHandler(async (req, res) => {
 });
 
 const updateUserAccessProfile = asyncHandler(async (req, res) => {
+  const reviewNotes = String(req.body?.review_notes || "").trim();
+  if (!reviewNotes) {
+    throw new ApiError(400, "Access-context approval notes are required before changing a user access context.");
+  }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -331,7 +346,8 @@ const updateUserAccessProfile = asyncHandler(async (req, res) => {
       action: "user.access_profile.updated",
       entityType: "user",
       entityId: account.id,
-      afterData: { profile }
+      afterData: { profile },
+      reason: reviewNotes
     });
     await client.query("COMMIT");
     res.json(afterResult.rows[0]);
@@ -344,6 +360,10 @@ const updateUserAccessProfile = asyncHandler(async (req, res) => {
 });
 
 const detachUserAccessProfile = asyncHandler(async (req, res) => {
+  const reviewNotes = String(req.body?.review_notes || "").trim();
+  if (!reviewNotes) {
+    throw new ApiError(400, "Access-context removal notes are required before detaching a user access context.");
+  }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -365,7 +385,8 @@ const detachUserAccessProfile = asyncHandler(async (req, res) => {
       entityType: "user",
       entityId: account.id,
       beforeData: { profile },
-      afterData: afterResult.rows[0]
+      afterData: afterResult.rows[0],
+      reason: reviewNotes
     });
     await client.query("COMMIT");
     res.json(afterResult.rows[0]);

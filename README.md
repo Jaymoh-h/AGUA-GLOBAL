@@ -29,6 +29,7 @@ The project documentation suite lives in [`docs/`](docs/README.md). It includes 
 - Meter replacement workflow with old final readings, new meter baselines, and event history
 - CSV reading imports with preview validation before committing rows
 - Automatic bill creation from current and previous readings
+- Browser-native batch reading sheet with session recovery, inline validation, and preview-before-import controls
 - Editable meter readings that recalculate the affected bills
 - Monthly billing periods with due dates on the last day of the following month
 - Closed billing periods allow admin/accountant corrections only with an audit reason; locked periods require admin correction
@@ -40,8 +41,8 @@ The project documentation suite lives in [`docs/`](docs/README.md). It includes 
 - Editable receipts that reverse and reapply allocations
 - Payment voiding with suspense handling for later reapplication or discard
 - Printable receipts with business profile header, logo, allocations, and footer notes
-- CSV payment imports with preview validation before committing receipts
-- Bank statement PDF import trainer for extracting, mapping, and matching payments
+- CSV payment imports with preview validation, final review confirmation, and append-only audit-backed batch summaries
+- Bank and M-Pesa/paybill statement reconciliation with conservative customer matching, reference checks, and completed-status validation for M-Pesa
 - Expense register with manual entry and CSV imports
 - Business settings for shared logo/contact/payment/footer details
 - Business print defaults for page size, orientation, margins, scale, and wide-print compression
@@ -451,6 +452,7 @@ JWT_EXPIRES_IN=8h
 SESSION_COOKIE_SECURE=true
 SESSION_COOKIE_SAME_SITE=none
 CRON_SECRET=<long-random-secret-for-vercel-cron>
+API_RATE_LIMIT_STORE=database
 AUTH_RATE_LIMIT_STORE=database
 CLIENT_ORIGIN=https://<client-project>.vercel.app
 LOGO_STORAGE_MODE=data-url
@@ -468,9 +470,12 @@ Optional delivery environment variables:
 SMTP_HOST=<smtp-host>
 SMTP_PORT=587
 SMTP_SECURE=false
+SMTP_REQUIRE_TLS=true
 SMTP_USER=<smtp-username>
 SMTP_PASS=<smtp-password>
 SMTP_FROM=<verified-sender-email>
+# Optional during live-provider commissioning. Restrict recipients to test domains, then remove when customer delivery is approved.
+SMTP_ALLOWED_RECIPIENT_DOMAINS=<optional-test-domain>
 
 SMS_PROVIDER=twilio
 SMS_DEFAULT_COUNTRY_CODE=254
@@ -620,14 +625,11 @@ npm.cmd run dev
 
 ## Remaining Work
 
-Most core modules are now implemented. The remaining work is mainly hardening, automation, and larger external integrations:
+The local workflow redesign, role acceptance, high-risk smoke coverage, migration tracking, communication recovery controls, and PostgreSQL supporting-document storage are implemented. Remaining work is now external commissioning and production hosting:
 
-- Run end-to-end test passes for billing, receipts, imports, corrections, payroll, production, reports, and customer portal flows.
-- Add automated test coverage around high-risk money and meter-reading workflows.
-- Complete live provider testing for SMS and WhatsApp after production credentials and approved templates are configured.
-- Add M-Pesa/paybill transaction import or API integration.
-- Add bank integration beyond the current PDF statement import trainer.
-- Add retries and opt-out handling if bulk messaging volume grows.
-- Use the migration runner/table for all future schema changes so applied migrations are tracked automatically.
-- Supporting documents are stored in PostgreSQL, with a 3MB file limit that remains within Vercel Function payload limits.
-- Finish production deployment checks, provider backup/replication setup, and role-by-role user acceptance testing.
+- Complete live SMTP, SMS, and WhatsApp delivery checks after production credentials, sender identities, and approved sandbox recipients are available.
+- Add direct M-Pesa/paybill provider integration and settlement reconciliation after provider onboarding, callback credentials, and settlement-feed access are available.
+- Add bank-feed integration beyond PDF/CSV statement reconciliation after the bank supplies an API, host-to-host, or SFTP contract and non-production test feed.
+- Select the production PostgreSQL plan, then verify provider-native point-in-time recovery and read-replica/failover evidence where supported.
+- Configure and exercise an external uptime monitor against `/api/status`, including alert routing and response-time thresholds.
+- Record completed provider and hosting checks in the Business Settings commissioning evidence register, with the source evidence reference.

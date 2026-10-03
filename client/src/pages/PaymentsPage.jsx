@@ -1,74 +1,75 @@
-import { CircleDollarSign, Download, Eye, FileUp, Mail, MessageSquare, Printer, Save, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import AuditPanel from "../components/AuditPanel";
+import { ArrowLeft, CircleDollarSign, Download, History } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CollapsibleSection from "../components/CollapsibleSection";
-import { EmptyTableRow } from "../components/EmptyState";
+import EntryPanel from "../components/EntryPanel";
 import FocusNotice from "../components/FocusNotice";
-import TableControls, { useTableControls } from "../components/TableControls";
+import MpesaCallbackControl from "../components/MpesaCallbackControl";
+import PaymentAdjustmentApprovalPanel from "../components/PaymentAdjustmentApprovalPanel";
+import PaymentAdjustmentForm from "../components/PaymentAdjustmentForm";
+import PaymentCorrectionTimeline from "../components/PaymentCorrectionTimeline";
+import PaymentCsvImportPanel from "../components/PaymentCsvImportPanel";
+import PaymentEntryFlow from "../components/PaymentEntryFlow";
+import PaymentImportHistoryPanel from "../components/PaymentImportHistoryPanel";
+import PaymentImportPreview from "../components/PaymentImportPreview";
+import PaymentHistoryPanel from "../components/PaymentHistoryPanel";
+import PaymentReceiptPanel from "../components/PaymentReceiptPanel";
+import PaymentReconciliationWorkspace from "../components/PaymentReconciliationWorkspace";
+import PaymentReviewDialogs from "../components/PaymentReviewDialogs";
+import PaymentSuspensePanel from "../components/PaymentSuspensePanel";
+import { useTableControls } from "../components/TableControls";
 import { useToastMessage } from "../components/ToastProvider";
-import { api, assetUrl } from "../services/api";
+import WorkspaceState from "../components/WorkspaceState";
+import { api } from "../services/api";
+import {
+  detectStatementMapping,
+  findCustomerCandidates,
+  normalizeStatementAmount,
+  normalizeStatementDate,
+  parseStatementCsv,
+  readMappedStatementValue,
+  statementConfidenceLabel,
+  statementRowStatus
+} from "../utils/bankReconciliation";
+import { extractPdfStatementTable, pdfReadErrorMessage } from "../utils/bankStatementPdf";
 import { downloadCsvRows, downloadCsvTemplate, rowsToCsv } from "../utils/csvTemplate";
 import { namedExport, withPrintTitle } from "../utils/exportNames";
+import useScopedDraft from "../utils/useScopedDraft";
+import usePaymentHistory from "../hooks/usePaymentHistory";
+import usePaymentsWorkspaceData from "../hooks/usePaymentsWorkspaceData";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const date = (value) => value?.slice(0, 10) || "-";
+const todayLocal = () => {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+};
+const localDateOffset = (days) => {
+  const value = new Date();
+  value.setDate(value.getDate() + days);
+  return new Date(value.getTime() - value.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+};
+const weekStartLocal = () => {
+  const value = new Date();
+  value.setDate(value.getDate() - ((value.getDay() + 6) % 7));
+  return new Date(value.getTime() - value.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+};
+const newPaymentSubmissionKey = () =>
+  window.crypto?.randomUUID?.() || `payment-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const label = (value) => String(value || "-").replaceAll("_", " ");
 const accountPositionLabel = (value) => (Number(value || 0) < 0 ? "Customer credit" : "Amount due");
-const accountPositionMoney = (value) => money(Math.abs(Number(value || 0)));
 const paymentImportHeaders = [
   "acc_number",
   "payment_date",
   "amount",
   "payment_channel",
+  "transaction_status",
   "receipt_number",
   "external_reference",
   "received_from",
   "bill_number",
   "notes"
 ];
-const bankTemplateStorageKey = "agua-bank-statement-template-v1";
-const bankProfilesStorageKey = "agua-bank-statement-profiles-v1";
 const bankHistoryStorageKey = "agua-bank-statement-history-v1";
-const bankFieldOptions = [
-  { key: "", label: "Select field" },
-  { key: "payment_date", label: "Payment date" },
-  { key: "amount", label: "Amount paid" },
-  { key: "external_reference", label: "Reference / transaction ID" },
-  { key: "received_from", label: "Payer name" },
-  { key: "narration", label: "Narration / description" },
-  { key: "receipt_number", label: "Receipt number" },
-  { key: "notes", label: "Notes" }
-];
-
-let pdfJsLoader;
-
-const loadPdfJs = async () => {
-  if (!pdfJsLoader) {
-    pdfJsLoader = Promise.all([import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.mjs?url")]).then(
-      ([pdfjsLib, worker]) => {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = worker.default;
-        return pdfjsLib;
-      }
-    );
-  }
-  return pdfJsLoader;
-};
-
-const loadStoredBankMapping = () => {
-  try {
-    return JSON.parse(window.localStorage.getItem(bankTemplateStorageKey) || "{}");
-  } catch {
-    return {};
-  }
-};
-
-const loadStoredBankProfiles = () => {
-  try {
-    return JSON.parse(window.localStorage.getItem(bankProfilesStorageKey) || "{}");
-  } catch {
-    return {};
-  }
-};
 
 const loadStoredBankHistory = () => {
   try {
@@ -78,548 +79,176 @@ const loadStoredBankHistory = () => {
   }
 };
 
-const normalizeText = (value) =>
-  String(value || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+const createBankReconciliationDraft = () => ({
+  csvText: "",
+  headers: [],
+  rows: [],
+  mapping: {},
+  reviewRows: [],
+  profileName: "Default",
+  importHistory: loadStoredBankHistory(),
+  reconciliationExclusions: [],
+  stage: 1,
+  sourceName: "",
+  paymentChannel: "bank"
+});
+const createPaymentHistoryFilters = () => ({ channel: "", dateFrom: "", dateTo: "" });
+const createMpesaCallbackFilters = () => ({ status: "", limit: "20" });
 
-const digitsOnly = (value) => String(value || "").replace(/\D/g, "");
-const bankDatePattern = /(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4})/;
-const bankAmountPattern = /(?:kes|ksh|cr)?\s*[\d,]+\.\d{2}\b|(?:kes|ksh|cr)?\s*[\d,]{4,}\b/i;
-
-const parseCsvRows = (csv) => {
-  const parsed = [];
-  let row = [];
-  let cell = "";
-  let quoted = false;
-
-  for (let index = 0; index < csv.length; index += 1) {
-    const char = csv[index];
-    if (quoted) {
-      if (char === '"' && csv[index + 1] === '"') {
-        cell += '"';
-        index += 1;
-      } else if (char === '"') {
-        quoted = false;
-      } else {
-        cell += char;
-      }
-    } else if (char === '"') {
-      quoted = true;
-    } else if (char === ",") {
-      row.push(cell);
-      cell = "";
-    } else if (char === "\n") {
-      row.push(cell);
-      parsed.push(row);
-      row = [];
-      cell = "";
-    } else if (char !== "\r") {
-      cell += char;
-    }
-  }
-
-  row.push(cell);
-  parsed.push(row);
-
-  const nonEmptyRows = parsed.filter((cells) => cells.some((value) => String(value || "").trim()));
-  if (!nonEmptyRows.length) return { headers: [], rows: [] };
-
-  const seenHeaders = new Map();
-  const headers = nonEmptyRows[0].map((header, index) => {
-    const baseHeader = String(header || `Column ${index + 1}`).trim() || `Column ${index + 1}`;
-    const count = seenHeaders.get(baseHeader) || 0;
-    seenHeaders.set(baseHeader, count + 1);
-    return count ? `${baseHeader} ${count + 1}` : baseHeader;
-  });
-
-  const rows = nonEmptyRows.slice(1).map((cells, rowIndex) => {
-    const record = { _rowNumber: rowIndex + 2 };
-    headers.forEach((header, index) => {
-      record[header] = cells[index] || "";
-    });
-    return record;
-  });
-
-  return { headers, rows };
-};
-
-const pdfReadErrorMessage = (err, hasPassword) => {
-  if (err?.name === "PasswordException" || /password/i.test(err?.message || "")) {
-    return hasPassword
-      ? "The PDF password was rejected. Check the password and try again."
-      : "This PDF is password-protected. Enter the statement password and retry.";
-  }
-  if (/permission|encrypted|protected|copy/i.test(err?.message || "")) {
-    return "The PDF opened with restrictions that blocked text extraction. Use a bank CSV export, an unlocked copy, or paste the statement text into the box.";
-  }
-  return `Could not read the PDF statement: ${err.message}`;
-};
-
-const splitPdfLineIntoCells = (items) => {
-  const cells = [];
-
-  items
-    .sort((left, right) => left.x - right.x)
-    .forEach((item) => {
-      const text = String(item.text || "").trim();
-      if (!text) return;
-      const width = Number(item.width || text.length * 5);
-      const end = item.x + width;
-      const current = cells[cells.length - 1];
-      const gap = current ? item.x - current.end : 0;
-
-      if (!current || gap > 18) {
-        cells.push({ x: item.x, end, text });
-      } else {
-        current.text = `${current.text}${gap > 2 ? " " : ""}${text}`.replace(/\s+/g, " ").trim();
-        current.end = Math.max(current.end, end);
-      }
-    });
-
-  return cells;
-};
-
-const makeUniqueHeaders = (headers) => {
-  const seen = new Map();
-  return headers.map((header, index) => {
-    const base = String(header || `Column ${index + 1}`).trim() || `Column ${index + 1}`;
-    const count = seen.get(base) || 0;
-    seen.set(base, count + 1);
-    return count ? `${base} ${count + 1}` : base;
-  });
-};
-
-const pdfHeaderScore = (line) => {
-  const text = normalizeText(line.text);
-  return [
-    /date/.test(text),
-    /description|narration|particular|detail|remarks/.test(text),
-    /reference|ref|transaction/.test(text),
-    /credit|deposit|paid|amount/.test(text),
-    /balance/.test(text)
-  ].filter(Boolean).length;
-};
-
-const lineLooksLikePayment = (line) => bankDatePattern.test(line.text) && bankAmountPattern.test(line.text);
-
-const ignoredPdfContinuationLine = (line) => {
-  const text = normalizeText(line.text);
-  if (!text) return true;
-  return /^(opening|closing|available|ledger|brought forward|carried forward|total|balance)/.test(text);
-};
-
-const preferredContinuationIndex = (headers) => {
-  const scored = headers.map((header, index) => {
-    const text = normalizeText(header);
-    let score = index === 0 ? 1 : 0;
-    if (/description|narration|particular|detail|remarks|payer|name/.test(text)) score += 5;
-    if (/reference|ref|transaction/.test(text)) score += 2;
-    if (/date|amount|credit|debit|balance/.test(text)) score -= 3;
-    return { index, score };
-  });
-  return scored.sort((left, right) => right.score - left.score)[0]?.index || 0;
-};
-
-const nearestPdfColumnIndex = (cell, anchors) =>
-  anchors.reduce((bestIndex, anchor, anchorIndex) => {
-    const bestDistance = Math.abs(cell.x - anchors[bestIndex]);
-    const currentDistance = Math.abs(cell.x - anchor);
-    return currentDistance < bestDistance ? anchorIndex : bestIndex;
-  }, 0);
-
-const appendPdfCellToRow = (row, header, value) => {
-  row[header] = [row[header], value].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
-};
-
-const typicalPdfLineGap = (lines) => {
-  const gaps = [];
-  for (let index = 1; index < lines.length; index += 1) {
-    const previous = lines[index - 1];
-    const current = lines[index];
-    if (previous.pageNumber !== current.pageNumber) continue;
-    const gap = Math.abs(previous.y - current.y);
-    if (gap >= 4 && gap <= 40) gaps.push(gap);
-  }
-  if (!gaps.length) return 12;
-  return gaps.sort((left, right) => left - right)[Math.floor(gaps.length / 2)];
-};
-
-const appendPdfContinuationLine = (row, line, headers, anchors, continuationIndex) => {
-  line.cells.forEach((cell) => {
-    const nearestIndex = nearestPdfColumnIndex(cell, anchors);
-    const targetIndex = nearestIndex <= continuationIndex + 1 ? continuationIndex : nearestIndex;
-    appendPdfCellToRow(row, headers[targetIndex], cell.text);
-  });
-};
-
-const buildPdfTableCsv = (lines) => {
-  const headerIndex = lines.findIndex((line) => line.cells.length >= 3 && pdfHeaderScore(line) >= 2);
-  if (headerIndex === -1) return null;
-
-  const headerLine = lines[headerIndex];
-  const headers = makeUniqueHeaders(headerLine.cells.map((cell) => cell.text));
-  const anchors = headerLine.cells.map((cell) => cell.x);
-  const continuationIndex = preferredContinuationIndex(headers);
-  const bodyLines = lines.slice(headerIndex + 1).filter((line) => line.cells.length && !ignoredPdfContinuationLine(line));
-  const lineGap = typicalPdfLineGap(bodyLines);
-  const continuationDistance = Math.max(lineGap * 1.8, 18);
-  const paymentIndexes = bodyLines
-    .map((line, index) => (lineLooksLikePayment(line) ? index : -1))
-    .filter((index) => index >= 0);
-  const continuationByPaymentIndex = new Map(paymentIndexes.map((index) => [index, []]));
-  const rows = [];
-
-  bodyLines.forEach((line, index) => {
-    if (lineLooksLikePayment(line)) return;
-    const nearestPaymentIndex = paymentIndexes
-      .filter((paymentIndex) => bodyLines[paymentIndex].pageNumber === line.pageNumber)
-      .map((paymentIndex) => ({
-        paymentIndex,
-        distance: Math.abs(bodyLines[paymentIndex].y - line.y)
-      }))
-      .filter((candidate) => candidate.distance <= continuationDistance)
-      .sort((left, right) => left.distance - right.distance)[0]?.paymentIndex;
-
-    if (nearestPaymentIndex !== undefined) {
-      continuationByPaymentIndex.get(nearestPaymentIndex)?.push({ index, line });
-    }
-  });
-
-  paymentIndexes.forEach((paymentIndex) => {
-    const line = bodyLines[paymentIndex];
-    const row = { _rowNumber: paymentIndex + headerIndex + 2 };
-    headers.forEach((header) => {
-      row[header] = "";
-    });
-
-    continuationByPaymentIndex
-      .get(paymentIndex)
-      ?.filter((item) => item.index < paymentIndex)
-      .sort((left, right) => left.index - right.index)
-      .forEach((item) => appendPdfContinuationLine(row, item.line, headers, anchors, continuationIndex));
-
-    line.cells.forEach((cell) => {
-      const nearestIndex = nearestPdfColumnIndex(cell, anchors);
-      const header = headers[nearestIndex];
-      appendPdfCellToRow(row, header, cell.text);
-    });
-
-    continuationByPaymentIndex
-      .get(paymentIndex)
-      ?.filter((item) => item.index > paymentIndex)
-      .sort((left, right) => left.index - right.index)
-      .forEach((item) => appendPdfContinuationLine(row, item.line, headers, anchors, continuationIndex));
-
-    rows.push(row);
-  });
-
-  if (!rows.length) return null;
-
-  return {
-    headers,
-    rows,
-    csv: rowsToCsv(
-      headers.map((header) => ({ header, value: (row) => row[header] || "" })),
-      rows
-    )
-  };
-};
-
-const buildPdfFallbackCsv = (rawText) => {
-  const parsed = parsePdfPaymentLines(rawText);
-  if (!parsed.rows.length) return null;
-  return {
-    ...parsed,
-    csv: rowsToCsv(
-      parsed.headers.map((header) => ({ header, value: (row) => row[header] || "" })),
-      parsed.rows
-    )
-  };
-};
-
-const extractPdfStatementTable = async (file, password = "") => {
-  const pdfjsLib = await loadPdfJs();
-  const data = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data, password: password || undefined }).promise;
-  const lines = [];
-
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber);
-    const content = await page.getTextContent();
-    const pageLines = new Map();
-
-    content.items.forEach((item) => {
-      const text = String(item.str || "").trim();
-      if (!text) return;
-      const y = Math.round(item.transform[5]);
-      const x = Math.round(item.transform[4]);
-      const line = pageLines.get(y) || [];
-      line.push({ x, text, width: item.width || 0 });
-      pageLines.set(y, line);
-    });
-
-    lines.push(
-      ...[...pageLines.entries()]
-        .sort((left, right) => right[0] - left[0])
-        .map(([y, items]) => {
-          const cells = splitPdfLineIntoCells(items);
-          return {
-            pageNumber,
-            y,
-            cells,
-            text: cells.map((cell) => cell.text).join(" ")
-          };
-        })
-    );
-  }
-
-  const rawText = lines.map((line) => line.text).join("\n");
-  const table = buildPdfTableCsv(lines) || buildPdfFallbackCsv(rawText);
-  return { rawText, table };
-};
-
-const parsePdfPaymentLines = (text) => {
-  const rows = [];
-  const headers = ["payment_date", "narration", "external_reference", "amount"];
-
-  text
-    .split(/\r?\n/)
-    .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .forEach((line, index) => {
-      const dateMatch = line.match(bankDatePattern);
-      if (!dateMatch) return;
-
-      const afterDate = line.slice(dateMatch.index + dateMatch[0].length).trim();
-      const amountMatches = [...afterDate.matchAll(new RegExp(bankAmountPattern, "gi"))];
-      if (!amountMatches.length) return;
-
-      const amountMatch = amountMatches[amountMatches.length - 1];
-      const beforeAmount = afterDate.slice(0, amountMatch.index).trim();
-      const referenceMatch = beforeAmount.match(/\b[A-Z0-9]{6,}\b/g);
-      const reference = referenceMatch?.[referenceMatch.length - 1] || "";
-      const narration = reference ? beforeAmount.replace(reference, "").replace(/\s+/g, " ").trim() : beforeAmount;
-
-      rows.push({
-        _rowNumber: index + 1,
-        payment_date: dateMatch[0],
-        narration: narration || beforeAmount || line,
-        external_reference: reference,
-        amount: amountMatch[0]
-      });
-    });
-
-  return { headers, rows };
-};
-
-const detectBankMapping = (headers) =>
-  headers.reduce((mapping, header) => {
-    const compact = normalizeText(header).replaceAll(" ", "");
-    if (/(transaction|posting|posted|value)?date/.test(compact)) {
-      return { ...mapping, [header]: "payment_date" };
-    }
-    if (/(credit|paidin|deposit|amountpaid|paymentamount|amount)/.test(compact)) {
-      return { ...mapping, [header]: "amount" };
-    }
-    if (/(transactionid|transactionref|reference|refno|chequeno|receiptno)/.test(compact)) {
-      return { ...mapping, [header]: "external_reference" };
-    }
-    if (/(payer|paidby|customer|accountname|sender|name)/.test(compact)) {
-      return { ...mapping, [header]: "received_from" };
-    }
-    if (/(narration|description|details|particulars|memo)/.test(compact)) {
-      return { ...mapping, [header]: "narration" };
-    }
-    if (/note/.test(compact)) {
-      return { ...mapping, [header]: "notes" };
-    }
-    return { ...mapping, [header]: "" };
-  }, {});
-
-const readMappedBankValue = (row, mapping, field) => {
-  const header = Object.keys(mapping).find((key) => mapping[key] === field);
-  return header ? String(row[header] || "").trim() : "";
-};
-
-const normalizeBankAmount = (value) => {
-  const text = String(value || "").trim();
-  if (!text) return "";
-  const negative = /^\(.*\)$/.test(text) || /\bdr\b/i.test(text);
-  const number = Number(text.replace(/,/g, "").replace(/[^\d.-]/g, ""));
-  if (!Number.isFinite(number) || number <= 0) return "";
-  return negative ? "" : number.toFixed(2).replace(/\.00$/, "");
-};
-
-const normalizeBankDate = (value) => {
-  const text = String(value || "").trim();
-  if (!text) return "";
-
-  const isoMatch = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (isoMatch) {
-    const [, year, month, day] = isoMatch;
-    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-  }
-
-  const dateMatch = text.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
-  if (dateMatch) {
-    let [, day, month, year] = dateMatch;
-    if (Number(month) > 12 && Number(day) <= 12) {
-      [day, month] = [month, day];
-    }
-    const fullYear = year.length === 2 ? `20${year}` : year;
-    return `${fullYear}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-  }
-
-  const parsed = new Date(text);
-  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString().slice(0, 10);
-};
-
-const findCustomerCandidates = (paymentRow, customers) => {
-  const text = [
-    paymentRow.external_reference,
-    paymentRow.received_from,
-    paymentRow.narration,
-    paymentRow.notes,
-    paymentRow.receipt_number
-  ].join(" ");
-  const normalized = normalizeText(text);
-  const digitText = digitsOnly(text);
-
-  return customers
-    .map((customer) => {
-      const reasons = [];
-      let score = 0;
-      const account = normalizeText(customer.acc_number);
-      const phone = digitsOnly(customer.phone);
-      const nameTokens = normalizeText(customer.name)
-        .split(" ")
-        .filter((token) => token.length > 2);
-
-      if (account && normalized.includes(account)) {
-        score = Math.max(score, 100);
-        reasons.push("account");
-      }
-      if (phone.length >= 7 && digitText.includes(phone.slice(-9))) {
-        score = Math.max(score, 85);
-        reasons.push("phone");
-      }
-      if (nameTokens.length) {
-        const hits = nameTokens.filter((token) => normalized.includes(token)).length;
-        if (hits === nameTokens.length && hits >= 2) {
-          score = Math.max(score, 75);
-          reasons.push("name");
-        } else if (hits >= 2) {
-          score = Math.max(score, 55 + hits * 5);
-          reasons.push("partial name");
-        }
-      }
-
-      return { customer, score, reason: reasons.join(", ") };
-    })
-    .filter((candidate) => candidate.score > 0)
-    .sort((left, right) => right.score - left.score)
-    .slice(0, 3);
-};
-
-const bankRowStatus = (row) => {
-  if (row.ignored) return "ignored";
-  if (!row.payment_date || !row.amount) return "invalid";
-  if (!row.acc_number) return "needs_match";
-  return "ready";
-};
-
-const bankConfidenceLabel = (score) => {
-  if (score >= 85) return "High";
-  if (score >= 60) return "Medium";
-  if (score > 0) return "Low";
-  return "Manual";
-};
-
-function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
-  const [payments, setPayments] = useState([]);
-  const [suspenseItems, setSuspenseItems] = useState([]);
-  const [customers, setCustomers] = useState([]);
-  const [adjustments, setAdjustments] = useState([]);
-  const [businessSettings, setBusinessSettings] = useState(null);
+function PaymentsPage({ user, navigationIntent, onClearNavigationIntent, onNavigate }) {
   const [receiptDetail, setReceiptDetail] = useState(null);
   const [loadingReceipt, setLoadingReceipt] = useState(false);
-  const [csvText, setCsvText] = useState("acc_number,payment_date,amount,payment_channel,receipt_number,external_reference,received_from,notes\n");
+  const [csvText, setCsvText] = useState("acc_number,payment_date,amount,payment_channel,transaction_status,receipt_number,external_reference,received_from,notes\n");
   const [importPreview, setImportPreview] = useState(null);
   const [importing, setImporting] = useState(false);
-  const [bankCsvText, setBankCsvText] = useState("");
-  const [bankHeaders, setBankHeaders] = useState([]);
-  const [bankRows, setBankRows] = useState([]);
-  const [bankMapping, setBankMapping] = useState(loadStoredBankMapping);
-  const [bankReviewRows, setBankReviewRows] = useState([]);
-  const [bankProfiles, setBankProfiles] = useState(loadStoredBankProfiles);
-  const [bankProfileName, setBankProfileName] = useState("Default");
-  const [bankImportHistory, setBankImportHistory] = useState(loadStoredBankHistory);
+  const [importReviewOpen, setImportReviewOpen] = useState(false);
+  const [bankDraft, setBankDraft, clearBankDraft] = useScopedDraft(
+    user,
+    "payment-bank-reconciliation",
+    createBankReconciliationDraft
+  );
+  const [bankProfileSaving, setBankProfileSaving] = useState(false);
+  const [mpesaCallbackFilters, setMpesaCallbackFilters] = useScopedDraft(
+    user,
+    "mpesa-callback-filters",
+    createMpesaCallbackFilters,
+    { storage: "local" }
+  );
+  const updateBankDraftField = (field, value) => {
+    setBankDraft((current) => ({
+      ...current,
+      [field]: typeof value === "function" ? value(current[field]) : value
+    }));
+  };
+  const bankCsvText = bankDraft.csvText || "";
+  const bankHeaders = Array.isArray(bankDraft.headers) ? bankDraft.headers : [];
+  const bankRows = Array.isArray(bankDraft.rows) ? bankDraft.rows : [];
+  const bankMapping = bankDraft.mapping || {};
+  const bankReviewRows = Array.isArray(bankDraft.reviewRows) ? bankDraft.reviewRows : [];
+  const bankProfileName = bankDraft.profileName || "Default";
+  const bankImportHistory = Array.isArray(bankDraft.importHistory) ? bankDraft.importHistory : [];
+  const bankStage = Math.min(Math.max(Number(bankDraft.stage) || 1, 1), 4);
+  const bankSourceName = bankDraft.sourceName || "";
+  const bankPaymentChannel = bankDraft.paymentChannel === "mpesa_paybill" ? "mpesa_paybill" : "bank";
+  const mpesaCallbackStatus = ["posted", "duplicate", "rejected"].includes(mpesaCallbackFilters.status)
+    ? mpesaCallbackFilters.status
+    : "";
+  const mpesaCallbackLimit = [20, 50, 100].includes(Number(mpesaCallbackFilters.limit))
+    ? Number(mpesaCallbackFilters.limit)
+    : 20;
+  const setBankCsvText = (value) => updateBankDraftField("csvText", value);
+  const setBankHeaders = (value) => updateBankDraftField("headers", value);
+  const setBankRows = (value) => updateBankDraftField("rows", value);
+  const setBankMapping = (value) => updateBankDraftField("mapping", value);
+  const setBankReviewRows = (value) => updateBankDraftField("reviewRows", value);
+  const setBankProfileName = (value) => updateBankDraftField("profileName", value);
+  const setBankImportHistory = (value) => updateBankDraftField("importHistory", value);
+  const setBankStage = (value) => updateBankDraftField("stage", value);
+  const setBankSourceName = (value) => updateBankDraftField("sourceName", value);
+  const setBankPaymentChannel = (value) => updateBankDraftField("paymentChannel", value);
   const [bankPdfFile, setBankPdfFile] = useState(null);
   const [bankPdfPassword, setBankPdfPassword] = useState("");
   const [bankPdfNeedsPassword, setBankPdfNeedsPassword] = useState(false);
   const [form, setForm] = useState({
     customer_id: "",
     amount: "",
-    payment_date: new Date().toISOString().slice(0, 10),
+    payment_date: todayLocal(),
     payment_channel: "cash",
     receipt_number: "",
     external_reference: "",
     received_from: "",
-    notes: ""
+    notes: "",
+    correction_reason: "",
+    cross_account_allocations: []
   });
   const [editingId, setEditingId] = useState(null);
-  const [channelFilter, setChannelFilter] = useState("");
-  const [dateFromFilter, setDateFromFilter] = useState("");
-  const [dateToFilter, setDateToFilter] = useState("");
+  const [paymentEntryOpen, setPaymentEntryOpen] = useState(false);
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
+  const [paymentSubmissionReview, setPaymentSubmissionReview] = useState(null);
+  const paymentSubmissionRef = useRef(false);
+  const paymentIdempotencyRef = useRef("");
+  const paymentEntryRef = useRef(null);
+  const receiptRef = useRef(null);
+  const [paymentHistoryFilters, setPaymentHistoryFilters] = useScopedDraft(
+    user,
+    "payment-history-filters",
+    createPaymentHistoryFilters,
+    { storage: "local" }
+  );
+  const channelFilter = paymentHistoryFilters.channel || "";
+  const dateFromFilter = paymentHistoryFilters.dateFrom || "";
+  const dateToFilter = paymentHistoryFilters.dateTo || "";
+  const [historyQuickView, setHistoryQuickView] = useState(() =>
+    channelFilter || dateFromFilter || dateToFilter ? "custom" : "all"
+  );
   const [adjustmentForm, setAdjustmentForm] = useState({
     customer_id: "",
     adjustment_type: "credit",
     amount: "",
-    adjustment_date: new Date().toISOString().slice(0, 10),
+    adjustment_date: todayLocal(),
     reason: ""
   });
+  const [adjustmentReview, setAdjustmentReview] = useState(null);
+  const [adjustmentReviewBusy, setAdjustmentReviewBusy] = useState(false);
+  const [reviewAction, setReviewAction] = useState(null);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewError, setReviewError] = useState("");
+  const [reapplyCustomerId, setReapplyCustomerId] = useState("");
+  const reviewSubmissionRef = useRef(false);
   const [, setMessage] = useToastMessage();
-  const selectedCustomer = customers.find((customer) => Number(customer.id) === Number(form.customer_id));
-  const selectedBalance = Number(selectedCustomer?.balance_due || 0);
+  const {
+    adjustments,
+    bankMappingProfiles,
+    businessSettings,
+    correctionsLoading,
+    customers,
+    initialError,
+    initialLoading,
+    load,
+    mpesaCallbackEvents,
+    mpesaIntegration,
+    paymentCorrections,
+    paymentImportBatches,
+    payments,
+    refreshMpesaCallbackEvents,
+    setBankMappingProfiles,
+    standingOrders,
+    suspenseItems
+  } = usePaymentsWorkspaceData({ mpesaCallbackFilters });
+  const bankProfiles = bankMappingProfiles[bankPaymentChannel] || {};
+  const recentCustomerIds = useMemo(
+    () => [...new Set(payments.map((payment) => Number(payment.customer_id)).filter(Boolean))].slice(0, 6),
+    [payments]
+  );
   const importReady = useMemo(
     () => importPreview?.rows?.length > 0 && importPreview.summary.invalid === 0,
     [importPreview]
   );
-  const referenceLabel = {
-    cash: "Cash reference",
-    bank: "Bank slip/reference",
-    mpesa_paybill: "M-Pesa transaction code",
-    manual_adjustment: "Adjustment reference"
-  }[form.payment_channel] || "Reference";
   const receiptMoney = (value) =>
     `${businessSettings?.default_currency || "KES"} ${Number(value || 0).toLocaleString()}`;
   const receiptPositionMoney = (value) =>
     `${businessSettings?.default_currency || "KES"} ${Math.abs(Number(value || 0)).toLocaleString()}`;
 
-  const load = async () => {
-    const [paymentRows, suspenseRows, customerRows, businessRow, adjustmentRows] = await Promise.all([
-      api.payments.list(),
-      api.payments.suspense(),
-      api.customers.list(),
-      api.businessSettings.get(),
-      api.adjustments.list()
-    ]);
-    setPayments(paymentRows);
-    setSuspenseItems(suspenseRows);
-    setCustomers(customerRows);
-    setBusinessSettings(businessRow);
-    setAdjustments(adjustmentRows);
+  const updateMpesaCallbackFilters = (field, value) => {
+    const nextFilters = { ...mpesaCallbackFilters, [field]: value };
+    setMpesaCallbackFilters(nextFilters);
+    refreshMpesaCallbackEvents(nextFilters).catch((err) => setMessage(err.message));
   };
 
   useEffect(() => {
-    load().catch((err) => setMessage(err.message));
-  }, []);
+    if (navigationIntent?.page !== "payments" || navigationIntent.focus !== "prepare_payment" || !navigationIntent.customer_id) return;
+    const customer = customers.find((row) => Number(row.id) === Number(navigationIntent.customer_id));
+    if (!customer) return;
+    setEditingId(null);
+    setPaymentEntryOpen(true);
+    setForm((current) => ({ ...current, customer_id: String(customer.id), amount: "", correction_reason: "" }));
+    paymentEntryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [customers, navigationIntent]);
 
-  const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  const setField = (field, value) => {
+    if (!paymentSubmitting) paymentIdempotencyRef.current = "";
+    setForm((current) => ({ ...current, [field]: value }));
+  };
   const setAdjustmentField = (field, value) => setAdjustmentForm((current) => ({ ...current, [field]: value }));
 
   const handleCsvFile = async (event) => {
@@ -631,7 +260,7 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
 
   const loadBankStatement = (text) => {
     setMessage("");
-    const parsed = parseCsvRows(text);
+    const parsed = parseStatementCsv(text);
     if (!parsed.headers.length) {
       setBankHeaders([]);
       setBankRows([]);
@@ -640,10 +269,11 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
       return;
     }
 
-    const detectedMapping = detectBankMapping(parsed.headers);
+    const detectedMapping = detectStatementMapping(parsed.headers);
     setBankHeaders(parsed.headers);
     setBankRows(parsed.rows);
     setBankReviewRows([]);
+    setBankStage(2);
     setBankMapping((current) =>
       parsed.headers.reduce(
         (next, header) => ({
@@ -653,7 +283,7 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
         {}
       )
     );
-    setMessage(`Loaded ${parsed.rows.length} bank statement row(s). Map the columns, then generate payment rows.`);
+    setMessage(`Loaded ${parsed.rows.length} statement row(s). Map the columns, then generate payment rows.`);
   };
 
   const loadBankPdfStatement = async (file) => {
@@ -679,8 +309,9 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
       setBankCsvText(extracted.table.csv);
       setBankHeaders(extracted.table.headers);
       setBankRows(extracted.table.rows);
-      setBankMapping(bankProfiles[bankProfileName] || detectBankMapping(extracted.table.headers));
-      setMessage(`Extracted ${extracted.table.rows.length} table row(s) from the PDF. The content box is now CSV-like; map the columns, then generate payment rows.`);
+      setBankMapping(bankProfiles[bankProfileName] || detectStatementMapping(extracted.table.headers));
+      setBankStage(2);
+      setMessage(`Extracted ${extracted.table.rows.length} payment row(s) from the PDF. The content box is now CSV-like; map the columns, then generate payment rows.`);
     } catch (err) {
       const needsPassword = err?.name === "PasswordException" || /password/i.test(err?.message || "");
       setBankPdfNeedsPassword(needsPassword);
@@ -691,6 +322,7 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const handleBankCsvFile = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    setBankSourceName(file.name);
     if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
       setBankPdfFile(file);
       await loadBankPdfStatement(file);
@@ -706,6 +338,7 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const updateBankMapping = (header, field) => {
     setBankMapping((current) => ({ ...current, [header]: field }));
     setBankReviewRows([]);
+    setBankStage(2);
   };
 
   const applyBankProfile = (name) => {
@@ -717,29 +350,60 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
     }
   };
 
-  const saveBankTemplate = () => {
+  const saveBankTemplate = async () => {
     const name = bankProfileName.trim() || "Default";
-    const nextProfiles = { ...bankProfiles, [name]: bankMapping };
-    setBankProfiles(nextProfiles);
-    setBankProfileName(name);
-    window.localStorage.setItem(bankProfilesStorageKey, JSON.stringify(nextProfiles));
-    window.localStorage.setItem(bankTemplateStorageKey, JSON.stringify(bankMapping));
-    setMessage(`${name} bank statement mapping saved on this browser.`);
+    setBankProfileSaving(true);
+    try {
+      const profile = await api.payments.saveImportMappingProfile({
+        name,
+        payment_channel: bankPaymentChannel,
+        mapping: bankMapping
+      });
+      setBankMappingProfiles((current) => ({
+        ...current,
+        [bankPaymentChannel]: {
+          ...(current[bankPaymentChannel] || {}),
+          [profile.name]: profile.mapping || {}
+        }
+      }));
+      setBankProfileName(profile.name);
+      setMessage(`${profile.name} mapping saved for the finance team.`);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setBankProfileSaving(false);
+    }
+  };
+
+  const resetBankReconciliation = () => {
+    clearBankDraft();
+    setBankPdfFile(null);
+    setBankPdfPassword("");
+    setBankPdfNeedsPassword(false);
+    if (bankStage === 4) {
+      setCsvText("acc_number,payment_date,amount,payment_channel,transaction_status,receipt_number,external_reference,received_from,notes\n");
+      setImportPreview(null);
+    }
+    setMessage("Bank reconciliation cleared.");
   };
 
   const makeBankReviewRow = (paymentRow, id, sourceRowNumber) => {
     const normalizedPaymentRow = {
       ...paymentRow,
-      payment_date: normalizeBankDate(paymentRow.payment_date),
-      amount: normalizeBankAmount(paymentRow.amount),
-      payment_channel: "bank",
+      payment_date: normalizeStatementDate(paymentRow.payment_date),
+      amount: normalizeStatementAmount(paymentRow.amount),
+      payment_channel: bankPaymentChannel,
       bill_number: ""
     };
-    const candidates = findCustomerCandidates(normalizedPaymentRow, customers);
+    const candidates = findCustomerCandidates(normalizedPaymentRow, customers, standingOrders);
     const directCustomer = paymentRow.acc_number
       ? customers.find((customer) => customer.acc_number === paymentRow.acc_number)
       : null;
-    const selectedCandidate = candidates[0]?.score >= 70 ? candidates[0] : null;
+    const selectedCandidate =
+      candidates[0]?.score >= 85 &&
+      (!candidates[1] || candidates[0].score - candidates[1].score >= 15)
+        ? candidates[0]
+        : null;
     const selectedCustomer = directCustomer || selectedCandidate?.customer;
 
     return {
@@ -751,6 +415,7 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
       candidate_score: directCustomer ? 100 : candidates[0]?.score || 0,
       candidate_reason: directCustomer ? "manual account" : candidates[0]?.reason || "",
       ignored: false,
+      ignore_reason: "",
       candidates: candidates.map((candidate) => ({
         id: candidate.customer.id,
         acc_number: candidate.customer.acc_number,
@@ -774,20 +439,23 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
 
     const reviewRows = bankRows.map((row, index) => {
       return makeBankReviewRow({
-        payment_date: readMappedBankValue(row, bankMapping, "payment_date"),
-        amount: readMappedBankValue(row, bankMapping, "amount"),
-        receipt_number: readMappedBankValue(row, bankMapping, "receipt_number"),
-        external_reference: readMappedBankValue(row, bankMapping, "external_reference"),
-        received_from: readMappedBankValue(row, bankMapping, "received_from"),
-        narration: readMappedBankValue(row, bankMapping, "narration"),
-        notes: readMappedBankValue(row, bankMapping, "notes")
+        payment_date: readMappedStatementValue(row, bankMapping, "payment_date"),
+        amount: readMappedStatementValue(row, bankMapping, "amount"),
+        acc_number: readMappedStatementValue(row, bankMapping, "acc_number"),
+        receipt_number: readMappedStatementValue(row, bankMapping, "receipt_number"),
+        external_reference: readMappedStatementValue(row, bankMapping, "external_reference"),
+        transaction_status: readMappedStatementValue(row, bankMapping, "transaction_status"),
+        received_from: readMappedStatementValue(row, bankMapping, "received_from"),
+        narration: readMappedStatementValue(row, bankMapping, "narration"),
+        notes: readMappedStatementValue(row, bankMapping, "notes")
       }, `${row._rowNumber}-${index}`, row._rowNumber);
     });
 
     setBankReviewRows(reviewRows);
-    const readyRows = reviewRows.filter((row) => row.acc_number && row.payment_date && row.amount);
+    setBankStage(3);
+    const readyRows = reviewRows.filter((row) => statementRowStatus(row) === "ready");
     setMessage(
-      `${readyRows.length} of ${reviewRows.length} bank row(s) matched and look ready. Review unmatched rows before importing.`
+      `${readyRows.length} of ${reviewRows.length} ${bankPaymentChannel === "mpesa_paybill" ? "M-Pesa" : "bank"} row(s) are ready. Review unmatched or unverified rows before importing.`
     );
   };
 
@@ -799,7 +467,9 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
           ? {
               ...row,
               acc_number: accNumber,
-              customer_name: customer?.name || ""
+              customer_name: customer?.name || "",
+              candidate_score: customer ? 100 : 0,
+              candidate_reason: customer ? "manual account" : ""
             }
           : row
       )
@@ -812,7 +482,7 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
         if (rowIndex !== index) return row;
         const nextRow = { ...row, [field]: value };
         if (["external_reference", "received_from", "narration", "notes"].includes(field)) {
-          const candidates = findCustomerCandidates(nextRow, customers);
+          const candidates = findCustomerCandidates(nextRow, customers, standingOrders);
           return {
             ...nextRow,
             candidate_score: candidates[0]?.score || 0,
@@ -831,10 +501,45 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
     );
   };
 
+  const ignoreUnresolvedBankRows = (reason) => {
+    const ignoredCount = bankReviewRows.filter((row) => {
+      const status = statementRowStatus(row);
+      return status !== "ready" && status !== "ignored";
+    }).length;
+    if (!ignoredCount) return;
+    const ignoreReason = String(reason || "").trim();
+    if (ignoreReason.length < 3) {
+      setMessage("Enter a clear reason before excluding unresolved statement rows.");
+      return;
+    }
+    setBankReviewRows((current) =>
+      current.map((row) => {
+        const status = statementRowStatus(row);
+        return status !== "ready" && status !== "ignored"
+          ? { ...row, ignored: true, ignore_reason: ignoreReason }
+          : row;
+      })
+    );
+    setMessage(`${ignoredCount} unresolved statement row(s) excluded with a recorded reason. They remain in the saved draft and can be restored before validation.`);
+  };
+
+  const restoreIgnoredBankRows = () => {
+    const restoredCount = bankReviewRows.filter((row) => row.ignored).length;
+    if (!restoredCount) return;
+    setBankReviewRows((current) => current.map((row) => (row.ignored ? { ...row, ignored: false, ignore_reason: "" } : row)));
+    setMessage(`${restoredCount} statement row(s) restored for matching and review.`);
+  };
+
   const useBankPaymentRows = () => {
-    const readyRows = bankReviewRows.filter((row) => !row.ignored && row.acc_number && row.payment_date && row.amount);
+    const readyRows = bankReviewRows.filter((row) => statementRowStatus(row) === "ready");
+    const ignoredRows = bankReviewRows.filter((row) => row.ignored);
+    const missingIgnoreReason = ignoredRows.find((row) => String(row.ignore_reason || "").trim().length < 3);
+    if (missingIgnoreReason) {
+      setMessage(`Enter an exclusion reason for statement row ${missingIgnoreReason.source_row_number} before validation.`);
+      return;
+    }
     if (!readyRows.length) {
-      setMessage("No ready bank payment rows were found. Match accounts and check date/amount values first.");
+      setMessage("No ready payment rows were found. Match accounts and check the date, amount, reference, and M-Pesa status first.");
       return;
     }
     const generatedCsv = rowsToCsv(
@@ -849,16 +554,27 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
     const historyItem = {
       id: Date.now(),
       created_at: new Date().toISOString(),
-      source: bankPdfFile?.name || "Pasted statement / CSV",
+      source: bankSourceName || bankPdfFile?.name || "Pasted statement / CSV",
       profile: bankProfileName.trim() || "Default",
       rows: readyRows.length,
-      ignored: bankReviewRows.filter((row) => row.ignored).length,
+      ignored: ignoredRows.length,
+      ignored_total: ignoredRows.reduce((sum, row) => sum + Number(row.amount || 0), 0),
       total: readyRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)
     };
     const nextHistory = [historyItem, ...bankImportHistory].slice(0, 10);
     setBankImportHistory(nextHistory);
     window.localStorage.setItem(bankHistoryStorageKey, JSON.stringify(nextHistory));
-    setMessage(`${readyRows.length} generated bank payment row(s) moved into the normal CSV importer. Preview before importing.`);
+    updateBankDraftField(
+      "reconciliationExclusions",
+      ignoredRows.map((row) => ({
+        source_row_number: row.source_row_number,
+        external_reference: row.external_reference || "",
+        amount: Number(row.amount || 0),
+        reason: String(row.ignore_reason || "").trim()
+      }))
+    );
+    setBankStage(4);
+    setMessage(`${readyRows.length} payment row(s) are ready for final validation.`);
   };
 
   const previewImport = async () => {
@@ -879,14 +595,36 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
     }
   };
 
+  const importSourceName = () =>
+    bankStage === 4
+      ? bankSourceName || (bankPaymentChannel === "mpesa_paybill" ? "M-Pesa paybill statement" : "Bank statement")
+      : "CSV payment import";
+
+  const requestImportCommit = () => {
+    if (!importReady || importing) return;
+    setImportReviewOpen(true);
+  };
+
   const commitImport = async () => {
     setMessage("");
     setImporting(true);
     try {
-      const result = await api.payments.commitImport(csvText);
+      const reconciliationExclusions = Array.isArray(bankDraft.reconciliationExclusions)
+        ? bankDraft.reconciliationExclusions
+        : [];
+      const result = await api.payments.commitImport(csvText, importSourceName(), reconciliationExclusions);
       setImportPreview(null);
       await load();
-      setMessage(`Imported ${result.summary.imported} payment(s), total ${money(result.summary.totalAmount)}.`);
+      if (bankStage === 4) {
+        clearBankDraft();
+        setBankPdfFile(null);
+        setBankPdfPassword("");
+        setBankPdfNeedsPassword(false);
+      }
+      setImportReviewOpen(false);
+      setMessage(
+        `Imported ${result.summary.imported} payment(s), total ${money(result.summary.totalAmount)}. Batch ${result.batch?.batch_reference || "recorded"}.`
+      );
     } catch (err) {
       setMessage(err.message);
     } finally {
@@ -894,24 +632,88 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
     }
   };
 
-  const submit = async (event) => {
+  const requestPaymentSubmission = (event) => {
     event.preventDefault();
+    if (paymentSubmissionRef.current || paymentSubmitting) return;
+    const customer = customers.find((row) => Number(row.id) === Number(form.customer_id));
+    const amount = Number(form.amount);
+    if (!customer || !Number.isFinite(amount) || amount <= 0) {
+      setMessage("Select a valid customer and payment amount before reviewing the receipt.");
+      return;
+    }
+    const balanceDue = Number(customer.balance_due || 0);
+    const amountToBalance = Math.min(amount, Math.max(balanceDue, 0));
+    const crossAccountAllocations = Array.isArray(form.cross_account_allocations) ? form.cross_account_allocations : [];
+    const splitTotal = crossAccountAllocations.reduce((sum, allocation) => sum + Number(allocation?.amount || 0), 0);
+    if (
+      crossAccountAllocations.some(
+        (allocation) => !allocation?.customer_id || !Number.isFinite(Number(allocation?.amount)) || Number(allocation.amount) <= 0
+      ) ||
+      splitTotal - amount > 0.005
+    ) {
+      setMessage("Complete each split account and amount without exceeding the receipt amount.");
+      return;
+    }
+    const allocationPlan = crossAccountAllocations.length
+      ? [
+          ...(amount - splitTotal > 0.005 ? [{ customer_id: Number(customer.id), amount: Math.round((amount - splitTotal) * 100) / 100 }] : []),
+          ...crossAccountAllocations.map((allocation) => ({
+            customer_id: Number(allocation.customer_id),
+            amount: Math.round(Number(allocation.amount) * 100) / 100
+          }))
+        ]
+      : [];
+    const allocationAccounts = allocationPlan.map((allocation) => {
+      const target = customers.find((row) => Number(row.id) === allocation.customer_id);
+      return { ...allocation, acc_number: target?.acc_number || "Account", name: target?.name || "" };
+    });
+    setPaymentSubmissionReview({
+      editingId,
+      form: { ...form },
+      customer: { id: customer.id, name: customer.name, acc_number: customer.acc_number },
+      amount,
+      balanceDue,
+      amountToBalance,
+      amountToCredit: Math.max(amount - amountToBalance, 0),
+      allocationPlan,
+      allocationAccounts
+    });
+  };
+
+  const submitPayment = async () => {
+    if (!paymentSubmissionReview || paymentSubmissionRef.current) return;
+    const submission = paymentSubmissionReview;
+    const submissionForm = submission.form;
+    paymentSubmissionRef.current = true;
+    setPaymentSubmitting(true);
     setMessage("");
 
     try {
-      let successMessage = editingId ? "Payment updated." : "Payment recorded.";
-      if (editingId) {
-        await api.payments.update(editingId, {
-          amount: Number(form.amount),
-          payment_date: form.payment_date,
-          payment_channel: form.payment_channel,
-          receipt_number: form.receipt_number,
-          external_reference: form.external_reference,
-          received_from: form.received_from,
-          notes: form.notes
+      let successMessage = submission.editingId ? "Payment updated." : "Payment recorded.";
+      let createdPaymentId = null;
+      if (submission.editingId) {
+        await api.payments.update(submission.editingId, {
+          amount: Number(submissionForm.amount),
+          payment_date: submissionForm.payment_date,
+          payment_channel: submissionForm.payment_channel,
+          receipt_number: submissionForm.receipt_number,
+          external_reference: submissionForm.external_reference,
+          received_from: submissionForm.received_from,
+          notes: submissionForm.notes,
+          correction_reason: submissionForm.correction_reason
         });
       } else {
-        const result = await api.payments.create({ ...form, customer_id: Number(form.customer_id), amount: Number(form.amount) });
+        const idempotencyKey = paymentIdempotencyRef.current || newPaymentSubmissionKey();
+        paymentIdempotencyRef.current = idempotencyKey;
+        const { correction_reason: _correctionReason, cross_account_allocations: _crossAccountAllocations, ...creationForm } = submissionForm;
+        const result = await api.payments.create({
+          ...creationForm,
+          customer_id: Number(submissionForm.customer_id),
+          amount: Number(submissionForm.amount),
+          allocation_plan: submission.allocationPlan,
+          idempotency_key: idempotencyKey
+        });
+        createdPaymentId = result.payment?.id || null;
         const creditAmount = Number(result.payment?.unallocated_amount || 0);
         if (result.allocations?.length > 1) {
           successMessage = `Receipt recorded across ${result.allocations.length} bills.`;
@@ -930,41 +732,70 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
         receipt_number: "",
         external_reference: "",
         received_from: "",
-        notes: ""
+        notes: "",
+        correction_reason: "",
+        cross_account_allocations: []
       }));
       setEditingId(null);
+      setPaymentEntryOpen(false);
+      setPaymentSubmissionReview(null);
+      paymentIdempotencyRef.current = "";
       await load();
+      if (createdPaymentId) {
+        const nextReceipt = await api.payments.get(createdPaymentId).catch(() => null);
+        if (nextReceipt) {
+          setReceiptDetail(nextReceipt);
+          window.requestAnimationFrame(() => receiptRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+        }
+      }
       setMessage(successMessage);
     } catch (err) {
       setMessage(err.message);
+    } finally {
+      paymentSubmissionRef.current = false;
+      setPaymentSubmitting(false);
     }
   };
 
   const edit = (payment) => {
+    setPaymentSubmissionReview(null);
     setEditingId(payment.id);
+    setPaymentEntryOpen(true);
     setForm({
       customer_id: payment.customer_id || "",
       amount: payment.amount || "",
-      payment_date: payment.payment_date?.slice(0, 10) || new Date().toISOString().slice(0, 10),
+      payment_date: payment.payment_date?.slice(0, 10) || todayLocal(),
       payment_channel: payment.payment_channel || payment.method || "cash",
       receipt_number: payment.receipt_number || "",
       external_reference: payment.external_reference || payment.reference || "",
       received_from: payment.received_from || "",
-      notes: payment.notes || ""
+      notes: payment.notes || "",
+      correction_reason: "",
+      cross_account_allocations: []
     });
+    window.requestAnimationFrame(() => paymentEntryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
-  const openReceipt = async (payment) => {
+  const openReceipt = async (paymentOrId) => {
+    const paymentId = typeof paymentOrId === "object" ? paymentOrId?.id : paymentOrId;
+    if (!paymentId) return;
     setMessage("");
     setLoadingReceipt(true);
     try {
-      setReceiptDetail(await api.payments.get(payment.id));
+      setReceiptDetail(await api.payments.get(paymentId));
+      window.requestAnimationFrame(() => receiptRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
     } catch (err) {
       setMessage(err.message);
     } finally {
       setLoadingReceipt(false);
     }
   };
+
+  useEffect(() => {
+    if (navigationIntent?.page !== "payments" || navigationIntent.focus !== "receipt_detail" || !navigationIntent.payment_id) return;
+    if (Number(receiptDetail?.payment?.id) === Number(navigationIntent.payment_id)) return;
+    openReceipt(navigationIntent.payment_id);
+  }, [navigationIntent, receiptDetail]);
 
   const printReceipt = () => {
     const receipt = receiptDetail?.payment || {};
@@ -1006,16 +837,25 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
 
   const cancelEdit = () => {
     setEditingId(null);
+    setPaymentSubmissionReview(null);
+    paymentIdempotencyRef.current = "";
     setForm({
       customer_id: "",
       amount: "",
-      payment_date: new Date().toISOString().slice(0, 10),
+      payment_date: todayLocal(),
       payment_channel: "cash",
       receipt_number: "",
       external_reference: "",
       received_from: "",
-      notes: ""
+      notes: "",
+      correction_reason: ""
     });
+  };
+
+  const recordAnotherPayment = () => {
+    setReceiptDetail(null);
+    setPaymentEntryOpen(true);
+    window.requestAnimationFrame(() => paymentEntryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
   const submitAdjustment = async (event) => {
@@ -1031,7 +871,7 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
         customer_id: "",
         adjustment_type: "credit",
         amount: "",
-        adjustment_date: new Date().toISOString().slice(0, 10),
+        adjustment_date: todayLocal(),
         reason: ""
       });
       await load();
@@ -1041,89 +881,111 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
     }
   };
 
-  const reviewAdjustment = async (adjustment, status) => {
+  const requestAdjustmentReview = (adjustment, status) => {
+    setMessage("");
+    setAdjustmentReview({ adjustment, status });
+  };
+
+  const submitAdjustmentReview = async (reviewNotes) => {
+    if (!adjustmentReview || adjustmentReviewBusy) return;
+    const { adjustment, status } = adjustmentReview;
+    setAdjustmentReviewBusy(true);
     setMessage("");
     try {
       await api.adjustments.review(adjustment.id, {
         status,
-        review_notes: status === "approved" ? "Approved from payments screen" : "Rejected from payments screen"
+        review_notes: reviewNotes
       });
       await load();
+      setAdjustmentReview(null);
       setMessage(`Adjustment ${status}.`);
     } catch (err) {
       setMessage(err.message);
+    } finally {
+      setAdjustmentReviewBusy(false);
     }
   };
 
-  const voidPayment = async (payment) => {
-    const reason = window.prompt(`Reason for voiding receipt ${payment.receipt_number || payment.id} to suspense:`);
-    if (!reason?.trim()) return;
-    setMessage("");
-    try {
-      await api.payments.voidToSuspense(payment.id, { reason: reason.trim() });
-      await load();
-      setReceiptDetail(null);
-      setMessage("Payment voided and moved to suspense.");
-    } catch (err) {
-      setMessage(err.message);
-    }
+  const closeReviewDialog = useCallback(() => {
+    if (reviewSubmissionRef.current) return;
+    setReviewAction(null);
+    setReviewError("");
+    setReapplyCustomerId("");
+  }, []);
+
+  const voidPayment = (payment) => {
+    setReviewError("");
+    setReviewAction({ type: "void", item: payment });
   };
 
-  const reapplySuspense = async (item) => {
-    const account = window.prompt(
-      "Customer account to reapply to. Leave blank to use the original customer.",
-      item.acc_number || ""
-    );
-    if (account === null) return;
-    const customer = account.trim()
-      ? customers.find((row) => row.acc_number.toLowerCase() === account.trim().toLowerCase())
-      : customers.find((row) => Number(row.id) === Number(item.customer_id));
-    if (!customer) {
-      setMessage("Customer account was not found for suspense reapplication.");
+  const reapplySuspense = (item) => {
+    const originalCustomer = customers.find((row) => Number(row.id) === Number(item.customer_id))
+      || customers.find((row) => row.acc_number?.toLowerCase() === item.acc_number?.toLowerCase());
+    setReapplyCustomerId(originalCustomer ? String(originalCustomer.id) : "");
+    setReviewError("");
+    setReviewAction({ type: "reapply", item });
+  };
+
+  const discardSuspense = (item) => {
+    setReviewError("");
+    setReviewAction({ type: "discard", item });
+  };
+
+  const submitReviewAction = async (reasonOrNotes) => {
+    if (!reviewAction || reviewSubmissionRef.current) return;
+
+    const { type, item } = reviewAction;
+    const selectedReapplyCustomer = type === "reapply"
+      ? customers.find((row) => Number(row.id) === Number(reapplyCustomerId))
+      : null;
+
+    if (type === "reapply" && !selectedReapplyCustomer) {
+      setReviewError("Select a valid customer account before reapplying this suspense item.");
       return;
     }
-    const notes = window.prompt("Notes for this reapplication:", `Reapplied suspense item #${item.id}`) || "";
-    setMessage("");
-    try {
-      await api.payments.reapplySuspense(item.id, {
-        customer_id: customer.id,
-        payment_date: item.payment_date?.slice(0, 10),
-        payment_channel: item.payment_channel || "bank",
-        external_reference: item.external_reference,
-        received_from: item.received_from,
-        notes
-      });
-      await load();
-      setMessage("Suspense item reapplied as a new payment.");
-    } catch (err) {
-      setMessage(err.message);
-    }
-  };
 
-  const discardSuspense = async (item) => {
-    const reason = window.prompt(`Reason for discarding suspense item #${item.id}:`);
-    if (!reason?.trim()) return;
+    reviewSubmissionRef.current = true;
+    setReviewBusy(true);
+    setReviewError("");
     setMessage("");
     try {
-      await api.payments.discardSuspense(item.id, { reason: reason.trim() });
+      if (type === "void") {
+        await api.payments.voidToSuspense(item.id, { reason: reasonOrNotes });
+      } else if (type === "reapply") {
+        await api.payments.reapplySuspense(item.id, {
+          customer_id: selectedReapplyCustomer.id,
+          payment_date: item.payment_date?.slice(0, 10),
+          payment_channel: item.payment_channel || "bank",
+          external_reference: item.external_reference,
+          received_from: item.received_from,
+          notes: reasonOrNotes
+        });
+      } else {
+        await api.payments.discardSuspense(item.id, { reason: reasonOrNotes });
+      }
+
       await load();
-      setMessage("Suspense item discarded.");
+      if (type === "void") {
+        setReceiptDetail(null);
+        setMessage("Payment voided and moved to suspense.");
+      } else if (type === "reapply") {
+        setMessage("Suspense item reapplied as a new payment.");
+      } else {
+        setMessage("Suspense item discarded.");
+      }
+      setReviewAction(null);
+      setReapplyCustomerId("");
     } catch (err) {
+      setReviewError(err.message);
       setMessage(err.message);
+    } finally {
+      reviewSubmissionRef.current = false;
+      setReviewBusy(false);
     }
   };
 
   const focusKey = navigationIntent?.page === "payments" ? navigationIntent.focus : "";
-  const filteredPayments = payments.filter((payment) => {
-    const dateValue = payment.payment_date?.slice(0, 10) || "";
-    const channelMatch = !channelFilter || (payment.payment_channel || payment.method) === channelFilter;
-    const fromMatch = !dateFromFilter || dateValue >= dateFromFilter;
-    const toMatch = !dateToFilter || dateValue <= dateToFilter;
-    return channelMatch && fromMatch && toMatch;
-  });
-  const focusedPayments = focusKey === "customer_credits"
-    ? filteredPayments.filter((payment) => Number(payment.unallocated_amount || 0) > 0 && payment.status === "posted")
-    : filteredPayments;
+  const returnTarget = navigationIntent?.page === "payments" ? navigationIntent.return_target : null;
   const focusedSuspenseItems = focusKey === "suspense_payments"
     ? suspenseItems.filter((item) => item.status === "held")
     : suspenseItems;
@@ -1138,21 +1000,13 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const showPaymentHistory = !hasPaymentFocus || focusKey === "customer_credits";
   const showSuspenseRegister = !hasPaymentFocus || focusKey === "suspense_payments";
   const showAdjustmentRegister = !hasPaymentFocus || focusKey === "pending_adjustments";
-  const paymentTable = useTableControls(focusedPayments, {
-    searchFields: [
-      "customer_name",
-      "acc_number",
-      "receipt_number",
-      "amount",
-      "payment_date",
-      "payment_channel",
-      "method",
-      "external_reference",
-      "reference",
-      "bill_numbers"
-    ]
+  const { creditTotal: paymentCreditTotal, historyTotal: paymentHistoryTotal, requestParams: paymentRegisterParams, table: paymentTable } = usePaymentHistory({
+    filters: { channel: channelFilter, dateFrom: dateFromFilter, dateTo: dateToFilter },
+    focusKey,
+    refreshKey: payments
   });
   const adjustmentTable = useTableControls(focusedAdjustments, {
+    storageKey: `payments-adjustments:${user?.id || "anonymous"}:${user?.access_profile_id || "legacy"}`,
     searchFields: [
       "customer_name",
       "acc_number",
@@ -1166,6 +1020,7 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
     ]
   });
   const suspenseTable = useTableControls(focusedSuspenseItems, {
+    storageKey: `payments-suspense:${user?.id || "anonymous"}:${user?.access_profile_id || "legacy"}`,
     searchFields: [
       "receipt_number",
       "customer_name",
@@ -1177,49 +1032,124 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
       "reapplied_receipt_number"
     ]
   });
-  const paymentHistoryTotal = paymentTable.filteredRows.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  if (initialLoading) {
+    return <WorkspaceState title="Preparing cash office controls" detail="Retrieving receipts, customer balances, suspense items, adjustments, and reconciliation status." />;
+  }
+  if (initialError) {
+    return <WorkspaceState state="error" title="Cash office controls could not load" detail={initialError} onRetry={() => load({ showState: true }).catch(() => {})} />;
+  }
   const suspenseHeldTotal = focusedSuspenseItems
     .filter((item) => item.status === "held")
     .reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const pendingAdjustmentTotal = focusedAdjustments
     .filter((adjustment) => adjustment.status === "pending")
     .reduce((sum, adjustment) => sum + Number(adjustment.amount || 0), 0);
-  const exportPayments = () => {
-    downloadCsvRows(
-      namedExport("payment-register", "csv", [
-        channelFilter || "all-channels",
-        dateFromFilter || "start",
-        dateToFilter || "end",
-        focusKey || "all-payments"
-      ]),
-      [
-        { header: "Receipt", value: (row) => row.receipt_number },
-        { header: "Customer", value: (row) => row.customer_name },
-        { header: "Account", value: (row) => row.acc_number },
-        { header: "Amount", value: (row) => row.amount },
-        { header: "Date", value: (row) => row.payment_date },
-        { header: "Channel", value: (row) => row.payment_channel || row.method },
-        { header: "Reference", value: (row) => row.external_reference || row.reference },
-        { header: "Bills", value: (row) => row.bill_numbers },
-        { header: "Credit", value: (row) => row.unallocated_amount }
-      ],
-      paymentTable.filteredRows
-    );
+  const exportPayments = async () => {
+    try {
+      const rows = await api.payments.registerAll(paymentRegisterParams);
+      downloadCsvRows(
+        namedExport("payment-register", "csv", [
+          channelFilter || "all-channels",
+          dateFromFilter || "start",
+          dateToFilter || "end",
+          focusKey || "all-payments"
+        ]),
+        [
+          { header: "Receipt", value: (row) => row.receipt_number },
+          { header: "Customer", value: (row) => row.customer_name },
+          { header: "Account", value: (row) => row.acc_number },
+          { header: "Amount", value: (row) => row.amount },
+          { header: "Date", value: (row) => row.payment_date },
+          { header: "Channel", value: (row) => row.payment_channel || row.method },
+          { header: "Reference", value: (row) => row.external_reference || row.reference },
+          { header: "Bills", value: (row) => row.bill_numbers },
+          { header: "Credit", value: (row) => row.unallocated_amount }
+        ],
+        rows
+      );
+    } catch (error) {
+      setMessage(error.message || "Payment history export could not be prepared.");
+    }
+  };
+
+  const applyPaymentHistoryView = (view) => {
+    const today = todayLocal();
+    setHistoryQuickView(view);
+    if (view === "today") {
+      setPaymentHistoryFilters({ channel: "", dateFrom: today, dateTo: today });
+      return;
+    }
+    if (view === "yesterday") {
+      const yesterday = localDateOffset(-1);
+      setPaymentHistoryFilters({ channel: "", dateFrom: yesterday, dateTo: yesterday });
+      return;
+    }
+    if (view === "week_to_date") {
+      setPaymentHistoryFilters({ channel: "", dateFrom: weekStartLocal(), dateTo: today });
+      return;
+    }
+    if (view === "bank_today" || view === "mpesa_today") {
+      setPaymentHistoryFilters({
+        channel: view === "bank_today" ? "bank" : "mpesa_paybill",
+        dateFrom: today,
+        dateTo: today
+      });
+      return;
+    }
+    setPaymentHistoryFilters(createPaymentHistoryFilters());
+  };
+
+  const setManualPaymentHistoryFilter = (field) => (value) => {
+    setHistoryQuickView("custom");
+    setPaymentHistoryFilters((current) => ({ ...current, [field]: value }));
   };
 
   return (
-    <section className="page-stack">
-      <header className="page-header">
+    <section className="page-stack payment-workbench">
+      <header className="page-header payment-workbench-header">
         <div>
           <p className="eyebrow">Cash Office</p>
-          <h2>Payments</h2>
+          <h2>Post cash with confidence.</h2>
+          <p>Find the account, confirm the allocation, then issue the receipt without losing sight of exceptions.</p>
+        </div>
+        <div className="payment-workbench-total">
+          <small>Recorded in this view</small>
+          <strong>{money(paymentHistoryTotal)}</strong>
+          <span>{paymentTable.total.toLocaleString()} receipt(s)</span>
         </div>
       </header>
+
+      <section className="payment-workbench-metrics" aria-label="Payment control snapshot">
+        <div><small>Receipts</small><strong>{paymentTable.total.toLocaleString()}</strong><span>Current filter</span></div>
+        <div><small>Received</small><strong>{money(paymentHistoryTotal)}</strong><span>Posted payment value</span></div>
+        <div><small>Customer credit</small><strong>{money(paymentCreditTotal)}</strong><span>Awaiting allocation</span></div>
+        <div><small>Suspense held</small><strong>{money(suspenseHeldTotal)}</strong><span>Needs review</span></div>
+      </section>
+
+      {!hasPaymentFocus ? (
+        <MpesaCallbackControl
+          events={mpesaCallbackEvents}
+          filters={{ status: mpesaCallbackStatus, limit: String(mpesaCallbackLimit) }}
+          integration={mpesaIntegration}
+          money={money}
+          onFiltersChange={updateMpesaCallbackFilters}
+          onRefresh={() => refreshMpesaCallbackEvents().catch((err) => setMessage(err.message))}
+        />
+      ) : null}
 
       {focusKey === "suspense_payments" ? (
         <FocusNotice
           title="Suspense payments"
           detail="Showing held suspense items awaiting reapplication or discard."
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
+      {focusKey === "prepare_payment" ? (
+        <FocusNotice
+          title="Post payment for selected account"
+          detail="The customer is prefilled. Review the allocation and receipt before any payment is recorded."
+          actionLabel={returnTarget ? "Return to account" : undefined}
+          onAction={returnTarget ? () => onNavigate?.(returnTarget) : undefined}
           onClear={onClearNavigationIntent}
         />
       ) : null}
@@ -1242,920 +1172,247 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent }) {
         {showEntryTools ? (
         <div className="page-stack payments-entry-grid">
           {showPaymentEntry ? (
-          <CollapsibleSection
-            as="form"
-            className="form-grid"
-            defaultOpen={Boolean(editingId)}
+          <EntryPanel
+            actionLabel="Record payment"
+            className="payment-entry-panel"
+            disabled={paymentSubmitting || Boolean(paymentSubmissionReview)}
             icon={<CircleDollarSign size={18} />}
-            onSubmit={submit}
-            summary={selectedCustomer ? `${selectedCustomer.acc_number} | ${form.amount ? money(form.amount) : "amount pending"}` : `${payments.length.toLocaleString()} payment(s) recorded`}
-            title={editingId ? "Edit Payment" : "Record Payment"}
+            onOpenChange={setPaymentEntryOpen}
+            open={paymentEntryOpen}
+            summary={editingId ? "Editing a posted receipt" : "Find an account, verify the allocation, then review the receipt"}
+            title={editingId ? "Edit payment" : "Post payment"}
           >
-            <label>
-              Customer
-              <select value={form.customer_id} onChange={(event) => setField("customer_id", event.target.value)} required disabled={Boolean(editingId)}>
-                <option value="">Select customer</option>
-                {customers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.acc_number} - {customer.name} - {accountPositionLabel(customer.balance_due).toLowerCase()}{" "}
-                    {accountPositionMoney(customer.balance_due)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {selectedCustomer ? (
-              <div className="balance-note">
-                <span>{accountPositionLabel(selectedBalance)}</span>
-                <strong>{accountPositionMoney(selectedBalance)}</strong>
-              </div>
-            ) : null}
-            <label>
-              Amount
-              <input
-                value={form.amount}
-                onChange={(event) => setField("amount", event.target.value)}
-                type="number"
-                min="1"
-                required
+            <div className="payment-entry-shell" ref={paymentEntryRef}>
+              <PaymentEntryFlow
+                form={form}
+                customers={customers}
+                recentCustomerIds={recentCustomerIds}
+                editingId={editingId}
+                submitting={paymentSubmitting}
+                reviewing={Boolean(paymentSubmissionReview)}
+                onFieldChange={setField}
+                onSubmit={requestPaymentSubmission}
+                onCancelEdit={cancelEdit}
               />
-            </label>
-            <label>
-              Date
-              <input value={form.payment_date} onChange={(event) => setField("payment_date", event.target.value)} type="date" />
-            </label>
-            <label>
-              Channel
-              <select value={form.payment_channel} onChange={(event) => setField("payment_channel", event.target.value)}>
-                <option value="cash">Cash</option>
-                <option value="bank">Bank</option>
-                <option value="mpesa_paybill">M-Pesa/paybill</option>
-                <option value="manual_adjustment">Manual adjustment</option>
-              </select>
-            </label>
-            <label>
-              Receipt number
-              <input value={form.receipt_number} onChange={(event) => setField("receipt_number", event.target.value)} placeholder="Auto-generated if blank" />
-            </label>
-            <label>
-              {referenceLabel}
-              <input value={form.external_reference} onChange={(event) => setField("external_reference", event.target.value)} />
-            </label>
-            <label>
-              Received from
-              <input value={form.received_from} onChange={(event) => setField("received_from", event.target.value)} />
-            </label>
-            <label>
-              Notes
-              <textarea value={form.notes} onChange={(event) => setField("notes", event.target.value)} rows="3" />
-            </label>
-            <button className="primary-button" type="submit">
-              {editingId ? <Save size={17} /> : <CircleDollarSign size={17} />}
-              {editingId ? "Save payment" : "Record payment"}
-            </button>
-            {editingId ? (
-              <button type="button" onClick={cancelEdit}>
-                Cancel edit
-              </button>
-            ) : null}
-          </CollapsibleSection>
+            </div>
+          </EntryPanel>
           ) : null}
 
           {showAdjustmentEntry ? (
-          <CollapsibleSection
-            as="form"
-            className="form-grid"
+          <PaymentAdjustmentForm
+            customers={customers}
             defaultOpen={focusKey === "pending_adjustments"}
+            form={adjustmentForm}
+            money={money}
+            onFieldChange={setAdjustmentField}
             onSubmit={submitAdjustment}
-            summary={`${focusedAdjustments.filter((adjustment) => adjustment.status === "pending").length.toLocaleString()} pending | ${money(pendingAdjustmentTotal)}`}
-            title="Manual Credit/Debit"
-          >
-            <p className="muted">Accountants submit requests; admin approval posts the credit or debit.</p>
-            <label>
-              Customer
-              <select
-                value={adjustmentForm.customer_id}
-                onChange={(event) => setAdjustmentField("customer_id", event.target.value)}
-                required
-              >
-                <option value="">Select customer</option>
-                {customers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.acc_number} - {customer.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Type
-              <select
-                value={adjustmentForm.adjustment_type}
-                onChange={(event) => setAdjustmentField("adjustment_type", event.target.value)}
-              >
-                <option value="credit">Credit customer</option>
-                <option value="debit">Debit customer</option>
-              </select>
-            </label>
-            <label>
-              Amount
-              <input
-                value={adjustmentForm.amount}
-                onChange={(event) => setAdjustmentField("amount", event.target.value)}
-                type="number"
-                min="1"
-                required
-              />
-            </label>
-            <label>
-              Date
-              <input
-                value={adjustmentForm.adjustment_date}
-                onChange={(event) => setAdjustmentField("adjustment_date", event.target.value)}
-                type="date"
-              />
-            </label>
-            <label>
-              Reason
-              <textarea
-                value={adjustmentForm.reason}
-                onChange={(event) => setAdjustmentField("reason", event.target.value)}
-                rows="3"
-                required
-              />
-            </label>
-            <button className="primary-button" type="submit">
-              Submit for approval
-            </button>
-          </CollapsibleSection>
+            pendingCount={focusedAdjustments.filter((adjustment) => adjustment.status === "pending").length}
+            pendingTotal={pendingAdjustmentTotal}
+          />
           ) : null}
 
           {showBankTools ? (
           <>
-          <CollapsibleSection
-            actions={
-              <button type="button" onClick={saveBankTemplate} disabled={!bankHeaders.length}>
-                <Save size={16} />
-                Save mapping
-              </button>
-            }
-            className="form-grid bank-trainer-panel"
-            defaultOpen={Boolean(bankHeaders.length || bankReviewRows.length)}
-            icon={<FileUp size={18} />}
-            summary={`${bankRows.length.toLocaleString()} statement row(s) | ${bankReviewRows.filter((row) => bankRowStatus(row) === "ready").length.toLocaleString()} ready`}
-            title="Bank Statement Trainer"
-          >
-            <p className="muted">Upload a PDF or CSV statement, match statement rows to customers, then send them to the normal payment importer.</p>
-            <label>
-              Bank statement file
-              <input type="file" accept=".pdf,application/pdf,.csv,text/csv" onChange={handleBankCsvFile} />
-            </label>
-            <div className="filter-bar">
-              <label>
-                Bank profile
-                <select value={bankProfileName} onChange={(event) => applyBankProfile(event.target.value)}>
-                  <option value="Default">Default</option>
-                  {Object.keys(bankProfiles).filter((name) => name !== "Default").map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Profile name
-                <input
-                  value={bankProfileName}
-                  onChange={(event) => setBankProfileName(event.target.value)}
-                  placeholder="e.g. Equity, KCB, Cooperative"
-                />
-              </label>
-            </div>
-            <label>
-              PDF password
-              <input
-                value={bankPdfPassword}
-                onChange={(event) => setBankPdfPassword(event.target.value)}
-                type="password"
-                placeholder="Only needed for protected PDF statements"
-              />
-            </label>
-            {bankPdfFile ? (
-              <button type="button" onClick={() => loadBankPdfStatement(bankPdfFile)}>
-                {bankPdfNeedsPassword ? "Retry with password" : "Re-read PDF"}
-              </button>
-            ) : null}
-            <label>
-              Extracted statement table or CSV content
-              <textarea
-                value={bankCsvText}
-                onChange={(event) => {
-                  setBankCsvText(event.target.value);
-                  setBankHeaders([]);
-                  setBankRows([]);
-                  setBankReviewRows([]);
-                }}
-                rows="5"
-                placeholder="Upload a PDF statement to extract a CSV-like table, or paste CSV content here and detect columns."
-              />
-            </label>
-            <button type="button" onClick={() => loadBankStatement(bankCsvText)} disabled={!bankCsvText.trim()}>
-              Detect columns from content
-            </button>
+          <PaymentReconciliationWorkspace
+            bankCsvText={bankCsvText}
+            bankHeaders={bankHeaders}
+            bankImportHistory={bankImportHistory}
+            bankMapping={bankMapping}
+            bankPaymentChannel={bankPaymentChannel}
+            bankPdfFile={bankPdfFile}
+            bankPdfNeedsPassword={bankPdfNeedsPassword}
+            bankPdfPassword={bankPdfPassword}
+            bankProfileName={bankProfileName}
+            bankProfileSaving={bankProfileSaving}
+            bankProfiles={bankProfiles}
+            bankReviewRows={bankReviewRows}
+            bankRows={bankRows}
+            bankSourceName={bankSourceName}
+            bankStage={bankStage}
+            customers={customers}
+            date={date}
+            importing={importing}
+            importPreview={importPreview}
+            importReady={importReady}
+            money={money}
+            mpesaIntegration={mpesaIntegration}
+            onAccountChange={updateBankReviewAccount}
+            onChannelChange={(channel) => {
+              setBankPaymentChannel(channel);
+              setBankReviewRows([]);
+              setImportPreview(null);
+            }}
+            onCsvChange={(value) => {
+              setBankCsvText(value);
+              setBankHeaders([]);
+              setBankRows([]);
+              setBankReviewRows([]);
+            }}
+            onDetect={() => {
+              if (!bankSourceName) setBankSourceName("Pasted statement / CSV");
+              loadBankStatement(bankCsvText);
+            }}
+            onFileChange={handleBankCsvFile}
+            onIgnoreUnresolved={ignoreUnresolvedBankRows}
+            onMappingChange={updateBankMapping}
+            onPdfPasswordChange={setBankPdfPassword}
+            onPreview={previewImport}
+            onProfileChange={applyBankProfile}
+            onProfileNameChange={setBankProfileName}
+            onReadPdf={() => loadBankPdfStatement(bankPdfFile)}
+            onRequestCommit={requestImportCommit}
+            onReset={resetBankReconciliation}
+            onReview={generateBankPaymentRows}
+            onRowChange={updateBankReviewField}
+            onRestoreIgnored={restoreIgnoredBankRows}
+            onSaveTemplate={saveBankTemplate}
+            onStageChange={setBankStage}
+            onUseRows={useBankPaymentRows}
+            statementConfidenceLabel={statementConfidenceLabel}
+            statementRowStatus={statementRowStatus}
+          />
 
-            {bankHeaders.length ? (
-              <>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Bank column</th>
-                        <th>Payment field</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {bankHeaders.map((header) => (
-                        <tr key={header}>
-                          <td>{header}</td>
-                          <td>
-                            <select value={bankMapping[header] || ""} onChange={(event) => updateBankMapping(header, event.target.value)}>
-                              {bankFieldOptions.map((option) => (
-                                <option key={option.key || "select"} value={option.key}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <button className="primary-button" type="button" onClick={generateBankPaymentRows}>
-                  <Eye size={17} />
-                  Generate payment rows
-                </button>
-              </>
-            ) : null}
-
-            {bankReviewRows.length ? (
-              <>
-                <div className="reading-context">
-                  <div>
-                    <span>Total rows</span>
-                    <strong>{bankReviewRows.length}</strong>
-                  </div>
-                  <div>
-                    <span>Ready</span>
-                    <strong>{bankReviewRows.filter((row) => bankRowStatus(row) === "ready").length}</strong>
-                  </div>
-                  <div>
-                    <span>Need match</span>
-                    <strong>{bankReviewRows.filter((row) => bankRowStatus(row) === "needs_match").length}</strong>
-                  </div>
-                  <div>
-                    <span>Ignored</span>
-                    <strong>{bankReviewRows.filter((row) => row.ignored).length}</strong>
-                  </div>
-                </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Ignore</th>
-                        <th>Row</th>
-                        <th>Date</th>
-                        <th>Amount</th>
-                        <th>Reference</th>
-                        <th>Narration</th>
-                        <th>Account match</th>
-                        <th>Confidence</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {bankReviewRows.map((row, index) => (
-                        <tr key={row.id}>
-                          <td>
-                            <input
-                              checked={Boolean(row.ignored)}
-                              onChange={(event) => updateBankReviewField(index, "ignored", event.target.checked)}
-                              type="checkbox"
-                              title="Ignore this statement row"
-                            />
-                          </td>
-                          <td>{row.source_row_number}</td>
-                          <td>
-                            <input
-                              value={row.payment_date || ""}
-                              onChange={(event) => updateBankReviewField(index, "payment_date", event.target.value)}
-                              type="date"
-                            />
-                          </td>
-                          <td>
-                            <input
-                              value={row.amount || ""}
-                              onChange={(event) => updateBankReviewField(index, "amount", event.target.value)}
-                              type="number"
-                              min="1"
-                            />
-                          </td>
-                          <td>
-                            <input
-                              value={row.external_reference || ""}
-                              onChange={(event) => updateBankReviewField(index, "external_reference", event.target.value)}
-                            />
-                            {row.received_from ? <small>{row.received_from}</small> : null}
-                          </td>
-                          <td>
-                            <input
-                              value={row.narration || ""}
-                              onChange={(event) => updateBankReviewField(index, "narration", event.target.value)}
-                            />
-                          </td>
-                          <td>
-                            <select value={row.acc_number} onChange={(event) => updateBankReviewAccount(index, event.target.value)}>
-                              <option value="">Select account</option>
-                              {row.candidates.map((candidate) => (
-                                <option key={`${row.id}-${candidate.id}`} value={candidate.acc_number}>
-                                  {candidate.acc_number} - {candidate.name} ({candidate.score}%)
-                                </option>
-                              ))}
-                              <option value="" disabled>
-                                All customers
-                              </option>
-                              {customers.map((customer) => (
-                                <option key={`${row.id}-customer-${customer.id}`} value={customer.acc_number}>
-                                  {customer.acc_number} - {customer.name}
-                                </option>
-                              ))}
-                            </select>
-                            {row.candidate_reason ? <small>Matched by {row.candidate_reason}</small> : null}
-                          </td>
-                          <td>
-                            <strong>{bankConfidenceLabel(row.candidate_score)}</strong>
-                            {row.candidate_score ? <small>{row.candidate_score}%</small> : null}
-                          </td>
-                          <td>
-                            <span className={`status status-${bankRowStatus(row)}`}>{bankRowStatus(row).replace("_", " ")}</span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <button type="button" onClick={useBankPaymentRows}>
-                  <FileUp size={17} />
-                  Use generated payment CSV
-                </button>
-              </>
-            ) : null}
-            {bankImportHistory.length ? (
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Prepared</th>
-                      <th>Source</th>
-                      <th>Profile</th>
-                      <th>Rows</th>
-                      <th>Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {bankImportHistory.map((item) => (
-                      <tr key={item.id}>
-                        <td>{date(item.created_at)}</td>
-                        <td>{item.source}</td>
-                        <td>{item.profile}</td>
-                        <td>
-                          {item.rows}
-                          {item.ignored ? <small>{item.ignored} ignored</small> : null}
-                        </td>
-                        <td>{money(item.total)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : null}
-          </CollapsibleSection>
-
-          <CollapsibleSection
-            actions={
-              <button
-                type="button"
-                onClick={() => downloadCsvTemplate("payments-import-template.csv", paymentImportHeaders)}
-              >
-                <Download size={16} />
-                Template
-              </button>
-            }
-            className="form-grid payment-import-panel"
-            defaultOpen={Boolean(importPreview)}
-            icon={<FileUp size={18} />}
-            summary={importPreview ? `${importPreview.summary.valid} valid of ${importPreview.summary.total} row(s) | ${money(importPreview.summary.totalAmount)}` : "Paste CSV or upload a file"}
-            title="Import Payments CSV"
-          >
-            <label>
-              CSV file
-              <input type="file" accept=".csv,text/csv" onChange={handleCsvFile} />
-            </label>
-            <label>
-              CSV content
-              <textarea
-                value={csvText}
-                onChange={(event) => {
-                  setCsvText(event.target.value);
-                  setImportPreview(null);
-                }}
-                rows="7"
-                placeholder={"acc_number,payment_date,amount,payment_channel,receipt_number,external_reference,received_from,notes\nAG-0001,2026-06-30,1500,mpesa_paybill,MPESA-001,QWE123,Jane Wanjiku,June payment"}
-              />
-            </label>
-            <p className="muted">
-              Required columns: acc_number or customer_id, payment_date, amount. Optional: payment_channel, receipt_number, external_reference, received_from, bill_number, notes.
-            </p>
-            {importPreview ? (
-              <div className="reading-context">
-                <div>
-                  <span>Total rows</span>
-                  <strong>{importPreview.summary.total}</strong>
-                </div>
-                <div>
-                  <span>Valid</span>
-                  <strong>{importPreview.summary.valid}</strong>
-                </div>
-                <div>
-                  <span>Total amount</span>
-                  <strong>{money(importPreview.summary.totalAmount)}</strong>
-                </div>
-              </div>
-            ) : null}
-            <button className="primary-button" type="button" onClick={previewImport} disabled={importing}>
-              <Eye size={17} />
-              Preview CSV
-            </button>
-            <button type="button" onClick={commitImport} disabled={!importReady || importing}>
-              <FileUp size={17} />
-              Import valid rows
-            </button>
-          </CollapsibleSection>
+          <PaymentCsvImportPanel
+            csvText={csvText}
+            defaultOpen={Boolean(importPreview) && bankStage !== 4}
+            importing={importing}
+            importPreview={importPreview}
+            importReady={importReady}
+            money={money}
+            onCsvChange={(value) => {
+              setCsvText(value);
+              setImportPreview(null);
+            }}
+            onFileChange={handleCsvFile}
+            onPreview={previewImport}
+            onRequestCommit={requestImportCommit}
+            onTemplate={() => downloadCsvTemplate("payments-import-template.csv", paymentImportHeaders)}
+          />
           </>
           ) : null}
         </div>
         ) : null}
 
         <div className="page-stack wide-panel">
-          {!hasPaymentFocus && importPreview ? (
+          {!hasPaymentFocus ? <PaymentImportPreview money={money} preview={importPreview} /> : null}
+
+          <PaymentImportHistoryPanel batches={paymentImportBatches} date={date} label={label} money={money} />
+
+          <PaymentReceiptPanel
+            businessSettings={businessSettings}
+            date={date}
+            label={label}
+            onClose={() => setReceiptDetail(null)}
+            onEmail={sendReceiptEmail}
+            onPrint={printReceipt}
+            onRecordAnother={recordAnotherPayment}
+            onSms={sendReceiptSms}
+            positionLabel={accountPositionLabel}
+            positionMoney={receiptPositionMoney}
+            receipt={receiptDetail}
+            receiptMoney={receiptMoney}
+            receiptRef={receiptRef}
+          />
+
+          {!hasPaymentFocus ? (
             <CollapsibleSection
-              defaultOpen
-              icon={<FileUp size={18} />}
-              summary={`${importPreview.summary.valid} valid of ${importPreview.summary.total} row(s) | ${money(importPreview.summary.totalAmount)}`}
-              title="CSV Preview"
+              defaultOpen={false}
+              icon={<History size={18} />}
+              summary={`${paymentCorrections.length.toLocaleString()} recent event(s)`}
+              title="Recently Corrected"
             >
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Row</th>
-                      <th>Account</th>
-                      <th>Customer</th>
-                      <th>Date</th>
-                      <th>Amount</th>
-                      <th>Channel</th>
-                      <th>Receipt</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {importPreview.rows.map((row) => (
-                      <tr key={row.rowNumber}>
-                        <td>{row.rowNumber}</td>
-                        <td>{row.acc_number || "-"}</td>
-                        <td>{row.customer_name || "-"}</td>
-                        <td>{row.payment_date || "-"}</td>
-                        <td>{row.amount === "" ? "-" : money(row.amount)}</td>
-                        <td>{row.payment_channel}</td>
-                        <td>{row.receipt_number || "Auto"}</td>
-                        <td>
-                          <span className={`status status-${row.status}`}>{row.status}</span>
-                          {[...row.errors, ...row.warnings].map((item) => (
-                            <small key={item}>{item}</small>
-                          ))}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <PaymentCorrectionTimeline
+                events={paymentCorrections}
+                loading={correctionsLoading}
+                onViewReceipt={openReceipt}
+              />
             </CollapsibleSection>
           ) : null}
 
-          {receiptDetail ? (
-            <div className="panel print-surface receipt-print">
-              <div className="receipt-actions screen-only">
-                <button type="button" onClick={printReceipt}>
-                  <Printer size={17} />
-                  Print receipt
-                </button>
-                <button type="button" onClick={() => sendReceiptEmail(receiptDetail.payment.id)}>
-                  <Mail size={17} />
-                  Email receipt
-                </button>
-                <button type="button" onClick={() => sendReceiptSms(receiptDetail.payment.id)}>
-                  <MessageSquare size={17} />
-                  SMS receipt
-                </button>
-                <button type="button" onClick={() => setReceiptDetail(null)} title="Close receipt">
-                  <X size={17} />
-                  Close
-                </button>
-              </div>
-
-              <div className="receipt-header">
-                {businessSettings?.logo_url ? (
-                  <img className="receipt-logo" src={assetUrl(businessSettings.logo_url)} alt="Business logo" />
-                ) : (
-                  <div className="receipt-logo-mark">{businessSettings?.business_name?.slice(0, 2) || "AG"}</div>
-                )}
-                <div>
-                  <h3>{businessSettings?.business_name || "Water Billing"}</h3>
-                  {businessSettings?.legal_name ? <p>{businessSettings.legal_name}</p> : null}
-                  {businessSettings?.physical_address ? <p>{businessSettings.physical_address}</p> : null}
-                  <p>
-                    {[businessSettings?.phone, businessSettings?.email].filter(Boolean).join(" | ")}
-                  </p>
-                  {businessSettings?.tax_pin ? <p>PIN: {businessSettings.tax_pin}</p> : null}
-                </div>
-              </div>
-
-              <div className="receipt-title">
-                <div>
-                  <span>Receipt</span>
-                  <strong>{receiptDetail.payment.receipt_number || `RCPT-${receiptDetail.payment.id}`}</strong>
-                </div>
-                <div>
-                  <span>Date</span>
-                  <strong>{date(receiptDetail.payment.payment_date)}</strong>
-                </div>
-              </div>
-
-              <div className="receipt-info-grid">
-                <div>
-                  <span>Received From</span>
-                  <strong>{receiptDetail.payment.received_from || receiptDetail.payment.customer_name}</strong>
-                </div>
-                <div>
-                  <span>Customer</span>
-                  <strong>{receiptDetail.payment.customer_name}</strong>
-                  <small>{receiptDetail.payment.acc_number}</small>
-                </div>
-                <div>
-                  <span>Channel</span>
-                  <strong>{label(receiptDetail.payment.payment_channel || receiptDetail.payment.method)}</strong>
-                </div>
-                <div>
-                  <span>Reference</span>
-                  <strong>{receiptDetail.payment.external_reference || receiptDetail.payment.reference || "-"}</strong>
-                </div>
-              </div>
-
-              <table className="receipt-table">
-                <thead>
-                  <tr>
-                    <th>Bill</th>
-                    <th>Billing Month</th>
-                    <th>Bill Total</th>
-                    <th>Allocated</th>
-                    <th>Bill Balance</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {receiptDetail.allocations.length ? (
-                    receiptDetail.allocations.map((allocation) => (
-                      <tr key={allocation.id}>
-                        <td>{allocation.bill_number || `Bill ${allocation.bill_id}`}</td>
-                        <td>{date(allocation.billing_month)}</td>
-                        <td>{receiptMoney(allocation.bill_total)}</td>
-                        <td>{receiptMoney(allocation.amount)}</td>
-                        <td>{receiptMoney(allocation.balance_amount)}</td>
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan="5">No open bills. Full amount stored as customer credit.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-
-              <div className="receipt-total">
-                <span>Total received</span>
-                <strong>{receiptMoney(receiptDetail.payment.amount)}</strong>
-              </div>
-              <div className="receipt-total muted-total">
-                <span>Allocated to bills</span>
-                <strong>{receiptMoney(receiptDetail.payment.total_allocated_amount)}</strong>
-              </div>
-              <div className="receipt-total muted-total">
-                <span>Customer credit</span>
-                <strong>{receiptMoney(receiptDetail.payment.unallocated_amount)}</strong>
-              </div>
-              <div className="receipt-total muted-total">
-                <span>{accountPositionLabel(receiptDetail.customerBalance)} after receipt</span>
-                <strong>{receiptPositionMoney(receiptDetail.customerBalance)}</strong>
-              </div>
-
-              <div className="receipt-footer">
-                {businessSettings?.paybill_number ? <p>Paybill: {businessSettings.paybill_number}</p> : null}
-                {businessSettings?.till_number ? <p>Till: {businessSettings.till_number}</p> : null}
-                {businessSettings?.receipt_footer_note ? <p>{businessSettings.receipt_footer_note}</p> : null}
-                <small>Recorded by {receiptDetail.payment.recorded_by_name || "-"}</small>
-              </div>
-              <div className="screen-only">
-                <div className="panel-heading compact-heading">
-                  <h3>Delivery History</h3>
-                </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>When</th>
-                        <th>Channel</th>
-                        <th>Recipient</th>
-                        <th>Status</th>
-                        <th>Sent By</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {receiptDetail.delivery_logs?.length ? (
-                        receiptDetail.delivery_logs.map((log) => (
-                          <tr key={log.id}>
-                            <td>{date(log.created_at)}</td>
-                            <td>{log.channel}</td>
-                            <td>
-                              {log.recipient}
-                              <small>{log.error_message || log.subject || ""}</small>
-                            </td>
-                            <td><span className={`status status-${log.status}`}>{log.status}</span></td>
-                            <td>{log.sent_by_name || "-"}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <EmptyTableRow colSpan={5} title="No delivery history" detail="Receipt delivery attempts will appear here." />
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-                <AuditPanel entityType="payment" entityId={receiptDetail.payment.id} title="Payment Audit" />
-              </div>
-            </div>
-          ) : null}
-
           {showPaymentHistory ? (
-          <CollapsibleSection
-            actions={
-              <button type="button" onClick={exportPayments}>
-                <Download size={16} />
-                Export
-              </button>
-            }
-            defaultOpen={focusKey === "customer_credits"}
-            icon={<CircleDollarSign size={18} />}
-            summary={`${paymentTable.filteredRows.length.toLocaleString()} payment(s) | ${money(paymentHistoryTotal)}`}
-            title="Payment History"
-          >
-            <div className="table-toolbar">
-              <label>
-                Channel
-                <select value={channelFilter} onChange={(event) => setChannelFilter(event.target.value)}>
-                  <option value="">All channels</option>
-                  <option value="cash">Cash</option>
-                  <option value="bank">Bank</option>
-                  <option value="mpesa_paybill">M-Pesa/paybill</option>
-                  <option value="manual_adjustment">Manual adjustment</option>
-                </select>
-              </label>
-              <label>
-                From
-                <input value={dateFromFilter} onChange={(event) => setDateFromFilter(event.target.value)} type="date" />
-              </label>
-              <label>
-                To
-                <input value={dateToFilter} onChange={(event) => setDateToFilter(event.target.value)} type="date" />
-              </label>
-            </div>
-            <TableControls table={paymentTable} label="payments" placeholder="Search payments" />
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Customer</th>
-                    <th>Receipt</th>
-                    <th>Amount</th>
-                    <th>Date</th>
-                    <th>Channel</th>
-                    <th>Reference</th>
-                    <th>Allocations</th>
-                    <th>Credit</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {paymentTable.visibleRows.length ? (
-                    paymentTable.visibleRows.map((payment) => (
-                      <tr key={payment.id}>
-                        <td>
-                          <strong>{payment.customer_name}</strong>
-                          <small>{payment.acc_number}</small>
-                        </td>
-                        <td>{payment.receipt_number || "-"}</td>
-                        <td>{money(payment.amount)}</td>
-                        <td>{payment.payment_date?.slice(0, 10)}</td>
-                        <td>{payment.payment_channel || payment.method}</td>
-                        <td>{payment.external_reference || payment.reference || "-"}</td>
-                        <td>
-                          {Number(payment.allocation_count || 0).toLocaleString()}
-                          <small>{payment.bill_numbers || ""}</small>
-                        </td>
-                        <td>{money(payment.unallocated_amount)}</td>
-                        <td>
-                          <span className={`status ${payment.status === "posted" ? "status-valid" : "status-rejected"}`}>
-                            {label(payment.status)}
-                          </span>
-                        </td>
-                        <td>
-                          <div className="row-actions">
-                            <button type="button" onClick={() => openReceipt(payment)} disabled={loadingReceipt}>
-                              Print
-                            </button>
-                            <button type="button" onClick={() => sendReceiptEmail(payment.id)}>
-                              Email
-                            </button>
-                            <button type="button" onClick={() => sendReceiptSms(payment.id)}>
-                              SMS
-                            </button>
-                            {payment.status === "posted" ? (
-                              <>
-                                <button type="button" onClick={() => edit(payment)}>Edit</button>
-                                <button type="button" onClick={() => voidPayment(payment)}>Void</button>
-                              </>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <EmptyTableRow colSpan={10} title="No payments found" detail="Record payments or adjust the filters." />
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </CollapsibleSection>
+            <PaymentHistoryPanel
+              channelFilter={channelFilter}
+              dateFromFilter={dateFromFilter}
+              dateToFilter={dateToFilter}
+              defaultOpen={focusKey === "customer_credits"}
+              historyTotal={paymentHistoryTotal}
+              historyQuickView={historyQuickView}
+              label={label}
+              loading={paymentTable.loading}
+              loadingReceipt={loadingReceipt}
+              money={money}
+              onChannelFilterChange={setManualPaymentHistoryFilter("channel")}
+              onDateFromFilterChange={setManualPaymentHistoryFilter("dateFrom")}
+              onDateToFilterChange={setManualPaymentHistoryFilter("dateTo")}
+              onEdit={edit}
+              onEmail={sendReceiptEmail}
+              onExport={exportPayments}
+              onOpenReceipt={openReceipt}
+              onQuickView={applyPaymentHistoryView}
+              onSms={sendReceiptSms}
+              onVoid={voidPayment}
+              table={paymentTable}
+            />
           ) : null}
 
           {showSuspenseRegister ? (
-          <CollapsibleSection
-            defaultOpen={focusKey === "suspense_payments"}
-            summary={`${focusedSuspenseItems.filter((item) => item.status === "held").length.toLocaleString()} held | ${money(suspenseHeldTotal)}`}
-            title="Suspense Register"
-          >
-            <TableControls table={suspenseTable} label="suspense items" placeholder="Search suspense" />
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Receipt</th>
-                    <th>Customer</th>
-                    <th>Amount</th>
-                    <th>Date</th>
-                    <th>Reference</th>
-                    <th>Reason</th>
-                    <th>Status</th>
-                    <th>Resolution</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {suspenseTable.visibleRows.length ? (
-                    suspenseTable.visibleRows.map((item) => (
-                      <tr key={item.id}>
-                        <td>
-                          {item.receipt_number || `Suspense ${item.id}`}
-                          <small>Payment #{item.source_payment_id}</small>
-                        </td>
-                        <td>
-                          {item.customer_name || "-"}
-                          <small>{item.acc_number || ""}</small>
-                        </td>
-                        <td>{money(item.amount)}</td>
-                        <td>{date(item.payment_date)}</td>
-                        <td>{item.external_reference || "-"}</td>
-                        <td>{item.reason}</td>
-                        <td>
-                          <span className={`status status-${item.status}`}>{label(item.status)}</span>
-                        </td>
-                        <td>
-                          {item.status === "reapplied" ? item.reapplied_receipt_number || `Payment ${item.reapplied_payment_id}` : null}
-                          {item.status === "discarded" ? item.discard_reason || "Discarded" : null}
-                          {item.status === "held" ? "Awaiting action" : null}
-                        </td>
-                        <td>
-                          {item.status === "held" ? (
-                            <div className="row-actions">
-                              <button type="button" onClick={() => reapplySuspense(item)}>
-                                Reapply
-                              </button>
-                              {user.role === "admin" ? (
-                                <button type="button" onClick={() => discardSuspense(item)}>
-                                  Discard
-                                </button>
-                              ) : null}
-                            </div>
-                          ) : (
-                            "-"
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <EmptyTableRow colSpan={9} title="No suspense items found" detail="Voided payments awaiting action will appear here." />
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </CollapsibleSection>
+            <PaymentSuspensePanel
+              admin={user.role === "admin"}
+              date={date}
+              defaultOpen={focusKey === "suspense_payments"}
+              heldCount={focusedSuspenseItems.filter((item) => item.status === "held").length}
+              heldTotal={suspenseHeldTotal}
+              label={label}
+              money={money}
+              onDiscard={discardSuspense}
+              onReapply={reapplySuspense}
+              table={suspenseTable}
+            />
           ) : null}
 
           {showAdjustmentRegister ? (
-          <CollapsibleSection
-            defaultOpen={focusKey === "pending_adjustments"}
-            summary={`${focusedAdjustments.filter((adjustment) => adjustment.status === "pending").length.toLocaleString()} pending | ${money(pendingAdjustmentTotal)}`}
-            title="Adjustment Approvals"
-          >
-            <TableControls table={adjustmentTable} label="adjustments" placeholder="Search adjustments" />
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Customer</th>
-                    <th>Type</th>
-                    <th>Amount</th>
-                    <th>Date</th>
-                    <th>Reason</th>
-                    <th>Status</th>
-                    <th>Requested</th>
-                    {user.role === "admin" ? <th>Actions</th> : null}
-                  </tr>
-                </thead>
-                <tbody>
-                  {adjustmentTable.visibleRows.map((adjustment) => (
-                    <tr key={adjustment.id}>
-                      <td>
-                        <strong>{adjustment.customer_name}</strong>
-                        <small>{adjustment.acc_number}</small>
-                      </td>
-                      <td>{label(adjustment.adjustment_type)}</td>
-                      <td>{money(adjustment.amount)}</td>
-                      <td>{date(adjustment.adjustment_date)}</td>
-                      <td>{adjustment.reason}</td>
-                      <td>
-                        <span className={`status status-${adjustment.status}`}>{adjustment.status}</span>
-                        {adjustment.review_notes ? <small>{adjustment.review_notes}</small> : null}
-                      </td>
-                      <td>{adjustment.requested_by_name || "-"}</td>
-                      {user.role === "admin" ? (
-                        <td>
-                          {adjustment.status === "pending" ? (
-                            <div className="row-actions">
-                              <button type="button" onClick={() => reviewAdjustment(adjustment, "approved")}>
-                                Approve
-                              </button>
-                              <button type="button" onClick={() => reviewAdjustment(adjustment, "rejected")}>
-                                Reject
-                              </button>
-                            </div>
-                          ) : (
-                            adjustment.reviewed_by_name || "-"
-                          )}
-                        </td>
-                      ) : null}
-                    </tr>
-                  ))}
-                  {!adjustmentTable.visibleRows.length ? (
-                    <EmptyTableRow
-                      colSpan={user.role === "admin" ? 8 : 7}
-                      title="No adjustment requests found"
-                      detail="Manual credits and debits awaiting review will appear here."
-                    />
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-          </CollapsibleSection>
+            <PaymentAdjustmentApprovalPanel
+              admin={user.role === "admin"}
+              date={date}
+              defaultOpen={focusKey === "pending_adjustments"}
+              label={label}
+              money={money}
+              onReview={requestAdjustmentReview}
+              pendingCount={focusedAdjustments.filter((adjustment) => adjustment.status === "pending").length}
+              pendingTotal={pendingAdjustmentTotal}
+              table={adjustmentTable}
+            />
           ) : null}
         </div>
       </section>
+      <PaymentReviewDialogs
+        customers={customers}
+        importPreview={importPreview}
+        importing={importing}
+        importReviewOpen={importReviewOpen}
+        importSourceName={importSourceName}
+        money={money}
+        onCloseImportReview={() => !importing && setImportReviewOpen(false)}
+        onClosePaymentReview={closeReviewDialog}
+        adjustmentReview={adjustmentReview}
+        adjustmentReviewBusy={adjustmentReviewBusy}
+        onCloseAdjustmentReview={() => !adjustmentReviewBusy && setAdjustmentReview(null)}
+        onConfirmAdjustmentReview={submitAdjustmentReview}
+        onClosePaymentSubmission={() => !paymentSubmitting && setPaymentSubmissionReview(null)}
+        onCommitImport={commitImport}
+        onConfirmPaymentSubmission={submitPayment}
+        onConfirmPaymentReview={submitReviewAction}
+        onReapplyCustomerChange={(value) => {
+          setReapplyCustomerId(value);
+          setReviewError("");
+        }}
+        reapplyCustomerId={reapplyCustomerId}
+        reviewAction={reviewAction}
+        reviewBusy={reviewBusy}
+        reviewError={reviewError}
+        paymentSubmissionReview={paymentSubmissionReview}
+        paymentSubmitting={paymentSubmitting}
+      />
     </section>
   );
 }

@@ -2,6 +2,9 @@ import { LockKeyhole, LogOut, Save } from "lucide-react";
 import { useState } from "react";
 import { api } from "../services/api";
 
+const passwordCategoryCount = (password) =>
+  [/[a-z]/.test(password), /[A-Z]/.test(password), /\d/.test(password), /[^A-Za-z0-9]/.test(password)].filter(Boolean).length;
+
 function PasswordChangePage({ user, onChanged, onLogout }) {
   const [form, setForm] = useState({
     current_password: "",
@@ -17,12 +20,7 @@ function PasswordChangePage({ user, onChanged, onLogout }) {
     event.preventDefault();
     setMessage("");
 
-    const categories = [
-      /[a-z]/.test(form.new_password),
-      /[A-Z]/.test(form.new_password),
-      /\d/.test(form.new_password),
-      /[^A-Za-z0-9]/.test(form.new_password)
-    ].filter(Boolean).length;
+    const categories = passwordCategoryCount(form.new_password);
 
     if (form.new_password.length < 8 || categories < 3) {
       setMessage("New password must be at least 8 characters and include three of uppercase, lowercase, numbers, and symbols.");
@@ -45,8 +43,8 @@ function PasswordChangePage({ user, onChanged, onLogout }) {
   };
 
   return (
-    <main className="login-page">
-      <form className="login-panel form-grid" onSubmit={submit}>
+    <main className="login-page password-change-page">
+      <form className="login-panel form-grid password-change-panel" onSubmit={submit}>
         <div className="login-brand">
           <span className="brand-mark">
             <LockKeyhole size={18} />
@@ -78,6 +76,11 @@ function PasswordChangePage({ user, onChanged, onLogout }) {
           />
           <small>Use at least 8 characters with three of uppercase, lowercase, numbers, and symbols.</small>
         </label>
+        <div className={`password-policy-status ${form.new_password.length >= 8 && passwordCategoryCount(form.new_password) >= 3 ? "ready" : ""}`}>
+          <span>Password readiness</span>
+          <strong>{form.new_password.length >= 8 && passwordCategoryCount(form.new_password) >= 3 ? "Meets policy" : "Needs strengthening"}</strong>
+          <small>{form.new_password.length}/8 characters | {passwordCategoryCount(form.new_password)}/3 character groups</small>
+        </div>
         <label>
           Confirm new password
           <input

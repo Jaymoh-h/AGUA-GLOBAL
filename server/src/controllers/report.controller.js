@@ -121,6 +121,8 @@ const backupQueries = [
   ["system_event_logs", "SELECT * FROM system_event_logs ORDER BY id"],
   ["monitoring_alert_logs", "SELECT * FROM monitoring_alert_logs ORDER BY id"],
   ["backup_restore_drills", "SELECT * FROM backup_restore_drills ORDER BY id"],
+  ["integration_commissioning_checks", "SELECT * FROM integration_commissioning_checks ORDER BY id"],
+  ["monthly_budget_targets", "SELECT * FROM monthly_budget_targets ORDER BY budget_month, id"],
   ["communication_templates", "SELECT * FROM communication_templates ORDER BY id"],
   ["communication_campaigns", "SELECT * FROM communication_campaigns ORDER BY id"],
   ["communication_campaign_recipients", "SELECT * FROM communication_campaign_recipients ORDER BY id"],
@@ -1325,6 +1327,21 @@ const getAccountantReports = asyncHandler(async (req, res) => {
     dateParams
   );
 
+  let payrollLiabilityTotals = {
+    rows: [{ approved_run_count: 0, approved_amount: 0 }]
+  };
+  if (await relationExists("payroll_runs")) {
+    payrollLiabilityTotals = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status = 'approved') AS approved_run_count,
+         COALESCE(SUM(total_net) FILTER (WHERE status = 'approved'), 0) AS approved_amount
+       FROM payroll_runs
+       WHERE period_start <= $2::date
+         AND period_end >= $1::date`,
+      dateParams
+    );
+  }
+
   const profitAndLoss = await buildProfitAndLoss(startDate, endDate);
 
   res.json({
@@ -1352,6 +1369,7 @@ const getAccountantReports = asyncHandler(async (req, res) => {
     contractorPayablesAging: contractorPayablesAging.rows,
     contractorBalances: contractorBalances.rows,
     contractorInvoiceRegister: contractorInvoiceRegister.rows,
+    payrollLiabilityTotals: payrollLiabilityTotals.rows[0],
     profitAndLoss
   });
 });
@@ -1571,13 +1589,321 @@ const getBackupStatus = asyncHandler(async (_req, res) => {
   res.json(await getBackupManifest());
 });
 
+const dateKey = (value) => new Date(value).toISOString().slice(0, 10);
+const monthKey = (value) => `${dateKey(value).slice(0, 7)}-01`;
+const addUtcMonths = (value, count) => {
+  const date = new Date(`${monthKey(value)}T00:00:00.000Z`);
+  date.setUTCMonth(date.getUTCMonth() + count);
+  return date;
+};
+const addUtcDays = (value, count) => {
+  const date = new Date(`${dateKey(value)}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + count);
+  return date;
+};
+
+const scheduleCoverage = (records, months, { amountField, capField = null }) => {
+  const totals = Object.fromEntries(months.map((month) => [month, 0]));
+  const horizonEnd = addUtcMonths(months[0], months.length);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  for (const record of records) {
+    const installment = toNumber(record[amountField]);
+    let remaining = capField ? Math.max(toNumber(record[capField]) - toNumber(record.received_amount), 0) : Number.POSITIVE_INFINITY;
+    let due = new Date(`${dateKey(record.first_due_date)}T00:00:00.000Z`);
+    const intervalDays = record.frequency === "weekly" ? 7 : null;
+    while (due < horizonEnd && remaining > 0) {
+      if (due >= today) {
+        const bucket = monthKey(due);
+        if (Object.hasOwn(totals, bucket)) {
+          const dueAmount = Math.min(installment, remaining);
+          totals[bucket] += dueAmount;
+          remaining -= dueAmount;
+        }
+      }
+      due = intervalDays ? addUtcDays(due, intervalDays) : addUtcMonths(due, 1);
+    }
+  }
+  return totals;
+};
+
+const getCashFlowForecast = asyncHandler(async (_req, res) => {
+  const firstMonth = monthKey(new Date());
+  const months = [0, 1, 2].map((offset) => dateKey(addUtcMonths(firstMonth, offset)));
+  const [historyResult, planResult, standingOrderResult] = await Promise.all([
+    pool.query(
+      `WITH historic_months AS (
+         SELECT generate_series(
+           (date_trunc('month', CURRENT_DATE) - INTERVAL '3 months')::date,
+           (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date,
+           INTERVAL '1 month'
+         )::date AS month_start
+       ), billing AS (
+         SELECT date_trunc('month', b.billing_month)::date AS month_start,
+                COALESCE(SUM(COALESCE(NULLIF(b.total_amount, 0), b.amount)), 0) AS billed_amount,
+                COALESCE(SUM(allocations.allocated_amount), 0) AS allocated_amount,
+                COUNT(*)::integer AS bill_count
+         FROM bills b
+         LEFT JOIN (
+           SELECT bill_id, COALESCE(SUM(amount), 0) AS allocated_amount
+           FROM payment_allocations
+           GROUP BY bill_id
+         ) allocations ON allocations.bill_id = b.id
+         WHERE b.bill_pay_status = 'payable'
+           AND b.billing_month >= (date_trunc('month', CURRENT_DATE) - INTERVAL '3 months')::date
+           AND b.billing_month < date_trunc('month', CURRENT_DATE)::date
+         GROUP BY date_trunc('month', b.billing_month)::date
+       ), receipts AS (
+         SELECT date_trunc('month', payment_date)::date AS month_start,
+                COALESCE(SUM(amount), 0) AS received_amount
+         FROM payments
+         WHERE status = 'posted'
+           AND payment_date >= (date_trunc('month', CURRENT_DATE) - INTERVAL '3 months')::date
+           AND payment_date < date_trunc('month', CURRENT_DATE)::date
+         GROUP BY date_trunc('month', payment_date)::date
+       ), expenses AS (
+         SELECT date_trunc('month', expense_date)::date AS month_start,
+                COALESCE(SUM(amount), 0) AS expense_amount
+         FROM expenses
+         WHERE expense_date >= (date_trunc('month', CURRENT_DATE) - INTERVAL '3 months')::date
+           AND expense_date < date_trunc('month', CURRENT_DATE)::date
+         GROUP BY date_trunc('month', expense_date)::date
+       )
+       SELECT
+         COALESCE(AVG(COALESCE(billing.billed_amount, 0)), 0) AS average_billed_amount,
+         COALESCE(AVG(COALESCE(expenses.expense_amount, 0)), 0) AS average_expense_amount,
+         COALESCE(AVG(COALESCE(billing.bill_count, 0)), 0) AS average_bill_count,
+         COALESCE(AVG(COALESCE(receipts.received_amount, 0)), 0) AS average_received_amount,
+         COALESCE(SUM(COALESCE(billing.allocated_amount, 0)), 0) AS allocated_amount,
+         COALESCE(SUM(COALESCE(billing.billed_amount, 0)), 0) AS billed_amount,
+         COUNT(*)::integer AS months_observed
+       FROM historic_months
+       LEFT JOIN billing ON billing.month_start = historic_months.month_start
+       LEFT JOIN receipts ON receipts.month_start = historic_months.month_start
+       LEFT JOIN expenses ON expenses.month_start = historic_months.month_start`
+    ),
+    pool.query(
+      `SELECT pa.*, COALESCE(SUM(p.amount), 0) AS received_amount
+       FROM payment_arrangements pa
+       LEFT JOIN payments p ON p.customer_id = pa.customer_id
+         AND p.status = 'posted'
+         AND p.payment_date >= COALESCE(pa.approved_at::date, pa.created_at::date)
+       WHERE pa.status = 'active'
+       GROUP BY pa.id`
+    ).catch(() => ({ rows: [] })),
+    pool.query(
+      `SELECT *
+       FROM standing_orders
+       WHERE status = 'active'`
+    ).catch(() => ({ rows: [] }))
+  ]);
+
+  const history = historyResult.rows[0] || {};
+  const averageBilled = toNumber(history.average_billed_amount);
+  const averageExpenses = toNumber(history.average_expense_amount);
+  const averageBills = toNumber(history.average_bill_count);
+  const averageReceipts = toNumber(history.average_received_amount);
+  const collectionRate = toNumber(history.billed_amount) ? toNumber(history.allocated_amount) / toNumber(history.billed_amount) : null;
+  const planCoverage = scheduleCoverage(planResult.rows, months, { amountField: "installment_amount", capField: "agreed_amount" });
+  const mandateCoverage = scheduleCoverage(standingOrderResult.rows, months, { amountField: "expected_amount" });
+
+  const rows = months.map((monthStart) => {
+    const baselineCollections = collectionRate === null ? 0 : roundMoney(averageBilled * collectionRate);
+    const committedPlans = roundMoney(planCoverage[monthStart]);
+    const committedMandates = roundMoney(mandateCoverage[monthStart]);
+    const committedCoverage = roundMoney(committedPlans + committedMandates);
+    const projectedCollections = Math.max(baselineCollections, committedCoverage);
+    return {
+      month_start: monthStart,
+      expected_billings: roundMoney(averageBilled),
+      baseline_collections: baselineCollections,
+      payment_plan_schedule: committedPlans,
+      standing_order_schedule: committedMandates,
+      committed_coverage: committedCoverage,
+      projected_collections: roundMoney(projectedCollections),
+      projected_expenses: roundMoney(averageExpenses),
+      projected_net_cash: roundMoney(projectedCollections - averageExpenses)
+    };
+  });
+
+  res.json({
+    horizon_days: 90,
+    history_months: toNumber(history.months_observed),
+    collection_rate: collectionRate,
+    efficiency: {
+      average_monthly_bills: averageBills,
+      average_monthly_operating_expense: roundMoney(averageExpenses),
+      average_monthly_receipts: roundMoney(averageReceipts),
+      cost_per_bill: averageBills ? roundMoney(averageExpenses / averageBills) : null,
+      operating_cost_to_collections_ratio: averageReceipts ? averageExpenses / averageReceipts : null
+    },
+    assumptions: [
+      "Expected billing uses the average payable billing from the last three complete calendar months.",
+      "Baseline collections use payment allocations against those billed months; they are not a guarantee of future cash.",
+      "Active payment-plan and standing-order schedules are shown as committed coverage. Projected collections use the higher of the baseline and committed coverage to avoid double-counting.",
+      "Projected expenses use the average recorded operating expense from the same three-month history."
+    ],
+    rows
+  });
+});
+
+const budgetMonthPattern = /^\d{4}-\d{2}(?:-\d{2})?$/;
+const normalizeBudgetMonth = (value) => {
+  const input = String(value || "").trim();
+  if (!budgetMonthPattern.test(input)) return null;
+  const [year, month] = input.slice(0, 7).split("-").map(Number);
+  if (month < 1 || month > 12) return null;
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-01`;
+};
+
+const budgetNumber = (value) => {
+  if (value === "" || value === null || value === undefined) return NaN;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? roundMoney(parsed) : NaN;
+};
+
+const serializeBudgetVarianceRow = (row) => {
+  const revenueTarget = toNumber(row.revenue_target);
+  const collectionTarget = toNumber(row.collection_target);
+  const operatingExpenseBudget = toNumber(row.operating_expense_budget);
+  const revenueActual = toNumber(row.revenue_actual);
+  const collectionActual = toNumber(row.collection_actual);
+  const operatingExpenseActual = toNumber(row.operating_expense_actual);
+  const isFuture = String(row.budget_month).slice(0, 10) > monthKey(new Date());
+  return {
+    ...row,
+    budget_month: dateKey(row.budget_month),
+    revenue_target: revenueTarget,
+    collection_target: collectionTarget,
+    operating_expense_budget: operatingExpenseBudget,
+    revenue_actual: revenueActual,
+    collection_actual: collectionActual,
+    operating_expense_actual: operatingExpenseActual,
+    revenue_variance: roundMoney(revenueActual - revenueTarget),
+    collection_variance: roundMoney(collectionActual - collectionTarget),
+    operating_expense_variance: roundMoney(operatingExpenseBudget - operatingExpenseActual),
+    revenue_status: isFuture ? "planned" : revenueActual >= revenueTarget ? "on_target" : "behind"
+  };
+};
+
+const getBudgetVariance = asyncHandler(async (_req, res) => {
+  const { rows } = await pool.query(
+    `WITH targets AS (
+       SELECT *
+       FROM monthly_budget_targets
+       WHERE budget_month >= (date_trunc('month', CURRENT_DATE) - INTERVAL '11 months')::date
+       ORDER BY budget_month DESC
+     ), billing AS (
+       SELECT date_trunc('month', billing_month)::date AS budget_month,
+              COALESCE(SUM(COALESCE(NULLIF(total_amount, 0), amount)), 0) AS revenue_actual
+       FROM bills
+       WHERE bill_pay_status = 'payable'
+         AND billing_month >= (date_trunc('month', CURRENT_DATE) - INTERVAL '11 months')::date
+       GROUP BY date_trunc('month', billing_month)::date
+     ), collections AS (
+       SELECT date_trunc('month', payment_date)::date AS budget_month,
+              COALESCE(SUM(amount), 0) AS collection_actual
+       FROM payments
+       WHERE status = 'posted'
+         AND payment_date >= (date_trunc('month', CURRENT_DATE) - INTERVAL '11 months')::date
+       GROUP BY date_trunc('month', payment_date)::date
+     ), operating_expenses AS (
+       SELECT date_trunc('month', expense_date)::date AS budget_month,
+              COALESCE(SUM(amount), 0) AS operating_expense_actual
+       FROM expenses
+       WHERE expense_date >= (date_trunc('month', CURRENT_DATE) - INTERVAL '11 months')::date
+       GROUP BY date_trunc('month', expense_date)::date
+     )
+     SELECT targets.*, COALESCE(billing.revenue_actual, 0) AS revenue_actual,
+            COALESCE(collections.collection_actual, 0) AS collection_actual,
+            COALESCE(operating_expenses.operating_expense_actual, 0) AS operating_expense_actual,
+            creator.name AS created_by_name, updater.name AS updated_by_name
+     FROM targets
+     LEFT JOIN billing ON billing.budget_month = targets.budget_month
+     LEFT JOIN collections ON collections.budget_month = targets.budget_month
+     LEFT JOIN operating_expenses ON operating_expenses.budget_month = targets.budget_month
+     LEFT JOIN users creator ON creator.id = targets.created_by
+     LEFT JOIN users updater ON updater.id = targets.updated_by
+     ORDER BY targets.budget_month DESC`,
+  );
+
+  res.json({
+    as_of: new Date().toISOString(),
+    months_covered: 12,
+    rows: rows.map(serializeBudgetVarianceRow)
+  });
+});
+
+const upsertMonthlyBudgetTarget = asyncHandler(async (req, res) => {
+  const budgetMonth = normalizeBudgetMonth(req.params.month);
+  if (!budgetMonth) {
+    res.status(400).json({ message: "Budget month must use YYYY-MM." });
+    return;
+  }
+
+  const revenueTarget = budgetNumber(req.body.revenue_target);
+  const collectionTarget = budgetNumber(req.body.collection_target);
+  const operatingExpenseBudget = budgetNumber(req.body.operating_expense_budget);
+  if (![revenueTarget, collectionTarget, operatingExpenseBudget].every(Number.isFinite)) {
+    res.status(400).json({ message: "Revenue, collection, and operating expense targets must be zero or greater." });
+    return;
+  }
+
+  const notes = nullableText(req.body.notes);
+  if (notes && notes.length > 1000) {
+    res.status(400).json({ message: "Budget notes must be 1,000 characters or fewer." });
+    return;
+  }
+
+  const previousResult = await pool.query("SELECT * FROM monthly_budget_targets WHERE budget_month = $1", [budgetMonth]);
+  const { rows } = await pool.query(
+    `INSERT INTO monthly_budget_targets (
+       budget_month, revenue_target, collection_target, operating_expense_budget, notes, created_by, updated_by
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $6)
+     ON CONFLICT (budget_month) DO UPDATE
+       SET revenue_target = EXCLUDED.revenue_target,
+           collection_target = EXCLUDED.collection_target,
+           operating_expense_budget = EXCLUDED.operating_expense_budget,
+           notes = EXCLUDED.notes,
+           updated_by = EXCLUDED.updated_by,
+           updated_at = NOW()
+     RETURNING *`,
+    [budgetMonth, revenueTarget, collectionTarget, operatingExpenseBudget, notes, req.user.id]
+  );
+
+  const target = rows[0];
+  await recordAuditEvent(pool, {
+    req,
+    action: previousResult.rows[0] ? "reports.monthly_budget_updated" : "reports.monthly_budget_created",
+    entityType: "monthly_budget_target",
+    entityId: target.id,
+    beforeData: previousResult.rows[0] || null,
+    afterData: target,
+    reason: "Monthly operating budget target recorded"
+  });
+
+  res.status(previousResult.rows[0] ? 200 : 201).json({
+    ...serializeBudgetVarianceRow({
+      ...target,
+      revenue_actual: 0,
+      collection_actual: 0,
+      operating_expense_actual: 0
+    })
+  });
+});
+
 module.exports = {
   buildOperationalBackup,
   createBackupRestoreDrill,
   getReportsSummary,
   getAccountantReports,
   getDataQualityChecks,
+  getCashFlowForecast,
+  getBudgetVariance,
   listBackupRestoreDrills,
   getBackupStatus,
-  getOperationalBackup
+  getOperationalBackup,
+  upsertMonthlyBudgetTarget
 };

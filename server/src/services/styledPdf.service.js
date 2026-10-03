@@ -471,7 +471,7 @@ class PdfDocument {
     this.y += height;
   }
 
-  brandHeader(business) {
+  documentHeader({ title, reference, dateLabel, dateValue }, business = {}) {
     const x = this.margin;
     const name = business.business_name || "Water Billing";
     const initials = name
@@ -483,64 +483,77 @@ class PdfDocument {
       .toUpperCase() || "AG";
 
     const logo = resolveLogoImage(business.logo_url);
+    const headerHeight = 46;
+    const logoSize = 34;
+    const referenceWidth = Math.min(190, this.contentWidth * 0.34);
+    const detailsWidth = this.contentWidth - logoSize - referenceWidth - 18;
+
+    this.rect(x, this.y, this.contentWidth, headerHeight, { fill: "#f8fafc", stroke: "#dde3ea" });
     if (logo) {
-      const boxWidth = 74;
-      const boxHeight = 58;
+      const boxWidth = logoSize;
+      const boxHeight = logoSize;
       const scale = Math.min(boxWidth / logo.width, boxHeight / logo.height);
       const imageWidth = Math.max(1, logo.width * scale);
       const imageHeight = Math.max(1, logo.height * scale);
-      this.rect(x, this.y, boxWidth, boxHeight, { fill: "#ffffff", stroke: "#dde3ea" });
-      this.image(logo, x + (boxWidth - imageWidth) / 2, this.y + (boxHeight - imageHeight) / 2, imageWidth, imageHeight);
+      this.rect(x + 6, this.y + 6, boxWidth, boxHeight, { fill: "#ffffff", stroke: "#dde3ea" });
+      this.image(logo, x + 6 + (boxWidth - imageWidth) / 2, this.y + 6 + (boxHeight - imageHeight) / 2, imageWidth, imageHeight);
     } else {
-      this.rect(x, this.y, 74, 58, { fill: "#0f766e", stroke: "#0f766e" });
-      this.text(initials, x + 21, this.y + 19, { size: 18, font: "F2", color: "#ffffff" });
+      this.rect(x + 6, this.y + 6, logoSize, logoSize, { fill: "#0f766e", stroke: "#0f766e" });
+      this.text(initials, x + 14, this.y + 15, { size: 12, font: "F2", color: "#ffffff" });
     }
-    this.text(name, x + 88, this.y + 2, { size: 17, font: "F2", color: "#172033", maxWidth: this.contentWidth - 88 });
-    let infoY = this.y + 24;
-    [business.legal_name, business.physical_address, [business.phone, business.email].filter(Boolean).join(" | "), business.tax_pin ? `PIN: ${business.tax_pin}` : null]
+    const detailX = x + logoSize + 14;
+    const businessDetail = [business.legal_name || business.physical_address, [business.phone, business.email].filter(Boolean).join(" | "), business.tax_pin ? `PIN ${business.tax_pin}` : null]
       .filter(Boolean)
-      .forEach((line) => {
-        this.text(line, x + 88, infoY, { size: 9, color: "#344256", maxWidth: this.contentWidth - 88 });
-        infoY += 12;
-      });
-    this.move(72);
-    this.line(this.margin, this.y - 2, this.margin + this.contentWidth, this.y - 2, "#172033", 1.4);
-    this.move(14);
-  }
+      .join("  |  ");
+    const documentX = x + this.contentWidth - referenceWidth - 10;
 
-  titleBoxes(left, right) {
-    const gap = 10;
-    const width = (this.contentWidth - gap) / 2;
-    const draw = (item, x) => {
-      this.rect(x, this.y, width, 48, { fill: "#ffffff", stroke: "#dde3ea" });
-      this.text(item.label, x + 10, this.y + 9, { size: 7.5, font: "F2", color: "#637083", maxWidth: width - 20 });
-      this.text(item.value, x + 10, this.y + 24, { size: 12, font: "F2", color: "#172033", maxWidth: width - 20 });
-    };
-    draw(left, this.margin);
-    draw(right, this.margin + width + gap);
-    this.move(62);
+    this.text(name, detailX, this.y + 8, { size: 13, font: "F2", color: "#172033", maxWidth: detailsWidth });
+    this.text(businessDetail || "Business document", detailX, this.y + 25, { size: 7.5, color: "#526174", maxWidth: detailsWidth, lineHeight: 9 });
+    this.text(String(title || "Document"), documentX, this.y + 7, {
+      size: 7.5,
+      font: "F2",
+      color: "#0f766e",
+      maxWidth: referenceWidth,
+      align: "right"
+    });
+    this.text(reference || "-", documentX, this.y + 18, {
+      size: 12,
+      font: "F2",
+      color: "#172033",
+      maxWidth: referenceWidth,
+      align: "right"
+    });
+    if (dateLabel || dateValue) {
+      this.text(`${dateLabel || "Date"}: ${dateValue || "-"}`, documentX, this.y + 33, {
+        size: 7.5,
+        color: "#526174",
+        maxWidth: referenceWidth,
+        align: "right"
+      });
+    }
+    this.move(headerHeight + 10);
   }
 
   infoGrid(items) {
     const gap = 10;
     const columns = 2;
     const width = (this.contentWidth - gap) / columns;
-    const rowHeight = 54;
+    const rowHeight = 36;
 
     for (let index = 0; index < items.length; index += columns) {
-      this.ensureSpace(rowHeight + 8);
+      this.ensureSpace(rowHeight + 5);
       items.slice(index, index + columns).forEach((item, columnIndex) => {
         const x = this.margin + columnIndex * (width + gap);
-        this.rect(x, this.y, width, rowHeight, { fill: "#ffffff", stroke: "#dde3ea" });
-        this.text(item.label, x + 10, this.y + 9, { size: 7.5, font: "F2", color: "#637083", maxWidth: width - 20 });
-        this.text(item.value, x + 10, this.y + 24, { size: 11, font: "F2", color: "#172033", maxWidth: width - 20 });
+        this.line(x, this.y, x + width, this.y, "#dde3ea");
+        this.text(item.label, x, this.y + 6, { size: 7, font: "F2", color: "#637083", maxWidth: width });
+        this.text(item.value, x, this.y + 16, { size: 10, font: "F2", color: "#172033", maxWidth: width });
         if (item.subtext) {
-          this.text(item.subtext, x + 10, this.y + 39, { size: 8, color: "#637083", maxWidth: width - 20 });
+          this.text(item.subtext, x, this.y + 27, { size: 7.5, color: "#637083", maxWidth: width });
         }
       });
-      this.move(rowHeight + 8);
+      this.move(rowHeight + 5);
     }
-    this.move(3);
+    this.move(5);
   }
 
   sectionTitle(title) {
@@ -703,6 +716,14 @@ const nonZeroChargeRows = (bill, business) =>
     .filter(([name, amount]) => name === "Usage subtotal" || Number(amount || 0) !== 0)
     .map(([name, amount]) => ({ name, amount: money(amount, business) }));
 
+const isServiceChargeBill = (bill) => bill?.bill_origin === "service_charge";
+
+const serviceChargeRow = (bill, business) => ({
+  charge: label(bill.charge_type || "service_charge"),
+  description: bill.service_charge_description || bill.payability_reason || "Customer service charge",
+  amount: money(bill.total_amount || bill.amount, business)
+});
+
 const buildBillPdfAttachment = ({ bill, business = {} }) => {
   const total = Number(bill.total_amount || bill.amount || 0);
   const balance = Number(bill.balance_amount ?? total - Number(bill.paid_amount || 0));
@@ -710,89 +731,114 @@ const buildBillPdfAttachment = ({ bill, business = {} }) => {
   const tariffBlocks = Array.isArray(tariff.blocks) ? tariff.blocks : [];
   const penalties = Array.isArray(bill.penalty_applications) ? bill.penalty_applications : [];
   const document = new PdfDocument(business);
+  const serviceCharge = isServiceChargeBill(bill);
 
-  document.brandHeader(business);
-  document.titleBoxes(
-    { label: "Bill", value: bill.bill_number || `Bill ${bill.id}` },
-    { label: "Due Date", value: dateOnly(bill.due_date) }
+  document.documentHeader(
+    {
+      title: serviceCharge ? "Service Charge Invoice" : "Water Bill",
+      reference: bill.bill_number || `Bill ${bill.id}`,
+      dateLabel: "Due date",
+      dateValue: dateOnly(bill.due_date)
+    },
+    business
   );
-  document.infoGrid([
-    { label: "Customer", value: bill.customer_name || "-", subtext: bill.acc_number || "" },
-    { label: "Phone", value: bill.phone || "-" },
-    { label: "Billing Period", value: bill.billing_period_name || dateOnly(bill.billing_month) },
-    { label: "Status", value: label(bill.status) }
-  ]);
+  if (serviceCharge) {
+    document.infoGrid([
+      { label: "Customer", value: bill.customer_name || "-", subtext: bill.acc_number || "" },
+      { label: "Phone", value: bill.phone || "-" },
+      { label: "Charge Reference", value: bill.charge_number || bill.bill_number || "-" },
+      { label: "Charge Date", value: dateOnly(bill.billing_month) },
+      { label: "Status", value: label(bill.status) },
+      { label: "Charge Type", value: label(bill.charge_type || "service_charge") }
+    ]);
+    document.sectionTitle("Service Charge Details");
+    document.table(
+      [
+        { header: "Charge Type", value: "charge", weight: 1 },
+        { header: "Description", value: "description", weight: 2.2 },
+        { header: "Amount", value: "amount", align: "right", weight: 1 }
+      ],
+      [serviceChargeRow(bill, business)]
+    );
+  } else {
+    document.infoGrid([
+      { label: "Customer", value: bill.customer_name || "-", subtext: bill.acc_number || "" },
+      { label: "Phone", value: bill.phone || "-" },
+      { label: "Billing Period", value: bill.billing_period_name || dateOnly(bill.billing_month) },
+      { label: "Status", value: label(bill.status) }
+    ]);
 
-  document.sectionTitle("Reading Summary");
-  document.table(
-    [
-      { header: "Previous", value: (row) => row.previous },
-      { header: "Current", value: (row) => row.current },
-      { header: "Units", value: (row) => row.units },
-      { header: "Rate", value: (row) => row.rate },
-      { header: "Subtotal", value: (row) => row.subtotal, align: "right", weight: 1.25 }
-    ],
-    [
-      {
-        previous: Number(bill.previous_reading || 0).toLocaleString(),
-        current: Number(bill.current_reading || 0).toLocaleString(),
-        units: Number(bill.units_used || 0).toLocaleString(),
-        rate: money(bill.rate, business),
-        subtotal: money(bill.subtotal_amount || bill.amount, business)
-      }
-    ]
-  );
+    document.sectionTitle("Reading Summary");
+    document.table(
+      [
+        { header: "Previous", value: (row) => row.previous },
+        { header: "Current", value: (row) => row.current },
+        { header: "Units", value: (row) => row.units },
+        { header: "Rate", value: (row) => row.rate },
+        { header: "Subtotal", value: (row) => row.subtotal, align: "right", weight: 1.25 }
+      ],
+      [
+        {
+          previous: Number(bill.previous_reading || 0).toLocaleString(),
+          current: Number(bill.current_reading || 0).toLocaleString(),
+          units: Number(bill.units_used || 0).toLocaleString(),
+          rate: money(bill.rate, business),
+          subtotal: money(bill.subtotal_amount || bill.amount, business)
+        }
+      ]
+    );
 
-  document.sectionTitle("Charge Breakdown");
-  document.table(
-    [
-      { header: "Charge", value: "name", weight: 1.4 },
-      { header: "Amount", value: "amount", align: "right" }
-    ],
-    nonZeroChargeRows(bill, business)
-  );
+    document.sectionTitle("Charge Breakdown");
+    document.table(
+      [
+        { header: "Charge", value: "name", weight: 1.4 },
+        { header: "Amount", value: "amount", align: "right" }
+      ],
+      nonZeroChargeRows(bill, business)
+    );
 
-  document.sectionTitle("Calculation Basis");
-  document.table(
-    [
-      { header: "Basis", value: "basis", weight: 1 },
-      { header: "Value", value: "value", weight: 2 }
-    ],
-    [
-      {
-        basis: "Tariff",
-        value: [tariff.name || "-", tariff.effective_from ? `effective ${dateOnly(tariff.effective_from)}` : null, tariff.version_id ? `version ${tariff.version_id}` : null]
-          .filter(Boolean)
-          .join(" | ")
-      },
-      { basis: "Tariff type", value: label(tariff.tariff_type || "flat") },
-      {
-        basis: "Usage formula",
-        value: `${Number(bill.units_used || 0).toLocaleString()} units x ${money(bill.rate, business)}; subtotal ${money(
-          bill.subtotal_amount || bill.amount,
-          business
-        )}`
-      },
-      ...(tariffBlocks.length
-        ? [
-            {
-              basis: "Block rows",
-              value: tariffBlocks
-                .map((block) => {
-                  const from = Number(block.min_units || 0).toLocaleString();
-                  const to = block.max_units === null || block.max_units === undefined ? "above" : Number(block.max_units).toLocaleString();
-                  return `${from}-${to}: ${money(block.unit_rate, business)}`;
-                })
-                .join(" | ")
-            }
-          ]
-        : []),
-      {
-        basis: "Principal basis",
-        value: `${money(bill.subtotal_amount || bill.amount, business)} usage + ${money(bill.fixed_charge_amount, business)} fixed; penalty and VAT shown separately.`
-      }
-    ]
-  );
+    document.sectionTitle("Calculation Basis");
+    document.table(
+      [
+        { header: "Basis", value: "basis", weight: 1 },
+        { header: "Value", value: "value", weight: 2 }
+      ],
+      [
+        {
+          basis: "Tariff",
+          value: [tariff.name || "-", tariff.effective_from ? `effective ${dateOnly(tariff.effective_from)}` : null, tariff.version_id ? `version ${tariff.version_id}` : null]
+            .filter(Boolean)
+            .join(" | ")
+        },
+        { basis: "Tariff type", value: label(tariff.tariff_type || "flat") },
+        {
+          basis: "Usage formula",
+          value: `${Number(bill.units_used || 0).toLocaleString()} units x ${money(bill.rate, business)}; subtotal ${money(
+            bill.subtotal_amount || bill.amount,
+            business
+          )}`
+        },
+        ...(tariffBlocks.length
+          ? [
+              {
+                basis: "Block rows",
+                value: tariffBlocks
+                  .map((block) => {
+                    const from = Number(block.min_units || 0).toLocaleString();
+                    const to = block.max_units === null || block.max_units === undefined ? "above" : Number(block.max_units).toLocaleString();
+                    return `${from}-${to}: ${money(block.unit_rate, business)}`;
+                  })
+                  .join(" | ")
+              }
+            ]
+          : []),
+        {
+          basis: "Principal basis",
+          value: `${money(bill.subtotal_amount || bill.amount, business)} usage + ${money(bill.fixed_charge_amount, business)} fixed; penalty and VAT shown separately.`
+        }
+      ]
+    );
+  }
 
   if (penalties.length) {
     document.sectionTitle("Penalty History");
@@ -818,7 +864,7 @@ const buildBillPdfAttachment = ({ bill, business = {} }) => {
     business.till_number ? `Till: ${business.till_number}` : null,
     business.bank_details ? `Bank details: ${business.bank_details}` : null,
     business.receipt_footer_note || "Thank you.",
-    `${business.business_name || "Water Billing"} customer bill`
+    `${business.business_name || "Water Billing"} ${serviceCharge ? "customer service charge invoice" : "customer bill"}`
   ]);
 
   return {
@@ -832,10 +878,14 @@ const buildReceiptPdfAttachment = ({ payment, allocations = [], customerBalance 
   const document = new PdfDocument(business);
   const positionIsCredit = Number(customerBalance || 0) < 0;
 
-  document.brandHeader(business);
-  document.titleBoxes(
-    { label: "Receipt", value: payment.receipt_number || `RCPT-${payment.id}` },
-    { label: "Date", value: dateOnly(payment.payment_date) }
+  document.documentHeader(
+    {
+      title: "Payment Receipt",
+      reference: payment.receipt_number || `RCPT-${payment.id}`,
+      dateLabel: "Received",
+      dateValue: dateOnly(payment.payment_date)
+    },
+    business
   );
   document.infoGrid([
     { label: "Received From", value: payment.received_from || payment.customer_name || "-" },
@@ -885,10 +935,14 @@ const buildPayslipPdfAttachment = ({ payrollLine, business = {} }) => {
   const payslipNumber = `PAYSLIP-${payrollLine.payroll_run_id}-${payrollLine.id}`;
   const grossPay = Number(payrollLine.gross_amount || 0) + Number(payrollLine.additions || 0);
 
-  document.brandHeader(business);
-  document.titleBoxes(
-    { label: "Payslip", value: payslipNumber },
-    { label: "Period", value: `${dateOnly(payrollLine.period_start)} to ${dateOnly(payrollLine.period_end)}` }
+  document.documentHeader(
+    {
+      title: "Payslip",
+      reference: payslipNumber,
+      dateLabel: "Period",
+      dateValue: `${dateOnly(payrollLine.period_start)} to ${dateOnly(payrollLine.period_end)}`
+    },
+    business
   );
   document.infoGrid([
     { label: "Payee", value: payrollLine.name || "-", subtext: payrollLine.code || "" },

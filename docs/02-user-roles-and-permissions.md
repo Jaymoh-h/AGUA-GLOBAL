@@ -50,7 +50,7 @@ Admin can:
 - Preview and trigger operational reminders.
 - Terminate payroll payees.
 - Discard payment suspense items.
-- Create and update user access contexts.
+- Create, update, and remove user access contexts. Removing an access context requires it to be disabled and non-default, then records an approval note in the audit trail.
 
 Admin is the final authority for high-risk changes.
 

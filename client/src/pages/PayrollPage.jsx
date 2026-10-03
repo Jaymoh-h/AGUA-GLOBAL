@@ -1,14 +1,9 @@
 import {
   Banknote,
   CalendarDays,
-  CheckCircle2,
-  Download,
-  FileText,
-  Lock,
   Pencil,
   Plus,
   Save,
-  Send,
   UserMinus,
   Users,
   X
@@ -17,10 +12,14 @@ import { useEffect, useMemo, useState } from "react";
 import CollapsibleSection from "../components/CollapsibleSection";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
+import PayrollRunReviewPanel from "../components/PayrollRunReviewPanel";
+import ReviewDialog from "../components/ReviewDialog";
 import StatCard from "../components/StatCard";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { useToastMessage } from "../components/ToastProvider";
+import WorkspaceState from "../components/WorkspaceState";
+import WorkspaceActionMenu from "../components/WorkspaceActionMenu";
 import { api } from "../services/api";
 import { downloadCsvRows } from "../utils/csvTemplate";
 import { downloadBlobFile, namedExport } from "../utils/exportNames";
@@ -102,9 +101,12 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [payees, setPayees] = useState([]);
   const [runs, setRuns] = useState([]);
   const [selectedRun, setSelectedRun] = useState(null);
+  const [activeWorkspaceAction, setActiveWorkspaceAction] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [, setMessage] = useToastMessage();
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [initialError, setInitialError] = useState("");
   const [payeeDraft, setPayeeDraft, clearPayeeDraft] = useScopedDraft(user, "payroll-recurring-payee", blankPayeeDraft);
   const [periodPayeeForm, setPeriodPayeeForm, clearPeriodPayeeDraft] = useScopedDraft(
     user,
@@ -115,6 +117,8 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [lineDraft, setLineDraft] = useState(null);
   const [terminationPayee, setTerminationPayee] = useState(null);
   const [terminationForm, setTerminationForm] = useState({ end_date: today, termination_reason: "" });
+  const [runReview, setRunReview] = useState(null);
+  const [runReviewBusy, setRunReviewBusy] = useState(false);
   const editingPayeeId = payeeDraft.editing_payee_id;
   const payeeForm = payeeDraft.values;
   const setPayeeForm = (updater) =>
@@ -167,9 +171,12 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
     };
   }, [selectedRun]);
 
-  const load = async (preferredRunId = selectedRun?.id) => {
+  const load = async (preferredRunId = selectedRun?.id, { showState = false } = {}) => {
+    if (showState) {
+      setInitialLoading(true);
+      setInitialError("");
+    }
     setLoading(true);
-    setMessage("");
     try {
       const [nextPayees, nextRuns] = await Promise.all([api.payroll.payees(), api.payroll.runs()]);
       setPayees(nextPayees);
@@ -177,14 +184,16 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
       const nextRunId = preferredRunId || nextRuns[0]?.id;
       setSelectedRun(nextRunId ? await api.payroll.getRun(nextRunId) : null);
     } catch (err) {
-      setMessage(err.message);
+      if (showState) setInitialError(err.message || "Payroll payees and pay-run controls could not be loaded.");
+      throw err;
     } finally {
       setLoading(false);
+      if (showState) setInitialLoading(false);
     }
   };
 
   useEffect(() => {
-    load().catch((err) => setMessage(err.message));
+    load(undefined, { showState: true }).catch(() => {});
   }, []);
 
   const focusKey = navigationIntent?.page === "payroll" ? navigationIntent.focus : "";
@@ -304,15 +313,43 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
     }
   };
 
-  const changeRunStatus = async (status) => {
-    if (!selectedRun) return;
+  const updateRunStatus = async (run, status, notes = "") => {
+    if (!run) return;
     setMessage("");
     try {
-      const updated = await api.payroll.updateRunStatus(selectedRun.id, { status });
+      const updated = await api.payroll.updateRunStatus(run.id, { status, notes });
       await load(updated.id);
       setMessage(`Payroll run marked ${label(status)}.`);
+      return true;
     } catch (err) {
       setMessage(err.message);
+      return false;
+    }
+  };
+
+  const changeRunStatus = async (status) => {
+    if (!selectedRun) return;
+    if (["approved", "paid", "locked"].includes(status)) {
+      setRunReview({ run: selectedRun, status });
+      return;
+    }
+    await updateRunStatus(selectedRun, status);
+  };
+
+  const closeRunReview = () => {
+    if (!runReviewBusy) setRunReview(null);
+  };
+
+  const confirmRunReview = async (notes) => {
+    if (!runReview) return;
+    setRunReviewBusy(true);
+    try {
+      const updated = await updateRunStatus(runReview.run, runReview.status, notes);
+      if (updated) setRunReview(null);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setRunReviewBusy(false);
     }
   };
 
@@ -405,12 +442,20 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
     );
   };
 
+  if (initialLoading) {
+    return <WorkspaceState title="Preparing payroll control" detail="Retrieving payees, pay runs, and the selected run's controlled line items." />;
+  }
+  if (initialError) {
+    return <WorkspaceState state="error" title="Payroll control could not load" detail={initialError} onRetry={() => load(undefined, { showState: true }).catch(() => {})} />;
+  }
+
   return (
-    <section className="page-stack">
-      <header className="page-header">
+    <section className={`page-stack payroll-control-page ${activeWorkspaceAction ? `payroll-utility-open payroll-utility-${activeWorkspaceAction}` : ""}`}>
+      <header className="page-header payroll-control-header">
         <div>
           <p className="eyebrow">Accounts</p>
-          <h2>Payroll Management</h2>
+          <h2>Payroll control</h2>
+          <p>Prepare one accountable pay run, review every line, and post only approved payroll to operating costs.</p>
         </div>
         <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)} aria-label="Payee type filter">
           <option value="">All payees</option>
@@ -420,6 +465,13 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
             </option>
           ))}
         </select>
+        <WorkspaceActionMenu
+          actions={[
+            { key: "run", label: "Create pay run", detail: "New draft", icon: CalendarDays, disabled: hasPayrollFocus, onSelect: () => setActiveWorkspaceAction("run") },
+            { key: "recurring", label: "Add recurring payee", detail: "Employee or subscription", icon: Users, disabled: hasPayrollFocus, onSelect: () => setActiveWorkspaceAction("recurring") },
+            { key: "period", label: "Add payee to run", detail: "Casual or contractor", icon: Plus, disabled: hasPayrollFocus, onSelect: () => setActiveWorkspaceAction("period") }
+          ]}
+        />
       </header>
 
       {focusKey === "payroll_attention" ? (
@@ -431,7 +483,7 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
       ) : null}
 
       {!hasPayrollFocus ? (
-      <div className="stat-grid">
+      <div className="stat-grid payroll-control-metrics">
         <StatCard label="Net Payable" value={money(summary.payable)} detail={selectedRun?.name || "No run selected"} />
         <StatCard label="Gross" value={money(summary.gross)} detail={`${summary.payees} line item(s)`} />
         <StatCard label="Period Payees" value={summary.manual.toLocaleString()} detail="Casuals and contractors" />
@@ -444,10 +496,13 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
           {!hasPayrollFocus ? (
           <CollapsibleSection
             as="form"
-            className="form-grid payroll-create-run"
+            actions={<button className="icon-button" type="button" title="Close pay-run panel" onClick={() => setActiveWorkspaceAction("")}><X size={16} /></button>}
+            className="form-grid payroll-create-run payroll-utility-form payroll-run-action"
             defaultOpen={!runs.length}
             icon={<CalendarDays size={18} />}
+            onOpenChange={(open) => !open && setActiveWorkspaceAction("")}
             onSubmit={createRun}
+            open={activeWorkspaceAction === "run"}
             summary={`${runs.length.toLocaleString()} recent run(s)`}
             title="Create Pay Run"
           >
@@ -488,10 +543,13 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
           {!hasPayrollFocus ? (
           <CollapsibleSection
             as="form"
-            className="form-grid payroll-recurring-form"
+            actions={<button className="icon-button" type="button" title="Close recurring-payee panel" onClick={() => setActiveWorkspaceAction("")}><X size={16} /></button>}
+            className="form-grid payroll-recurring-form payroll-utility-form payroll-recurring-action"
             defaultOpen={Boolean(editingPayeeId)}
             icon={<Users size={18} />}
+            onOpenChange={(open) => !open && setActiveWorkspaceAction("")}
             onSubmit={savePayee}
+            open={activeWorkspaceAction === "recurring"}
             summary={`${payeeTable.filteredRows.length.toLocaleString()} recurring payee(s)`}
             title={editingPayeeId ? "Edit Recurring Payee" : "Add Recurring Payee"}
           >
@@ -574,10 +632,13 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
           {!hasPayrollFocus ? (
           <CollapsibleSection
             as="form"
-            className="form-grid payroll-period-form"
-            defaultOpen={Boolean(selectedRun)}
+            actions={<button className="icon-button" type="button" title="Close add-payee panel" onClick={() => setActiveWorkspaceAction("")}><X size={16} /></button>}
+            className="form-grid payroll-period-form payroll-utility-form payroll-period-action"
+            defaultOpen={false}
             icon={<Plus size={18} />}
+            onOpenChange={(open) => !open && setActiveWorkspaceAction("")}
             onSubmit={addPeriodPayee}
+            open={activeWorkspaceAction === "period"}
             summary={selectedRun ? selectedRun.name : "Select a run first"}
             title="Add To This Run"
           >
@@ -689,185 +750,20 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
         </div>
 
         <div className="page-stack wide-panel">
-          <CollapsibleSection
-            actions={
-              <>
-                <button type="button" onClick={exportLines} disabled={!selectedRun}>
-                  <Download size={16} />
-                  Export
-                </button>
-                <button type="button" onClick={() => changeRunStatus("pending_approval")} disabled={!selectedRun || !["draft"].includes(selectedRun.status)}>
-                  <Send size={16} />
-                  Submit
-                </button>
-                {user.role === "admin" ? (
-                  <button type="button" onClick={() => changeRunStatus("approved")} disabled={!selectedRun || !["draft", "pending_approval"].includes(selectedRun.status)}>
-                    <CheckCircle2 size={16} />
-                    Approve
-                  </button>
-                ) : null}
-                <button type="button" onClick={() => changeRunStatus("paid")} disabled={!selectedRun || selectedRun.status !== "approved"}>
-                  <Banknote size={16} />
-                  Paid
-                </button>
-                <button type="button" onClick={() => changeRunStatus("locked")} disabled={!selectedRun || selectedRun.status !== "paid"}>
-                  <Lock size={16} />
-                  Lock
-                </button>
-              </>
-            }
-            className="payroll-review-panel"
-            defaultOpen
-            summary={
-              selectedRun
-                ? `${label(selectedRun.status)} | ${money(summary.payable)} payable`
-                : "Select a pay run"
-            }
-            title={selectedRun ? selectedRun.name : "Payroll Review"}
-          >
-
-            {selectedRun ? (
-              <div className="reading-context payroll-run-context">
-                <div>
-                  <span>Period</span>
-                  <strong>
-                    {dateOnly(selectedRun.period_start)} to {dateOnly(selectedRun.period_end)}
-                  </strong>
-                </div>
-                <div>
-                  <span>Status</span>
-                  <strong>{label(selectedRun.status)}</strong>
-                </div>
-                <div>
-                  <span>Created by</span>
-                  <strong>{selectedRun.created_by_name || "-"}</strong>
-                </div>
-                <div>
-                  <span>Approved by</span>
-                  <strong>{selectedRun.approved_by_name || "-"}</strong>
-                </div>
-              </div>
-            ) : null}
-
-            <TableControls table={lineTable} label="lines" placeholder="Search payroll lines" />
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Payee</th>
-                    <th>Type</th>
-                    <th>Source</th>
-                    <th>Basis</th>
-                    <th>Units</th>
-                    <th>Gross</th>
-                    <th>Additions</th>
-                    <th>Deductions</th>
-                    <th>Net</th>
-                    <th>Expense</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lineTable.visibleRows.length ? (
-                    lineTable.visibleRows.map((line) => (
-                      <tr key={line.id}>
-                        <td>
-                          <strong>{line.name}</strong>
-                          <small>{line.code || line.title || "-"}</small>
-                        </td>
-                        <td>{label(line.payee_type)}</td>
-                        <td>{line.source_type === "manual_period" ? "Period" : "Recurring"}</td>
-                        <td>{label(line.rate_basis)}</td>
-                        <td>{Number(line.source_units || 0).toLocaleString()}</td>
-                        <td>{money(line.gross_amount)}</td>
-                        <td>{money(line.additions)}</td>
-                        <td>{money(line.deductions)}</td>
-                        <td>{money(line.net_amount)}</td>
-                        <td>
-                          {line.expense_id ? `Expense #${line.expense_id}` : "-"}
-                          {line.expense_reference ? <small>{line.expense_reference}</small> : null}
-                        </td>
-                        <td><StatusBadge status={line.status} /></td>
-                        <td>
-                          <button type="button" onClick={() => editLine(line)} disabled={!["draft", "pending_approval"].includes(selectedRun.status)}>
-                            Edit
-                          </button>
-                          <button type="button" onClick={() => downloadPayslip(line)}>
-                            <FileText size={15} />
-                            Payslip
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  ) : (
-                    <EmptyTableRow colSpan={12} title="No payroll lines found" detail="Create or open a payroll run." />
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </CollapsibleSection>
-
-          {lineDraft ? (
-            <CollapsibleSection
-              as="form"
-              className="form-grid payroll-line-editor"
-              defaultOpen
-              icon={<Save size={18} />}
-              onSubmit={saveLine}
-              summary={`${money(lineDraft.net_amount)} net`}
-              title={`Edit ${lineDraft.name}`}
-            >
-              <label>
-                Units
-                <input
-                  value={lineDraft.source_units}
-                  onChange={(event) => setLineDraft((current) => ({ ...current, source_units: event.target.value }))}
-                  type="number"
-                  min="0"
-                />
-              </label>
-              <label>
-                Gross
-                <input
-                  value={lineDraft.gross_amount}
-                  onChange={(event) => setLineDraft((current) => ({ ...current, gross_amount: event.target.value }))}
-                  type="number"
-                  min="0"
-                />
-              </label>
-              <label>
-                Additions
-                <input
-                  value={lineDraft.additions}
-                  onChange={(event) => setLineDraft((current) => ({ ...current, additions: event.target.value }))}
-                  type="number"
-                  min="0"
-                />
-              </label>
-              <label>
-                Deductions
-                <input
-                  value={lineDraft.deductions}
-                  onChange={(event) => setLineDraft((current) => ({ ...current, deductions: event.target.value }))}
-                  type="number"
-                  min="0"
-                />
-              </label>
-              <label>
-                Notes
-                <textarea
-                  value={lineDraft.notes}
-                  onChange={(event) => setLineDraft((current) => ({ ...current, notes: event.target.value }))}
-                  rows="2"
-                />
-              </label>
-              <button className="primary-button" type="submit">
-                <Save size={17} />
-                Save line
-              </button>
-            </CollapsibleSection>
-          ) : null}
+          <PayrollRunReviewPanel
+            lineDraft={lineDraft}
+            lineTable={lineTable}
+            money={money}
+            onDownloadPayslip={downloadPayslip}
+            onEditLine={editLine}
+            onExport={exportLines}
+            onSaveLine={saveLine}
+            onSetLineDraft={setLineDraft}
+            onStatusChange={changeRunStatus}
+            selectedRun={selectedRun}
+            summary={summary}
+            userRole={user.role}
+          />
 
           {!hasPayrollFocus ? (
           <CollapsibleSection
@@ -1042,6 +938,41 @@ function PayrollPage({ user, navigationIntent, onClearNavigationIntent }) {
           </form>
         </div>
       ) : null}
+      <ReviewDialog
+        open={Boolean(runReview)}
+        eyebrow="Payroll run review"
+        title={
+          runReview?.status === "approved"
+            ? "Approve payroll run"
+            : runReview?.status === "paid"
+              ? "Mark payroll paid"
+              : "Lock paid payroll run"
+        }
+        description={
+          runReview?.status === "approved"
+            ? "Approval freezes this reviewed run for payment. It does not post operating expenses or send money."
+            : runReview?.status === "paid"
+              ? "This marks eligible lines as paid and creates their linked operating-expense records. It does not initiate a bank or M-Pesa transfer."
+              : "Locking prevents further status changes to this paid run while preserving its payroll and expense audit history."
+        }
+        confirmLabel={runReview?.status === "approved" ? "Approve run" : runReview?.status === "paid" ? "Mark paid and post expenses" : "Lock run"}
+        cancelLabel={runReview?.status === "approved" ? "Keep for review" : runReview?.status === "paid" ? "Keep approved" : "Keep unlocked"}
+        reasonLabel={runReview?.status === "approved" ? "Approval note" : runReview?.status === "paid" ? "Payment posting note" : "Lock note"}
+        reasonPlaceholder="State the evidence or decision basis for the payroll audit trail"
+        busy={runReviewBusy}
+        busyLabel={runReview?.status === "paid" ? "Posting payroll expenses..." : "Saving review..."}
+        onCancel={closeRunReview}
+        onConfirm={confirmRunReview}
+      >
+        {runReview ? (
+          <div className="reading-context payroll-run-context">
+            <div><span>Pay run</span><strong>{runReview.run.name}</strong></div>
+            <div><span>Period</span><strong>{dateOnly(runReview.run.period_start)} to {dateOnly(runReview.run.period_end)}</strong></div>
+            <div><span>Eligible lines</span><strong>{Number(runReview.run.lines?.filter((line) => !["held", "cancelled"].includes(line.status)).length || 0).toLocaleString()}</strong></div>
+            <div><span>Net payable</span><strong>{money(runReview.run.total_net)}</strong></div>
+          </div>
+        ) : null}
+      </ReviewDialog>
     </section>
   );
 }

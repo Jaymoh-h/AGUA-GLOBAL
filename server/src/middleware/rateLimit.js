@@ -92,6 +92,7 @@ const createRateLimiter = ({
       entry = hitMemoryStore(key);
     }
 
+    const now = Date.now();
     const remaining = Math.max(maxRequests - entry.count, 0);
     res.setHeader("RateLimit-Limit", String(maxRequests));
     res.setHeader("RateLimit-Remaining", String(remaining));

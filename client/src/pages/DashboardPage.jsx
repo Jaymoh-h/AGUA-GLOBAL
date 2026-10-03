@@ -1,281 +1,321 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowRight, CheckCircle2 } from "lucide-react";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from "recharts";
+import { AlertTriangle, ArrowRight, CheckCircle2, Info, RotateCcw, SlidersHorizontal } from "lucide-react";
 import EmptyState from "../components/EmptyState";
-import StatCard from "../components/StatCard";
+import ManagementMetricDefinitions from "../components/ManagementMetricDefinitions";
 import StatusBadge from "../components/StatusBadge";
+import WorkspaceState from "../components/WorkspaceState";
 import { api } from "../services/api";
+import useDashboardPreferences from "../utils/useDashboardPreferences";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const units = (value) => `${Number(value || 0).toLocaleString()} units`;
+const percentOrDash = (value) => (value === null || value === undefined ? "-" : `${Math.round(Number(value) * 100)}%`);
+const severityRank = { high: 0, medium: 1, low: 2 };
+const severityWeight = { high: 900, medium: 500, low: 150 };
 
-const severityLabel = {
-  high: "critical",
-  medium: "review",
-  low: "watch"
+const priorityScore = (item) => {
+  const severity = severityWeight[item.severity] || 0;
+  const financialExposure = Math.min(Math.round(Number(item.amount || 0) / 100), 350);
+  const workload = Math.min(Number(item.count || 0) * 12, 220);
+  const serviceRisk = ["urgent_maintenance", "production_gap", "missing_readings"].includes(item.key) ? 160 : 0;
+  const deliveryRisk = ["contact_gaps", "document_delivery"].includes(item.key) ? 110 : 0;
+  return severity + financialExposure + workload + serviceRisk + deliveryRisk;
 };
 
-const chartColors = ["#0f766e", "#2563eb", "#f59e0b", "#dc2626", "#64748b"];
-
-const formatCompact = (value) => {
-  const number = Number(value || 0);
-  if (Math.abs(number) >= 1000000) return `${(number / 1000000).toFixed(1)}M`;
-  if (Math.abs(number) >= 1000) return `${(number / 1000).toFixed(0)}K`;
-  return number.toLocaleString();
+const priorityReason = (item) => {
+  if (Number(item.amount || 0) > 0) return `${money(item.amount)} requires recovery attention`;
+  if (["urgent_maintenance", "production_gap"].includes(item.key)) return "Service continuity needs review";
+  if (["missing_readings", "unbilled_consumption", "held_bills"].includes(item.key)) return "Billing progress is blocked";
+  if (["contact_gaps", "document_delivery"].includes(item.key)) return "Customer recovery is blocked";
+  return `${Number(item.count || 0).toLocaleString()} item(s) need a decision`;
 };
 
-const paddedChartMax = (dataMax) => {
-  const max = Number(dataMax || 0);
-  if (max <= 0) return 10;
-  const headroom = max * 0.15;
-  const roundedStep = 10 ** Math.max(0, Math.floor(Math.log10(max)) - 1);
-  return Math.ceil((max + headroom) / roundedStep) * roundedStep;
+const roleDashboardLabels = {
+  admin: "Business operations",
+  accountant: "Billing and collections",
+  meter_reader: "Field priorities",
+  business_viewer: "Management overview"
 };
 
-const paddedReceivablesMax = (dataMax) => {
-  const max = Number(dataMax || 0);
-  if (max <= 0) return 10;
-  const headroom = max * 0.3;
-  const roundedStep = 10 ** Math.max(0, Math.floor(Math.log10(max)) - 1);
-  return Math.ceil((max + headroom) / roundedStep) * roundedStep;
-};
-
-const receivablesChartHeight = (rows) => {
-  const maxBalance = Math.max(0, ...(rows || []).map((row) => Number(row.balance_amount || 0)));
-  const amountScale = maxBalance > 0 ? Math.min(160, Math.floor(Math.log10(maxBalance)) * 22) : 0;
-  const bucketScale = Math.max(0, (rows || []).length - 4) * 24;
-  return Math.min(520, 260 + amountScale + bucketScale);
-};
-
-const moneyTooltip = (value, name) => [money(value), String(name || "").replace("_", " ")];
-const countTooltip = (value, name) => [Number(value || 0).toLocaleString(), String(name || "").replace("_", " ")];
-
-const useLargeDashboardCharts = () => {
-  const [isLarge, setIsLarge] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.matchMedia("(min-width: 1200px)").matches;
-  });
-
-  useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-    const query = window.matchMedia("(min-width: 1200px)");
-    const update = () => setIsLarge(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-
-  return isLarge;
-};
-
-function DashboardPage({ onNavigate }) {
+function DashboardPage({ user, onNavigate }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
-  const showLargeCharts = useLargeDashboardCharts();
+  const [loading, setLoading] = useState(true);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [metricDefinitionsOpen, setMetricDefinitionsOpen] = useState(false);
+  const [showAllPriorities, setShowAllPriorities] = useState(false);
+  const { preferences, setPreference, resetPreferences } = useDashboardPreferences(user);
 
-  useEffect(() => {
-    api.dashboard().then(setData).catch((err) => setError(err.message));
-  }, []);
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setData(await api.dashboard());
+    } catch (requestError) {
+      setError(requestError.message || "The latest operational signals could not be loaded.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  if (error) return <p className="form-error">{error}</p>;
-  if (!data) return <p className="muted">Loading dashboard...</p>;
+  useEffect(() => { load(); }, []);
+
+  if (loading) return <WorkspaceState title="Preparing today’s control view" detail="Retrieving the latest operational signals and recovery queues." />;
+  if (error) return <WorkspaceState state="error" title="Today’s control view could not load" detail={error} onRetry={load} />;
+  if (!data) return <WorkspaceState state="error" title="Today’s control view is unavailable" detail="No operational data was returned. Retry when the service is available." onRetry={load} />;
 
   const actionCenter = data.actionCenter || { summary: {}, groups: [] };
-  const activeActionCount = Number(actionCenter.summary?.total || 0);
-  const charts = data.charts || {};
-  const billingTrend = charts.billingTrend || [];
-  const receivablesAging = charts.receivablesAging || [];
-  const maintenanceStatus = charts.maintenanceStatus || [];
-  const productionTrend = charts.productionTrend || [];
-  const visibleBillingTrend = billingTrend.slice(-(showLargeCharts ? 12 : 6));
-  const visibleProductionTrend = productionTrend.slice(-(showLargeCharts ? 13 : 8));
-  const agingChartHeight = receivablesChartHeight(receivablesAging);
+  const actionItems = actionCenter.groups.flatMap((group) => group.items.map((item) => ({
+    ...item,
+    groupTitle: group.title,
+    priorityScore: priorityScore(item),
+    priorityReason: priorityReason(item)
+  })));
+  const sortedActions = [...actionItems].sort((left, right) => {
+    const activeDifference = Number(right.count > 0) - Number(left.count > 0);
+    if (activeDifference) return activeDifference;
+    const priorityDifference = right.priorityScore - left.priorityScore;
+    if (priorityDifference) return priorityDifference;
+    const severityDifference = (severityRank[left.severity] ?? 3) - (severityRank[right.severity] ?? 3);
+    if (severityDifference) return severityDifference;
+    return Number(right.count || 0) - Number(left.count || 0);
+  });
+  const activeActions = sortedActions.filter((item) => Number(item.count || 0) > 0);
+  const queueActions = preferences.showClearedChecks ? sortedActions : activeActions;
+  const visibleActions = showAllPriorities ? queueActions : queueActions.slice(0, 7);
+  const hiddenActionCount = Math.max(queueActions.length - visibleActions.length, 0);
+  const actionByKey = Object.fromEntries(actionItems.map((item) => [item.key, item]));
+  const todayLabel = new Intl.DateTimeFormat("en-KE", { weekday: "long", day: "numeric", month: "long" }).format(new Date());
+  const fieldSignals = user?.role === "meter_reader"
+    ? [
+        ["Active checks", actionCenter.summary?.total || 0, "Current work"],
+        ["Critical", actionCenter.summary?.high || 0, "Need attention"],
+        ["Missing readings", actionByKey.missing_readings?.count || 0, "Billing cycle"],
+        ["Urgent maintenance", actionByKey.urgent_maintenance?.count || 0, "Field response"]
+      ]
+    : [];
+  const collectionsItem = actionByKey.overdue_bills;
+  const signalActions = activeActions.slice(0, 3);
+  const performance = data.performance || null;
+  const isFieldWorkspace = user?.role === "meter_reader";
+  const canOperateManagementMetrics = ["admin", "accountant"].includes(user?.role);
+  const businessControlMetrics = performance
+    ? [
+        ...(performance.collections
+          ? [{
+              key: "collection-rate",
+              label: "Collection rate",
+              value: percentOrDash(performance.collections.collection_rate),
+              detail: `${money(performance.collections.collected_amount)} allocated of ${money(performance.collections.billed_amount)} issued`,
+              target: canOperateManagementMetrics ? { page: "collections", focus: "arrears", label: "Collections" } : null
+            }, {
+              key: "arrears-exposure",
+              label: "Arrears exposure",
+              value: money(performance.collections.open_receivables),
+              detail: `${Number(collectionsItem?.count || 0).toLocaleString()} overdue account(s) require recovery`,
+              target: canOperateManagementMetrics ? { page: "collections", focus: "arrears", label: "Collections" } : null
+            }]
+          : []),
+        {
+          key: "reading-completion",
+          label: "Reading completion",
+          value: percentOrDash(performance.readings?.completion_rate),
+          detail: `${Number(performance.readings?.completed_count || 0).toLocaleString()} of ${Number(performance.readings?.required_count || 0).toLocaleString()} active accounts`,
+          target: canOperateManagementMetrics ? { page: "readings", focus: "missing_readings", label: "Missing readings" } : null
+        },
+        {
+          key: "billing-blockers",
+          label: "Billing blockers",
+          value: Number(performance.billing?.blocker_count || 0).toLocaleString(),
+          detail: `${Number(performance.billing?.unbilled_consumption_count || 0).toLocaleString()} unbilled readings | ${Number(performance.billing?.held_bill_count || 0).toLocaleString()} held bills | ${Number(performance.billing?.pending_source_billing_count || 0).toLocaleString()} source reviews`,
+          target: canOperateManagementMetrics ? { page: "billing", label: "Billing readiness" } : null
+        },
+        ...(performance.deliveries
+          ? [{
+              key: "delivery-failures",
+              label: "Delivery failures",
+              value: Number(performance.deliveries.exception_count || 0).toLocaleString(),
+              detail: `${percentOrDash(performance.deliveries.success_rate)} successful in the last 14 days`,
+              target: canOperateManagementMetrics ? { page: "communications", focus: "document_delivery", label: "Delivery exceptions" } : null
+            }]
+          : []),
+        ...(performance.margin
+          ? [{
+              key: "accrual-margin",
+              label: "Accrual margin",
+              value: percentOrDash(performance.margin.margin_rate),
+              detail: `${money(performance.margin.net_amount)} after recorded operating expenses`,
+              target: { page: "reports", label: "Financial reports" }
+            }]
+          : []),
+      ]
+    : [];
+  const operations = performance?.operations;
+  const productionVariance = Number(operations?.production?.variance_units || 0);
+  const operatingControlMetrics = operations
+    ? [
+        {
+          key: "production-variance",
+          label: "Output / billed variance",
+          value: Number(operations.production?.completed_week_count || 0)
+            ? `${productionVariance > 0 ? "+" : productionVariance < 0 ? "-" : ""}${units(Math.abs(productionVariance))}`
+            : "Awaiting data",
+          detail: Number(operations.production?.completed_week_count || 0)
+            ? `${units(operations.production?.output_units)} source output | ${units(operations.production?.billed_units)} billed`
+            : "No saved production reading this month",
+          definitionPeriod: "Current calendar month",
+          target: canOperateManagementMetrics ? { page: "production", focus: "production_gap", label: "Production control" } : null
+        },
+        {
+          key: "maintenance-turnaround",
+          label: "Maintenance turnaround",
+          value: `${Number(operations.maintenance?.avg_resolution_days || 0).toFixed(1)} days`,
+          detail: `${Number(operations.maintenance?.active_count || 0).toLocaleString()} active | ${Number(operations.maintenance?.overdue_count || 0).toLocaleString()} overdue`,
+          target: canOperateManagementMetrics ? { page: "maintenance", focus: "overdue_maintenance", label: "Maintenance work" } : null
+        },
+        {
+          key: "operating-liabilities",
+          label: "Operating liabilities",
+          value: money(Number(operations.payroll_liability?.approved_amount || 0) + Number(operations.contractor_payables?.open_amount || 0)),
+          detail: `${money(operations.payroll_liability?.approved_amount)} payroll | ${money(operations.contractor_payables?.open_amount)} suppliers`,
+          definitionPeriod: "Current calendar month",
+          target: canOperateManagementMetrics ? { page: "reports", focus: "cash_flow_forecast", label: "Finance control" } : null
+        }
+      ]
+    : [];
+  const todayMetrics = [...businessControlMetrics, ...operatingControlMetrics];
+  const definitionMetrics = todayMetrics;
 
   return (
-    <section className="page-stack">
-      <header className="page-header">
+    <section className="ops-dashboard">
+      <header className="cockpit-header">
         <div>
-          <p className="eyebrow">Operations</p>
-          <h2>Action Center</h2>
+          <p className="eyebrow">{roleDashboardLabels[user?.role] || "Operations"}</p>
+          <h1>Work that needs a decision.</h1>
+          <p>{todayLabel} | {activeActions.length ? `${activeActions.length} active operational checks` : "No active operational exceptions"}</p>
         </div>
+        <button className="cockpit-view-button" type="button" aria-expanded={preferencesOpen} onClick={() => setPreferencesOpen((current) => !current)}>
+          <SlidersHorizontal size={16} />
+          View
+        </button>
       </header>
 
-      <div className="stat-grid">
-        <StatCard label="Needs attention" value={activeActionCount} detail="Active operational checks" />
-        <StatCard label="Critical" value={actionCenter.summary?.high || 0} detail="Requires priority action" />
-        <StatCard label="Water billed" value={units(data.summary.water_units_billed)} detail="From meter readings" />
-        <StatCard label="Cash collected" value={money(data.summary.cash_collected)} detail="Posted payments" />
-        <StatCard label="Bills due" value={data.summary.bills_due} detail="Unpaid or partial" />
-        <StatCard label="Arrears" value={money(data.summary.arrears)} detail="Outstanding balance" />
+      {preferencesOpen ? (
+        <section className="cockpit-preferences" aria-label="Today view preferences">
+          <label><input type="checkbox" checked={preferences.showInsights} onChange={(event) => setPreference("showInsights", event.target.checked)} />Show operating pulse</label>
+          <label><input type="checkbox" checked={preferences.showClearedChecks} onChange={(event) => setPreference("showClearedChecks", event.target.checked)} />Show cleared checks</label>
+          <label><input type="checkbox" checked={preferences.compactPriorities} onChange={(event) => setPreference("compactPriorities", event.target.checked)} />Compact queue</label>
+          <button type="button" onClick={resetPreferences}><RotateCcw size={14} />Reset</button>
+        </section>
+      ) : null}
+
+      {fieldSignals.length ? (
+        <section className="cockpit-signal-strip" aria-label="Field operational snapshot">
+          {fieldSignals.map(([label, value, detail]) => <div key={label}><small>{label}</small><strong>{value}</strong><span>{detail}</span></div>)}
+        </section>
+      ) : null}
+
+      {todayMetrics.length ? (
+        <section className="today-control-strip" aria-labelledby="today-control-title">
+          <div className="today-control-heading">
+            <div>
+              <p className="eyebrow">Business control</p>
+              <h2 id="today-control-title">Signals that change the next decision.</h2>
+            </div>
+            <div className="today-control-heading-actions">
+              <small>{canOperateManagementMetrics ? "Each measure opens the work that can improve it." : "Measures are read-only in this workspace."}</small>
+              <button className="icon-button" type="button" onClick={() => setMetricDefinitionsOpen((current) => !current)} title="Review metric definitions" aria-label="Review metric definitions" aria-expanded={metricDefinitionsOpen}><Info size={16} /></button>
+            </div>
+          </div>
+          <div className="today-control-metrics">
+            {todayMetrics.map((metric) => {
+              const Tag = metric.target ? "button" : "div";
+              return (
+              <Tag
+                key={metric.key}
+                {...(metric.target
+                  ? { type: "button", onClick: () => onNavigate?.(metric.target), title: `Open ${metric.target.label}` }
+                  : {})}
+              >
+                <span>{metric.label}</span>
+                <strong>{metric.value}</strong>
+                <small>{metric.detail}</small>
+                {metric.target ? <ArrowRight aria-hidden="true" size={15} /> : null}
+              </Tag>
+              );
+            })}
+          </div>
+          {metricDefinitionsOpen ? <ManagementMetricDefinitions metrics={definitionMetrics} onClose={() => setMetricDefinitionsOpen(false)} onNavigate={onNavigate} /> : null}
+        </section>
+      ) : null}
+
+      <div className={`cockpit-grid${isFieldWorkspace ? " field-workspace" : ""}`}>
+        <section className={`decision-queue${preferences.compactPriorities ? " compact" : ""}`} aria-labelledby="decision-queue-title">
+          <div className="cockpit-section-heading">
+            <div><p className="eyebrow">Priority queue</p><h2 id="decision-queue-title">Make the next move</h2></div>
+            <div className="decision-queue-controls">
+              <small>{preferences.showClearedChecks ? `${queueActions.length} checks` : `${queueActions.length} open`}</small>
+              {hiddenActionCount ? <button type="button" onClick={() => setShowAllPriorities(true)}>Show {hiddenActionCount} more</button> : null}
+              {showAllPriorities && queueActions.length > 7 ? <button type="button" onClick={() => setShowAllPriorities(false)}>Show top 7</button> : null}
+              <StatusBadge status={activeActions.length ? (actionCenter.summary?.high ? "critical" : "review") : "resolved"} />
+            </div>
+          </div>
+          {visibleActions.length ? (
+            <div className="decision-list">
+              {visibleActions.map((item, index) => {
+                const active = Number(item.count || 0) > 0;
+                const Icon = active ? AlertTriangle : CheckCircle2;
+                return <article className={active ? `decision-item is-${item.severity || "low"}` : "decision-item is-clear"} key={item.key}>
+                  <span className="decision-rank">{active ? String(index + 1).padStart(2, "0") : "-"}</span>
+                  <span className="decision-icon"><Icon size={17} /></span>
+                  <div className="decision-copy"><strong>{item.label}</strong><small>{item.priorityReason}</small><span>{item.groupTitle}</span></div>
+                  <div className="decision-value"><strong>{Number(item.count || 0).toLocaleString()}</strong>{item.amount !== undefined ? <small>{money(item.amount)}</small> : null}</div>
+                  {item.page && active ? <button type="button" onClick={() => onNavigate?.({ page: item.page, focus: item.key === "monthly_budget_variance" ? "monthly_budget" : item.key, label: item.label })} aria-label={`Open ${item.label}`}><ArrowRight size={16} /></button> : null}
+                </article>;
+              })}
+            </div>
+          ) : <EmptyState title="Nothing needs escalation" detail="The operational queue is clear for this workspace." />}
+        </section>
+
+        {!isFieldWorkspace ? <aside className="operational-signal-rail" aria-label="Operational signals">
+          <div className="operational-signal-heading">
+            <div><p className="eyebrow">Operational signals</p><h2>Where attention pays back.</h2></div>
+            <span>{activeActions.length} open</span>
+          </div>
+          <button className="signal-receivables" type="button" onClick={() => onNavigate?.({ page: "collections", focus: "arrears" })}>
+            <span>Open receivables</span>
+            <strong>{money(data.summary.arrears)}</strong>
+            <small>{Number(collectionsItem?.count || 0).toLocaleString()} overdue accounts</small>
+            <ArrowRight size={16} />
+          </button>
+          <div className="operational-signal-list">
+            {signalActions.map((item, index) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => onNavigate?.({ page: item.page, focus: item.key === "monthly_budget_variance" ? "monthly_budget" : item.key, label: item.label })}
+              >
+                <span>Priority {index + 1} | {item.groupTitle}</span>
+                <strong>{item.label}</strong>
+                <small>{item.priorityReason}</small>
+                <b>{item.amount !== undefined ? money(item.amount) : `${Number(item.count || 0).toLocaleString()} cases`}</b>
+                <ArrowRight size={15} aria-hidden="true" />
+              </button>
+            ))}
+            {!signalActions.length ? <p>No operational exceptions are open.</p> : null}
+          </div>
+        </aside> : null}
       </div>
 
-      <section className="dashboard-chart-grid">
-        <div className="panel chart-panel dashboard-chart-wide">
-          <div className="panel-heading">
-            <div>
-              <h3>Billing vs Collections</h3>
-              <small>{showLargeCharts ? "Last 12 months" : "Last six months"}</small>
-            </div>
+      {preferences.showInsights && !isFieldWorkspace ? (
+        <section className="operating-pulse" aria-label="Operating pulse">
+          <div><p className="eyebrow">Operating pulse</p><h2>Read the business, then act.</h2><p>Revenue, billing readiness, and field exceptions are kept in one decision layer rather than separate dashboard cards.</p></div>
+          <div className="pulse-list">
+            {activeActions.slice(0, 3).map((item) => <div key={item.key}><span>{item.groupTitle}</span><strong>{item.label}</strong><small>{Number(item.count || 0).toLocaleString()} open</small></div>)}
+            {!activeActions.length ? <div><span>Operations</span><strong>All current checks are clear</strong><small>Continue routine monitoring</small></div> : null}
           </div>
-          {visibleBillingTrend.length ? (
-            <div className="dashboard-chart">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={visibleBillingTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
-                  <YAxis domain={[0, paddedChartMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
-                  <Tooltip formatter={moneyTooltip} />
-                  <Legend />
-                  <Line type="monotone" dataKey="billed_amount" name="Billed" stroke="#0f766e" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="collected_amount" name="Collected" stroke="#2563eb" strokeWidth={2} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <EmptyState title="No billing trend yet" detail="Billing and payment activity will appear here." />
-          )}
-        </div>
-
-        <div className="panel chart-panel">
-          <div className="panel-heading">
-            <div>
-              <h3>Receivables Aging</h3>
-              <small>Outstanding payable balances</small>
-            </div>
-          </div>
-          {receivablesAging.length ? (
-            <div className="dashboard-chart" style={{ height: agingChartHeight }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={receivablesAging} margin={{ top: 24, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
-                  <YAxis domain={[0, paddedReceivablesMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
-                  <Tooltip formatter={moneyTooltip} />
-                  <Bar dataKey="balance_amount" name="Balance" radius={[5, 5, 0, 0]} fill="#0f766e" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <EmptyState title="No arrears yet" detail="Open receivables will appear here." />
-          )}
-        </div>
-
-        <div className="panel chart-panel">
-          <div className="panel-heading">
-            <div>
-              <h3>Maintenance Workload</h3>
-              <small>Requests by status</small>
-            </div>
-          </div>
-          {maintenanceStatus.length ? (
-            <div className="dashboard-chart">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={maintenanceStatus} dataKey="count" nameKey="label" innerRadius={54} outerRadius={84} paddingAngle={2}>
-                    {maintenanceStatus.map((row, index) => (
-                      <Cell key={row.label} fill={chartColors[index % chartColors.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={countTooltip} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <EmptyState title="No maintenance records" detail="Maintenance status will appear after requests are logged." />
-          )}
-        </div>
-
-        <div className="panel chart-panel dashboard-chart-wide">
-          <div className="panel-heading">
-            <div>
-              <h3>Production Trend</h3>
-              <small>{showLargeCharts ? "Latest quarter year" : "Latest 8 weeks"}</small>
-            </div>
-          </div>
-          {visibleProductionTrend.length ? (
-            <div className="dashboard-chart">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={visibleProductionTrend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="label" tickLine={false} axisLine={false} fontSize={11} />
-                  <YAxis domain={[0, paddedChartMax]} tickFormatter={formatCompact} tickLine={false} axisLine={false} fontSize={11} width={44} />
-                  <Tooltip formatter={moneyTooltip} />
-                  <Legend />
-                  <Line type="monotone" dataKey="revenue_amount" name="Revenue" stroke="#0f766e" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="electricity_cost" name="Electricity cost" stroke="#f59e0b" strokeWidth={2} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          ) : (
-            <EmptyState title="No production trend yet" detail="Weekly production readings will appear here." />
-          )}
-        </div>
-      </section>
-
-      <section className="action-center-grid">
-        {actionCenter.groups?.length ? (
-          actionCenter.groups.map((group) => (
-            <div className="panel action-group-panel" key={group.key}>
-              <div className="panel-heading">
-                <div>
-                  <h3>{group.title}</h3>
-                  <small>{group.detail}</small>
-                </div>
-              </div>
-              <div className="action-list">
-                {group.items.map((item) => {
-                  const isActive = Number(item.count || 0) > 0;
-                  const BadgeIcon = isActive ? AlertTriangle : CheckCircle2;
-                  return (
-                    <article className={isActive ? "action-item active" : "action-item clear"} key={item.key}>
-                      <div className="action-item-main">
-                        <span className={`action-icon action-icon-${isActive ? item.severity : "clear"}`}>
-                          <BadgeIcon size={15} />
-                        </span>
-                        <div>
-                          <strong>{item.label}</strong>
-                          <small>{item.detail}</small>
-                        </div>
-                      </div>
-                      <div className="action-item-meta">
-                        <span className="action-count">{Number(item.count || 0).toLocaleString()}</span>
-                        {item.amount !== undefined ? <small>{money(item.amount)}</small> : null}
-                        <StatusBadge status={isActive ? severityLabel[item.severity] || item.severity : "resolved"} />
-                        {item.page ? (
-                          <button className="action-open-button" type="button" onClick={() => onNavigate?.({ page: item.page, focus: item.key, label: item.label })}>
-                            <ArrowRight size={14} />
-                            <span>Open</span>
-                          </button>
-                        ) : null}
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            </div>
-          ))
-        ) : (
-          <div className="panel full-span">
-            <EmptyState title="No action center checks" detail="Operational checks will appear here once the dashboard has data." />
-          </div>
-        )}
-      </section>
-
+        </section>
+      ) : null}
     </section>
   );
 }

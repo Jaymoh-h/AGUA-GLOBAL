@@ -33,6 +33,7 @@ module.exports = {
   sessionCookieDomain: process.env.SESSION_COOKIE_DOMAIN || "",
   reminderCronSecret: process.env.REMINDER_CRON_SECRET || process.env.CRON_SECRET,
   monitoringCronSecret: process.env.MONITORING_CRON_SECRET || process.env.CRON_SECRET,
+  mpesaCallbackToken: process.env.MPESA_CALLBACK_TOKEN || "",
   monitoringAlertEmails: String(process.env.MONITORING_ALERT_EMAILS || "")
     .split(",")
     .map((item) => item.trim())
@@ -59,9 +60,14 @@ module.exports = {
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT || 587),
     secure: process.env.SMTP_SECURE === "true",
+    requireTls: process.env.SMTP_REQUIRE_TLS !== "false",
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
-    from: process.env.SMTP_FROM || process.env.EMAIL_FROM || "no-reply@agua-global.local"
+    from: process.env.SMTP_FROM || process.env.EMAIL_FROM || "no-reply@agua-global.local",
+    allowedRecipientDomains: String(process.env.SMTP_ALLOWED_RECIPIENT_DOMAINS || "")
+      .split(",")
+      .map((domain) => domain.trim().toLowerCase())
+      .filter(Boolean)
   },
   sms: {
     provider: process.env.SMS_PROVIDER || "none",

@@ -6,6 +6,7 @@ dist/
 build/
 coverage/
 server/storage/documents/
+.codex-remote-attachments/
 *.log
 .DS_Store
 Thumbs.db

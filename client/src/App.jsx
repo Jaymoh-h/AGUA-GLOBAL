@@ -1,6 +1,8 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import AppErrorBoundary from "./components/AppErrorBoundary";
+import BrandLoader from "./components/BrandLoader";
 import Layout, { pageAccess as access } from "./components/Layout";
+import ReviewDialog from "./components/ReviewDialog";
 import ToastProvider from "./components/ToastProvider";
 import LandingPage from "./pages/LandingPage";
 import PasswordChangePage from "./pages/PasswordChangePage";
@@ -13,6 +15,7 @@ const BillsPage = lazy(() => import("./pages/BillsPage"));
 const BillingSetupPage = lazy(() => import("./pages/BillingSetupPage"));
 const BusinessSettingsPage = lazy(() => import("./pages/BusinessSettingsPage"));
 const CommunicationsPage = lazy(() => import("./pages/CommunicationsPage"));
+const CollectionsPage = lazy(() => import("./pages/CollectionsPage"));
 const ContractorInvoicesPage = lazy(() => import("./pages/ContractorInvoicesPage"));
 const CustomersPage = lazy(() => import("./pages/CustomersPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
@@ -31,6 +34,69 @@ const ZonesPage = lazy(() => import("./pages/ZonesPage"));
 
 const IDLE_LOGOUT_MS = 30 * 60 * 1000;
 
+const defaultPageForRole = (role) => ({
+  admin: "dashboard",
+  accountant: "collections",
+  meter_reader: "readings",
+  business_viewer: "reports",
+  customer: "portal"
+}[role] || "dashboard");
+
+const readAppRoute = () => {
+  const fragment = window.location.hash.replace(/^#\/?/, "");
+  if (!fragment) return null;
+
+  const [rawPage, rawSearch = ""] = fragment.split("?", 2);
+  let page = "";
+  try {
+    page = decodeURIComponent(rawPage || "");
+  } catch (_error) {
+    return null;
+  }
+  if (!/^[a-z_]+$/.test(page)) return null;
+
+  const intent = Object.fromEntries(
+    [...new URLSearchParams(rawSearch).entries()]
+      .filter(([key, value]) => key !== "label" && /^[a-z][a-z0-9_]*$/i.test(key) && value.length <= 120)
+  );
+  if (intent.return_page && /^[a-z_]+$/.test(intent.return_page)) {
+    intent.return_target = {
+      page: intent.return_page,
+      ...(intent.return_focus ? { focus: intent.return_focus } : {}),
+      ...(intent.return_customer_id ? { customer_id: intent.return_customer_id } : {})
+    };
+    delete intent.return_page;
+    delete intent.return_focus;
+    delete intent.return_customer_id;
+  }
+  return { page, intent: Object.keys(intent).length ? { page, ...intent } : null };
+};
+
+const writeAppRoute = (page, intent = null, { replace = false } = {}) => {
+  const params = new URLSearchParams();
+  const routeIntent = { ...(intent || {}) };
+  if (routeIntent.return_target?.page) {
+    routeIntent.return_page = routeIntent.return_target.page;
+    routeIntent.return_focus = routeIntent.return_target.focus;
+    routeIntent.return_customer_id = routeIntent.return_target.customer_id;
+  }
+  Object.entries(routeIntent).forEach(([key, value]) => {
+    if (key === "page" || key === "label" || !/^[a-z][a-z0-9_]*$/i.test(key)) return;
+    if (["string", "number", "boolean"].includes(typeof value) && String(value).length <= 120) {
+      params.set(key, String(value));
+    }
+  });
+  const hash = `#/${encodeURIComponent(page)}${params.size ? `?${params.toString()}` : ""}`;
+  if (window.location.hash === hash) return;
+  window.history[replace ? "replaceState" : "pushState"](null, "", `${window.location.pathname}${window.location.search}${hash}`);
+};
+
+const routeForUser = (nextUser) => {
+  const requestedRoute = readAppRoute();
+  if (requestedRoute && access[requestedRoute.page]?.includes(nextUser.role)) return requestedRoute;
+  return { page: defaultPageForRole(nextUser.role), intent: null };
+};
+
 const publicSurface = () => {
   const hostname = window.location.hostname.toLowerCase();
   const pathname = window.location.pathname.replace(/\/+$/, "") || "/";
@@ -43,8 +109,8 @@ function App() {
   const [user, setUser] = useState(null);
   const [accessContexts, setAccessContexts] = useState([]);
   const [authChecked, setAuthChecked] = useState(false);
-  const [currentPage, setCurrentPage] = useState("dashboard");
-  const [navigationIntent, setNavigationIntent] = useState(null);
+  const [currentPage, setCurrentPage] = useState(() => readAppRoute()?.page || "dashboard");
+  const [navigationIntent, setNavigationIntent] = useState(() => readAppRoute()?.intent || null);
   const [appName, setAppName] = useState("Water Billing");
   const [businessSettings, setBusinessSettings] = useState({});
   const [sessionMessage, setSessionMessage] = useState("");
@@ -63,9 +129,28 @@ function App() {
 
   useEffect(() => {
     if (user && !allowedPages.includes(currentPage)) {
-      setCurrentPage(user.role === "customer" ? "portal" : "dashboard");
+      const fallbackPage = defaultPageForRole(user.role);
+      setNavigationIntent(null);
+      setCurrentPage(fallbackPage);
+      writeAppRoute(fallbackPage, null, { replace: true });
     }
   }, [allowedPages, currentPage, user]);
+
+  useEffect(() => {
+    if (!user) return undefined;
+    const restoreRoute = () => {
+      const route = routeForUser(user);
+      setCurrentPage(route.page);
+      setNavigationIntent(route.intent);
+    };
+    restoreRoute();
+    window.addEventListener("popstate", restoreRoute);
+    window.addEventListener("hashchange", restoreRoute);
+    return () => {
+      window.removeEventListener("popstate", restoreRoute);
+      window.removeEventListener("hashchange", restoreRoute);
+    };
+  }, [user]);
 
   useEffect(() => {
     localStorage.removeItem("agua_token");
@@ -81,9 +166,12 @@ function App() {
       .me()
       .then(({ user: nextUser, contexts }) => {
         if (cancelled || !nextUser) return;
+        const route = routeForUser(nextUser);
         setUser(nextUser);
         setAccessContexts(Array.isArray(contexts) ? contexts : []);
-        setCurrentPage(nextUser.role === "customer" ? "portal" : "dashboard");
+        setNavigationIntent(route.intent);
+        setCurrentPage(route.page);
+        writeAppRoute(route.page, route.intent, { replace: true });
       })
       .catch(() => {
         clearSessionState();
@@ -176,8 +264,11 @@ function App() {
     localStorage.removeItem("agua_user");
     setSessionMessage("");
     setContextSwitchError("");
+    const route = routeForUser(nextUser);
     setUser(nextUser);
-    setCurrentPage(nextUser.role === "customer" ? "portal" : "dashboard");
+    setNavigationIntent(route.intent);
+    setCurrentPage(route.page);
+    writeAppRoute(route.page, route.intent, { replace: true });
     if (Array.isArray(contexts)) {
       setAccessContexts(contexts);
       return;
@@ -194,14 +285,19 @@ function App() {
     if (typeof target === "string") {
       setNavigationIntent(null);
       setCurrentPage(target);
+      writeAppRoute(target);
       return;
     }
     if (!target?.page) return;
     setNavigationIntent(target);
     setCurrentPage(target.page);
+    writeAppRoute(target.page, target);
   };
 
-  const clearNavigationIntent = () => setNavigationIntent(null);
+  const clearNavigationIntent = () => {
+    setNavigationIntent(null);
+    writeAppRoute(currentPage, null, { replace: true });
+  };
 
   const handleSwitchContext = async (accessProfileId) => {
     if (!accessProfileId || Number(accessProfileId) === Number(user?.access_profile_id)) return;
@@ -213,7 +309,9 @@ function App() {
       setUser(data.user);
       setAccessContexts(Array.isArray(data.contexts) ? data.contexts : accessContexts);
       setNavigationIntent(null);
-      setCurrentPage(data.user.role === "customer" ? "portal" : "dashboard");
+      const nextPage = defaultPageForRole(data.user.role);
+      setCurrentPage(nextPage);
+      writeAppRoute(nextPage, null, { replace: true });
     } catch (error) {
       setContextSwitchError(error.message || "Unable to switch workspace.");
     } finally {
@@ -231,11 +329,16 @@ function App() {
     setAccessContexts([]);
     setContextSwitchError("");
     setCurrentPage("dashboard");
+    setNavigationIntent(null);
+    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
   };
 
   const handlePasswordChanged = (nextUser) => {
+    const route = routeForUser(nextUser);
     setUser(nextUser);
-    setCurrentPage(nextUser.role === "customer" ? "portal" : "dashboard");
+    setNavigationIntent(route.intent);
+    setCurrentPage(route.page);
+    writeAppRoute(route.page, route.intent, { replace: true });
   };
 
   if (surface === "status") {
@@ -247,11 +350,8 @@ function App() {
 
   if (!authChecked) {
     return (
-      <main className="login-page">
-        <div className="empty-state">
-          <strong>Checking session</strong>
-          <span>Please wait.</span>
-        </div>
+      <main className="session-loading-screen">
+        <BrandLoader label="Checking your session" />
       </main>
     );
   }
@@ -267,22 +367,23 @@ function App() {
   const pages = {
     portal: <PortalPage user={user} view="overview" />,
     dashboard: <DashboardPage user={user} onNavigate={handleNavigate} />,
-    customers: <CustomersPage user={user} />,
-    readings: <ReadingsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
+    customers: <CustomersPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} onNavigate={handleNavigate} />,
+    readings: <ReadingsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} onNavigate={handleNavigate} />,
     bills: user.role === "customer" ? <PortalPage user={user} view="bills" /> : <BillsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
     receipts: <PortalPage user={user} view="receipts" />,
     requests: <PortalPage user={user} view="requests" />,
-    billing: <BillingSetupPage user={user} onNavigate={handleNavigate} />,
+    billing: <BillingSetupPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} onNavigate={handleNavigate} />,
     business: <BusinessSettingsPage user={user} />,
-    communications: <CommunicationsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
+    communications: <CommunicationsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} onNavigate={handleNavigate} />,
+    collections: <CollectionsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} onNavigate={handleNavigate} />,
     audit: <AuditTrailPage user={user} />,
-    payments: <PaymentsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
+    payments: <PaymentsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} onNavigate={handleNavigate} />,
     expenses: <ExpensesPage user={user} />,
     contractors: <ContractorInvoicesPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
     payroll: <PayrollPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
-    maintenance: <MaintenancePage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
+    maintenance: <MaintenancePage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} onNavigate={handleNavigate} />,
     production: <ProductionPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
-    reports: <ReportsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />,
+    reports: <ReportsPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} onNavigate={handleNavigate} />,
     knowledge: <KnowledgeBasePage user={user} />,
     rates: <RatesPage user={user} />,
     zones: <ZonesPage user={user} />,
@@ -304,81 +405,26 @@ function App() {
       >
         <AppErrorBoundary key={`${user.access_profile_id || "legacy"}:${currentPage}`}>
           <Suspense
-            fallback={
-              <div className="panel">
-                <EmptyPageMessage />
-              </div>
-            }
+            fallback={<div className="page-loading-surface"><BrandLoader label="Loading page" /></div>}
           >
             {pages[currentPage] || pages.dashboard}
           </Suspense>
         </AppErrorBoundary>
         {futureDateOverride ? (
-          <FutureDateOverrideDialog
-            message={futureDateOverride.message}
+          <ReviewDialog
+            open
+            eyebrow="Admin override"
+            title="Future-dated record"
+            description={futureDateOverride.message}
+            confirmLabel="Continue"
+            reasonLabel="Override reason"
+            reasonPlaceholder="Explain why this future-dated record is valid."
             onCancel={() => closeFutureDateOverride("")}
-            onSubmit={closeFutureDateOverride}
+            onConfirm={closeFutureDateOverride}
           />
         ) : null}
       </Layout>
     </ToastProvider>
-  );
-}
-
-function FutureDateOverrideDialog({ message, onCancel, onSubmit }) {
-  const [reason, setReason] = useState("");
-  const trimmedReason = reason.trim();
-
-  return (
-    <div className="modal-backdrop" role="presentation" onClick={onCancel}>
-      <form
-        className="modal-panel override-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="future-date-override-title"
-        onClick={(event) => event.stopPropagation()}
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (trimmedReason) onSubmit(trimmedReason);
-        }}
-      >
-        <div className="panel-heading">
-          <div>
-            <p className="eyebrow">Admin Override</p>
-            <h3 id="future-date-override-title">Future-dated record</h3>
-          </div>
-        </div>
-        <p className="muted">{message}</p>
-        <label>
-          Override reason
-          <textarea
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            rows="4"
-            autoFocus
-            placeholder="Explain why this future-dated record is valid."
-            required
-          />
-        </label>
-        <div className="row-actions">
-          <button className="primary-button" type="submit" disabled={!trimmedReason}>
-            Continue
-          </button>
-          <button type="button" onClick={onCancel}>
-            Cancel
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-function EmptyPageMessage() {
-  return (
-    <div className="empty-state">
-      <strong>Loading page</strong>
-      <span>Please wait.</span>
-    </div>
   );
 }
 

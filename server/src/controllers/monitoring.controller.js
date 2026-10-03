@@ -2,6 +2,7 @@ const pool = require("../db/pool");
 const { monitoringCronSecret } = require("../config/env");
 const { getMonitoringSnapshot, sendMonitoringAlerts } = require("../services/monitoringAlert.service");
 const { recordSystemEvent } = require("../services/systemEvent.service");
+const { recordAuditEvent } = require("../services/audit.service");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 
@@ -41,9 +42,10 @@ const getMonitoringSummary = asyncHandler(async (_req, res) => {
        FROM system_event_logs`
     ),
     pool.query(
-      `SELECT sel.*, u.name AS actor_name
+      `SELECT sel.*, u.name AS actor_name, resolver.name AS resolved_by_name
        FROM system_event_logs sel
        LEFT JOIN users u ON u.id = sel.actor_user_id
+       LEFT JOIN users resolver ON resolver.id = sel.resolved_by
        ORDER BY sel.created_at DESC
        LIMIT 80`
     ),
@@ -74,9 +76,10 @@ const getMonitoringSummary = asyncHandler(async (_req, res) => {
 const listMonitoringEvents = asyncHandler(async (req, res) => {
   const limit = Math.min(Number(req.query.limit || 100), 300);
   const { rows } = await pool.query(
-    `SELECT sel.*, u.name AS actor_name
+    `SELECT sel.*, u.name AS actor_name, resolver.name AS resolved_by_name
      FROM system_event_logs sel
      LEFT JOIN users u ON u.id = sel.actor_user_id
+     LEFT JOIN users resolver ON resolver.id = sel.resolved_by
      ORDER BY sel.created_at DESC
      LIMIT $1`,
     [limit]
@@ -101,6 +104,52 @@ const createClientEvent = asyncHandler(async (req, res) => {
   res.status(204).send();
 });
 
+const resolveMonitoringEvent = asyncHandler(async (req, res) => {
+  const eventId = Number(req.params.id);
+  const resolutionNotes = String(req.body?.resolution_notes || "").trim();
+  if (!Number.isInteger(eventId) || eventId < 1) throw new ApiError(400, "Monitoring event id is invalid.");
+  if (resolutionNotes.length < 4 || resolutionNotes.length > 1000) {
+    throw new ApiError(400, "Resolution notes must be between 4 and 1000 characters.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: existingRows } = await client.query("SELECT * FROM system_event_logs WHERE id = $1 FOR UPDATE", [eventId]);
+    const before = existingRows[0];
+    if (!before) throw new ApiError(404, "Monitoring event was not found.");
+    if (before.resolved_at) throw new ApiError(400, "Monitoring event is already resolved.");
+    if (!['warning', 'error', 'critical'].includes(before.severity)) {
+      throw new ApiError(400, "Only warning, error, or critical monitoring events can be resolved.");
+    }
+
+    const { rows } = await client.query(
+      `UPDATE system_event_logs
+       SET resolved_at = NOW(), resolved_by = $1, resolution_notes = $2
+       WHERE id = $3
+       RETURNING *`,
+      [req.user.id, resolutionNotes, eventId]
+    );
+    const resolved = rows[0];
+    await recordAuditEvent(client, {
+      req,
+      action: "system_event.resolved",
+      entityType: "system_event",
+      entityId: eventId,
+      beforeData: before,
+      afterData: resolved,
+      reason: resolutionNotes
+    });
+    await client.query("COMMIT");
+    res.json({ ...resolved, resolved_by_name: req.user.name || req.user.email || null });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 const runMonitoringCron = asyncHandler(async (req, res) => {
   assertMonitoringCronSecret(req);
   const result = await sendMonitoringAlerts({ req });
@@ -121,6 +170,7 @@ module.exports = {
   getMonitoringAlertSnapshot,
   getMonitoringSummary,
   listMonitoringEvents,
+  resolveMonitoringEvent,
   runMonitoringCron,
   sendMonitoringTestAlert
 };

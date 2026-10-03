@@ -160,14 +160,24 @@ const buildBillEmail = ({ bill, business }) => {
   const businessName = business.business_name || "Water Billing";
   const total = Number(bill.total_amount || bill.amount || 0);
   const balance = Number(bill.balance_amount ?? total - Number(bill.paid_amount || 0));
-  const subject = `${businessName} bill ${bill.bill_number || bill.id}`;
+  const serviceCharge = bill.bill_origin === "service_charge";
+  const documentLabel = serviceCharge ? "service charge invoice" : "bill";
+  const subject = `${businessName} ${documentLabel} ${bill.bill_number || bill.id}`;
   const lines = [
     `Hello ${bill.customer_name},`,
     "",
-    `Your bill ${bill.bill_number || bill.id} for ${bill.billing_period_name || dateOnly(bill.billing_month)} is ready.`,
+    serviceCharge
+      ? `Your service charge invoice ${bill.bill_number || bill.id} is ready.`
+      : `Your bill ${bill.bill_number || bill.id} for ${bill.billing_period_name || dateOnly(bill.billing_month)} is ready.`,
     "",
     `Account: ${bill.acc_number}`,
-    `Units used: ${Number(bill.units_used || 0).toLocaleString()}`,
+    ...(serviceCharge
+      ? [
+          `Charge reference: ${bill.charge_number || "-"}`,
+          `Charge type: ${label(bill.charge_type || "service_charge")}`,
+          `Description: ${bill.service_charge_description || bill.payability_reason || "Customer service charge"}`
+        ]
+      : [`Units used: ${Number(bill.units_used || 0).toLocaleString()}`]),
     `Total billed: ${money(total)}`,
     `Paid / credit applied: ${money(bill.paid_amount)}`,
     `Amount due: ${money(balance)}`,
@@ -189,7 +199,7 @@ const buildReceiptEmail = ({ payment, allocations, customerBalance, business }) 
   const allocationLines = allocations.length
     ? allocations.map(
         (allocation) =>
-          `- ${allocation.bill_number || `Bill ${allocation.bill_id}`}: ${money(allocation.amount)} allocated, balance ${money(allocation.balance_amount)}`
+          `- ${allocation.allocation_acc_number ? `${allocation.allocation_acc_number} | ` : ""}${allocation.bill_number || `Bill ${allocation.bill_id}`}: ${money(allocation.amount)} allocated, balance ${money(allocation.balance_amount)}`
       )
     : ["- No open bills. Full amount stored as customer credit."];
   const lines = [
@@ -220,6 +230,11 @@ const buildBillSms = ({ bill, business }) => {
   const total = Number(bill.total_amount || bill.amount || 0);
   const balance = Number(bill.balance_amount ?? total - Number(bill.paid_amount || 0));
   const payHint = business.paybill_number ? ` Paybill ${business.paybill_number}.` : business.till_number ? ` Till ${business.till_number}.` : "";
+  if (bill.bill_origin === "service_charge") {
+    return `${businessName}: Service charge ${bill.bill_number || bill.id} for ${bill.acc_number}. ${label(
+      bill.charge_type || "service_charge"
+    )}: ${money(balance)} due by ${dateOnly(bill.due_date)}.${payHint}`;
+  }
   return `${businessName}: Bill ${bill.bill_number || bill.id} for ${bill.acc_number}. Amount due ${money(balance)} by ${dateOnly(
     bill.due_date
   )}. Total ${money(total)}.${payHint}`;
@@ -258,6 +273,7 @@ const sendDocumentEmail = async (client, req, { documentType, documentId, custom
   }
 
   const status = sendResult.skipped ? "skipped" : "sent";
+  const errorMessage = sendResult.skipped ? sendResult.error || "SMTP is not configured." : null;
   try {
     const log = await createDeliveryLog(client, {
       documentType,
@@ -267,11 +283,11 @@ const sendDocumentEmail = async (client, req, { documentType, documentId, custom
       recipient,
       subject,
       status,
-      errorMessage: sendResult.skipped ? "SMTP is not configured." : null,
+      errorMessage,
       providerMessageId: sendResult.messageId || null,
       sentBy: req.user.id
     });
-    return { status, log };
+    return { status, log, error_message: errorMessage };
   } catch (logError) {
     console.error("Document email sent, but delivery log could not be recorded.", logError);
     return { status, log: null, log_error: logError.message };
@@ -303,6 +319,7 @@ const sendDocumentSms = async (client, req, { documentType, documentId, customer
   }
 
   const status = sendResult.skipped ? "skipped" : "sent";
+  const errorMessage = sendResult.skipped ? sendResult.error || "SMS provider is not configured." : null;
   try {
     const log = await createDeliveryLog(client, {
       documentType,
@@ -312,11 +329,11 @@ const sendDocumentSms = async (client, req, { documentType, documentId, customer
       recipient,
       subject,
       status,
-      errorMessage: sendResult.skipped ? sendResult.error || "SMS provider is not configured." : null,
+      errorMessage,
       providerMessageId: sendResult.messageId || sendResult.providerStatus || null,
       sentBy: req.user.id
     });
-    return { status, log };
+    return { status, log, error_message: errorMessage };
   } catch (logError) {
     console.error("Document SMS sent, but delivery log could not be recorded.", logError);
     return { status, log: null, log_error: logError.message };
@@ -348,6 +365,7 @@ const sendDocumentWhatsApp = async (client, req, { documentType, documentId, cus
   }
 
   const status = sendResult.skipped ? "skipped" : "sent";
+  const errorMessage = sendResult.skipped ? sendResult.error || "WhatsApp provider is not configured." : null;
   try {
     const log = await createDeliveryLog(client, {
       documentType,
@@ -357,11 +375,11 @@ const sendDocumentWhatsApp = async (client, req, { documentType, documentId, cus
       recipient,
       subject,
       status,
-      errorMessage: sendResult.skipped ? sendResult.error || "WhatsApp provider is not configured." : null,
+      errorMessage,
       providerMessageId: sendResult.messageId || sendResult.providerStatus || null,
       sentBy: req.user.id
     });
-    return { status, log };
+    return { status, log, error_message: errorMessage };
   } catch (logError) {
     console.error("Document WhatsApp sent, but delivery log could not be recorded.", logError);
     return { status, log: null, log_error: logError.message };

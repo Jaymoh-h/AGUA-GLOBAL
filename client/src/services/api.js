@@ -26,9 +26,8 @@ export const setFutureDateOverrideHandler = (handler) => {
   };
 };
 
-const shouldPromptForFutureDateOverride = (message, options) =>
-  typeof window !== "undefined" &&
-  typeof window.prompt === "function" &&
+const shouldRequestFutureDateOverride = (message, options) =>
+  typeof futureDateOverrideHandler === "function" &&
   /Admin override reason is required/i.test(message || "") &&
   options.body &&
   typeof options.body === "object" &&
@@ -50,6 +49,7 @@ const request = async (path, options = {}) => {
   const response = await fetch(`${API_BASE}${path}`, {
     ...fetchOptions,
     credentials: "include",
+    cache: isUnsafeMethod(options.method) ? fetchOptions.cache : "no-store",
     headers,
     body: options.body ? JSON.stringify(options.body) : undefined
   });
@@ -62,10 +62,8 @@ const request = async (path, options = {}) => {
   if (!response.ok) {
     if (response.status === 401) clearSessionState();
     const message = data.message || "Request failed.";
-    if (shouldPromptForFutureDateOverride(message, options)) {
-      const reason = futureDateOverrideHandler
-        ? await futureDateOverrideHandler({ message, path })
-        : window.prompt("This date is later than today. Enter the admin override reason to continue:");
+    if (shouldRequestFutureDateOverride(message, options)) {
+      const reason = await futureDateOverrideHandler({ message, path });
       if (String(reason || "").trim()) {
         return request(path, {
           ...options,
@@ -131,10 +129,13 @@ export const api = {
     }),
   dashboard: () => request("/dashboard"),
   documents: {
-    list: (entityType, entityId) => request(`/documents?entity_type=${entityType}&entity_id=${entityId}`),
+    list: (entityType, entityId, customerId = "") =>
+      request(`/documents?entity_type=${entityType}&entity_id=${entityId}${customerId ? `&customer_id=${encodeURIComponent(customerId)}` : ""}`),
     upload: (payload) => request("/documents", { method: "POST", body: payload }),
-    remove: (id) => request(`/documents/${id}`, { method: "DELETE" }),
-    download: (id) => requestBlob(`/documents/${id}/download`)
+    remove: (id, customerId = "") =>
+      request(`/documents/${id}${customerId ? `?customer_id=${encodeURIComponent(customerId)}` : ""}`, { method: "DELETE" }),
+    download: (id, customerId = "") =>
+      requestBlob(`/documents/${id}/download${customerId ? `?customer_id=${encodeURIComponent(customerId)}` : ""}`)
   },
   knowledgeDocuments: {
     list: (params = {}) => {
@@ -152,6 +153,9 @@ export const api = {
       const query = new URLSearchParams(params);
       return request(`/reports/accountant${query.toString() ? `?${query}` : ""}`);
     },
+    cashFlowForecast: () => request("/reports/cash-flow-forecast"),
+    budgetVariance: () => request("/reports/budget-variance"),
+    saveMonthlyBudget: (month, payload) => request(`/reports/budget-targets/${encodeURIComponent(month)}`, { method: "PUT", body: payload }),
     dataQuality: () => request("/reports/data-quality"),
     backupStatus: () => request("/reports/backup-status"),
     backupRestoreDrills: () => request("/reports/backup-restore-drills"),
@@ -166,6 +170,7 @@ export const api = {
   monitoring: {
     summary: () => request("/monitoring/summary"),
     events: (limit = 100) => request(`/monitoring/events?limit=${limit}`),
+    resolveEvent: (id, payload) => request(`/monitoring/events/${id}/resolve`, { method: "PATCH", body: payload }),
     alertSnapshot: () => request("/monitoring/alert-snapshot"),
     sendTestAlert: () => request("/monitoring/test-alert", { method: "POST" }),
     reportClientEvent: (payload) => request("/monitoring/client-events", { method: "POST", body: payload })
@@ -173,24 +178,27 @@ export const api = {
   portal: {
     dashboard: (customerId = "") => request(`/portal/dashboard${customerId ? `?customer_id=${customerId}` : ""}`),
     getPayment: (id, customerId = "") => request(`/portal/payments/${id}${customerId ? `?customer_id=${customerId}` : ""}`),
-    createServiceRequest: (payload) => request("/portal/service-requests", { method: "POST", body: payload })
+    updateDeliveryPreferences: (payload) => request("/portal/delivery-preferences", { method: "PUT", body: payload }),
+    createServiceRequest: (payload) => request("/portal/service-requests", { method: "POST", body: payload }),
+    createReadingSubmission: (payload) => request("/portal/reading-submissions", { method: "POST", body: payload })
   },
   customers: {
     list: () => request("/customers"),
+    overview: (id) => request(`/customers/${id}/overview`),
     statement: (id, params = {}) => {
       const query = new URLSearchParams(params);
       return request(`/customers/${id}/statement${query.toString() ? `?${query}` : ""}`);
     },
     previewImport: (csv) => request("/customers/imports/preview", { method: "POST", body: { csv } }),
-    commitImport: (csv) => request("/customers/imports/commit", { method: "POST", body: { csv } }),
+    commitImport: (csv, reviewNotes) => request("/customers/imports/commit", { method: "POST", body: { csv, review_notes: reviewNotes } }),
     previewOpeningBalanceImport: (csv) =>
       request("/customers/opening-balances/imports/preview", { method: "POST", body: { csv } }),
-    commitOpeningBalanceImport: (csv) =>
-      request("/customers/opening-balances/imports/commit", { method: "POST", body: { csv } }),
+    commitOpeningBalanceImport: (csv, reviewNotes) =>
+      request("/customers/opening-balances/imports/commit", { method: "POST", body: { csv, review_notes: reviewNotes } }),
     closeAccount: (id, payload) => request(`/customers/${id}/close`, { method: "POST", body: payload }),
     create: (payload) => request("/customers", { method: "POST", body: payload }),
     update: (id, payload) => request(`/customers/${id}`, { method: "PUT", body: payload }),
-    remove: (id) => request(`/customers/${id}`, { method: "DELETE" })
+    remove: (id, payload) => request(`/customers/${id}`, { method: "DELETE", body: payload })
   },
   customerServiceCharges: {
     list: (params = {}) => {
@@ -202,12 +210,29 @@ export const api = {
     waive: (id, reason) => request(`/customer-service-charges/${id}/waive`, { method: "PATCH", body: { reason } }),
     cancel: (id, reason) => request(`/customer-service-charges/${id}/cancel`, { method: "PATCH", body: { reason } })
   },
+  paymentArrangements: {
+    list: (params = {}) => {
+      const query = new URLSearchParams(params);
+      return request(`/payment-arrangements${query.toString() ? `?${query}` : ""}`);
+    },
+    create: (payload) => request("/payment-arrangements", { method: "POST", body: payload }),
+    declineRequest: (id, reason) => request(`/payment-arrangements/requests/${id}/decline`, { method: "PATCH", body: { reason } }),
+    close: (id, payload) => request(`/payment-arrangements/${id}/close`, { method: "PATCH", body: payload })
+  },
+  standingOrders: {
+    list: (params = {}) => {
+      const query = new URLSearchParams(params);
+      return request(`/standing-orders${query.toString() ? `?${query}` : ""}`);
+    },
+    create: (payload) => request("/standing-orders", { method: "POST", body: payload }),
+    updateStatus: (id, payload) => request(`/standing-orders/${id}/status`, { method: "PATCH", body: payload })
+  },
   rates: {
     list: () => request("/rates"),
     create: (payload) => request("/rates", { method: "POST", body: payload }),
     update: (id, payload) => request(`/rates/${id}`, { method: "PUT", body: payload }),
-    replaceBlocks: (id, blocks, effectiveFrom = "") =>
-      request(`/rates/${id}/blocks`, { method: "PUT", body: { blocks, effective_from: effectiveFrom } })
+    replaceBlocks: (id, blocks, effectiveFrom = "", reviewNotes = "") =>
+      request(`/rates/${id}/blocks`, { method: "PUT", body: { blocks, effective_from: effectiveFrom, review_notes: reviewNotes } })
   },
   zones: {
     list: () => request("/zones"),
@@ -216,6 +241,27 @@ export const api = {
   },
   readings: {
     list: () => request("/readings"),
+    register: (params = {}) => {
+      const query = new URLSearchParams(params);
+      return request(`/readings/register${query.toString() ? `?${query}` : ""}`);
+    },
+    registerAll: async (params = {}) => {
+      const limit = 100;
+      const firstPage = await api.readings.register({ ...params, limit, offset: 0 });
+      const rows = [...(firstPage.rows || [])];
+      for (let offset = rows.length; offset < Number(firstPage.total || 0); offset += limit) {
+        const page = await api.readings.register({ ...params, limit, offset });
+        rows.push(...(page.rows || []));
+      }
+      return rows;
+    },
+    customerSubmissions: () => request("/readings/customer-submissions"),
+    reviewCustomerSubmission: (id, payload) =>
+      request(`/readings/customer-submissions/${id}/review`, { method: "POST", body: payload }),
+    anomalies: (periodStart = "") =>
+      request(`/readings/anomalies${periodStart ? `?period_start=${periodStart}` : ""}`),
+    estimationCandidates: (periodStart = "") =>
+      request(`/readings/estimation-candidates${periodStart ? `?period_start=${periodStart}` : ""}`),
     eligibleCustomers: (periodStart = "") =>
       request(`/readings/eligible-customers${periodStart ? `?period_start=${periodStart}` : ""}`),
     context: (customerId, readingDate, meterId = "") =>
@@ -242,8 +288,12 @@ export const api = {
       list: () => request("/billing/periods"),
       create: (payload) => request("/billing/periods", { method: "POST", body: payload }),
       readiness: (id) => request(`/billing/periods/${id}/readiness`),
-      updateStatus: (id, status, correctionReason = "") =>
-        request(`/billing/periods/${id}/status`, { method: "PATCH", body: { status, correction_reason: correctionReason } })
+      revenueAssurance: (id) => request(`/billing/periods/${id}/revenue-assurance`),
+      updateStatus: (id, status, { correctionReason = "", reviewNotes = "" } = {}) =>
+        request(`/billing/periods/${id}/status`, {
+          method: "PATCH",
+          body: { status, correction_reason: correctionReason, review_notes: reviewNotes }
+        })
     },
     settings: {
       get: () => request("/billing/settings"),
@@ -268,11 +318,15 @@ export const api = {
   businessSettings: {
     public: () => request("/business-settings/public"),
     get: () => request("/business-settings"),
+    integrationReadiness: () => request("/business-settings/integration-readiness"),
+    commissioningChecks: () => request("/business-settings/commissioning-checks"),
+    recordCommissioningCheck: (payload) => request("/business-settings/commissioning-checks", { method: "POST", body: payload }),
     update: (payload) => request("/business-settings", { method: "PUT", body: payload }),
     uploadLogo: (payload) => request("/business-settings/logo", { method: "POST", body: payload })
   },
   meters: {
     list: (customerId) => request(`/meters?customer_id=${customerId}`),
+    search: (query) => request(`/meters/search?search=${encodeURIComponent(query)}`),
     events: (customerId = "") => request(`/meters/events${customerId ? `?customer_id=${customerId}` : ""}`),
     create: (payload) => request("/meters", { method: "POST", body: payload }),
     replace: (payload) => request("/meters/replace", { method: "POST", body: payload }),
@@ -294,22 +348,69 @@ export const api = {
   },
   communications: {
     invoicePreview: () => request("/communications/invoice-preview"),
-    templates: (medium = "") => request(`/communications/templates${medium ? `?medium=${medium}` : ""}`),
+    arrearsFollowUp: (limit = 100, offset = 0) =>
+      request(`/communications/arrears-follow-up?limit=${encodeURIComponent(limit)}&offset=${encodeURIComponent(offset)}`),
+    paymentPlanFollowUp: () => request("/communications/payment-plan-follow-up"),
+    standingOrderFollowUp: () => request("/communications/standing-order-follow-up"),
+    disconnectionWarningFollowUp: () => request("/communications/disconnection-warning-follow-up"),
+    templates: (medium = "", alertType = "invoice_alert") => {
+      const query = new URLSearchParams({ alert_type: alertType });
+      if (medium) query.set("medium", medium);
+      return request(`/communications/templates?${query}`);
+    },
     createTemplate: (payload) => request("/communications/templates", { method: "POST", body: payload }),
     updateTemplate: (id, payload) => request(`/communications/templates/${id}`, { method: "PUT", body: payload }),
     campaigns: () => request("/communications/campaigns"),
+    deliveryExceptions: (params = {}) => {
+      const query = new URLSearchParams(params);
+      return request(`/communications/delivery-exceptions${query.toString() ? `?${query}` : ""}`);
+    },
     campaign: (id) => request(`/communications/campaigns/${id}`),
     sendInvoiceAlert: (customerId, payload) =>
       request(`/communications/invoice-alerts/${customerId}/send`, { method: "POST", body: payload }),
+    sendPaymentPlanAlert: (arrangementId, payload) =>
+      request(`/communications/payment-plan-alerts/${arrangementId}/send`, { method: "POST", body: payload }),
+    sendStandingOrderAlert: (standingOrderId, payload) =>
+      request(`/communications/standing-order-alerts/${standingOrderId}/send`, { method: "POST", body: payload }),
+    sendDisconnectionWarning: (customerId, payload) =>
+      request(`/communications/disconnection-warnings/${customerId}/send`, { method: "POST", body: payload }),
     bulkSendInvoiceAlerts: (payload) => request("/communications/invoice-alerts/bulk-send", { method: "POST", body: payload })
   },
   payments: {
     list: () => request("/payments"),
+    register: (params = {}) => {
+      const query = new URLSearchParams(params);
+      return request(`/payments/register${query.toString() ? `?${query}` : ""}`);
+    },
+    registerAll: async (params = {}) => {
+      const limit = 100;
+      const firstPage = await api.payments.register({ ...params, limit, offset: 0 });
+      const rows = [...(firstPage.rows || [])];
+      for (let offset = rows.length; offset < Number(firstPage.total || 0); offset += limit) {
+        const page = await api.payments.register({ ...params, limit, offset });
+        rows.push(...(page.rows || []));
+      }
+      return rows;
+    },
+    corrections: (limit = 12) => request(`/payments/corrections?limit=${encodeURIComponent(limit)}`),
+    importBatches: (limit = 12) => request(`/payments/imports/recent?limit=${encodeURIComponent(limit)}`),
+    mpesaStatus: () => request("/payments/mpesa/status"),
+    mpesaCallbackEvents: (params = {}) => {
+      const query = new URLSearchParams(params);
+      return request(`/payments/mpesa/callback-events${query.toString() ? `?${query}` : ""}`);
+    },
+    importMappingProfiles: (channel = "") =>
+      request(`/payments/import-mapping-profiles${channel ? `?channel=${encodeURIComponent(channel)}` : ""}`),
+    saveImportMappingProfile: (payload) => request("/payments/import-mapping-profiles", { method: "POST", body: payload }),
     suspense: () => request("/payments/suspense"),
     get: (id) => request(`/payments/${id}`),
     create: (payload) => request("/payments", { method: "POST", body: payload }),
     previewImport: (csv) => request("/payments/imports/preview", { method: "POST", body: { csv } }),
-    commitImport: (csv) => request("/payments/imports/commit", { method: "POST", body: { csv } }),
+    commitImport: (csv, sourceName = "", reconciliationExclusions = []) =>
+      request("/payments/imports/commit", {
+        method: "POST",
+        body: { csv, source_name: sourceName, reconciliation_exclusions: reconciliationExclusions }
+      }),
     update: (id, payload) => request(`/payments/${id}`, { method: "PUT", body: payload }),
     sendReceiptEmail: (id) => request(`/payments/${id}/email`, { method: "POST" }),
     sendReceiptSms: (id) => request(`/payments/${id}/sms`, { method: "POST" }),
@@ -321,7 +422,7 @@ export const api = {
     list: () => request("/expenses"),
     create: (payload) => request("/expenses", { method: "POST", body: payload }),
     previewImport: (csv) => request("/expenses/imports/preview", { method: "POST", body: { csv } }),
-    commitImport: (csv) => request("/expenses/imports/commit", { method: "POST", body: { csv } })
+    commitImport: (csv, reviewNotes) => request("/expenses/imports/commit", { method: "POST", body: { csv, review_notes: reviewNotes } })
   },
   contractorInvoices: {
     contractors: () => request("/contractor-invoices/contractors"),
@@ -352,6 +453,7 @@ export const api = {
     list: (status = "") => request(`/maintenance-requests${status ? `?status=${status}` : ""}`),
     assignees: () => request("/maintenance-requests/assignees"),
     create: (payload) => request("/maintenance-requests", { method: "POST", body: payload }),
+    dispatchBatch: (payload) => request("/maintenance-requests/dispatch", { method: "PUT", body: payload }),
     update: (id, payload) => request(`/maintenance-requests/${id}`, { method: "PUT", body: payload }),
     addExpense: (id, payload) => request(`/maintenance-requests/${id}/expenses`, { method: "POST", body: payload }),
     resolve: (id, payload) => request(`/maintenance-requests/${id}/resolve`, { method: "PATCH", body: payload })
@@ -381,7 +483,7 @@ export const api = {
     createAccessProfile: (id, payload) => request(`/users/${id}/access-profiles`, { method: "POST", body: payload }),
     updateAccessProfile: (id, profileId, payload) =>
       request(`/users/${id}/access-profiles/${profileId}`, { method: "PATCH", body: payload }),
-    detachAccessProfile: (id, profileId) =>
-      request(`/users/${id}/access-profiles/${profileId}`, { method: "DELETE" })
+    detachAccessProfile: (id, profileId, reviewNotes) =>
+      request(`/users/${id}/access-profiles/${profileId}`, { method: "DELETE", body: { review_notes: reviewNotes } })
   }
 };

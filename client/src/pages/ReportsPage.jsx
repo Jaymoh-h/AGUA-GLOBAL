@@ -1,13 +1,41 @@
-import { FileSpreadsheet, Printer, RefreshCw } from "lucide-react";
+import { Info, Printer, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import { EmptyTableRow } from "../components/EmptyState";
+import AccountingBillingOperationsReports from "../components/AccountingBillingOperationsReports";
+import AccountingCloseSupportReports from "../components/AccountingCloseSupportReports";
+import AccountingCollectionsControlReports from "../components/AccountingCollectionsControlReports";
+import AccountingContractorLedgerReports from "../components/AccountingContractorLedgerReports";
+import AccountingRevenueReports from "../components/AccountingRevenueReports";
+import CashFlowForecastPanel from "../components/CashFlowForecastPanel";
+import ContractorPayablesReport from "../components/ContractorPayablesReport";
+import DataQualityPanel from "../components/DataQualityPanel";
 import FocusNotice from "../components/FocusNotice";
-import StatCard from "../components/StatCard";
-import StatusBadge from "../components/StatusBadge";
+import ManagementPerformanceMetrics from "../components/ManagementPerformanceMetrics";
+import ManagementMetricDefinitions from "../components/ManagementMetricDefinitions";
+import ManagementCustomerReports from "../components/ManagementCustomerReports";
+import ManagementMaintenanceReports from "../components/ManagementMaintenanceReports";
+import ManagementRevenueReports from "../components/ManagementRevenueReports";
+import MonthlyBudgetControl from "../components/MonthlyBudgetControl";
+import ReportCatalog from "../components/ReportCatalog";
+import ReportPanelHeading from "../components/ReportPanelHeading";
+import ReportPrintHeader from "../components/ReportPrintHeader";
+import ReportSummaryCards from "../components/ReportSummaryCards";
+import ProfitStatement from "../components/ProfitStatement";
 import TableControls, { useTableControls } from "../components/TableControls";
+import WorkspaceState from "../components/WorkspaceState";
 import { api, assetUrl } from "../services/api";
 import { withPrintTitle } from "../utils/exportNames";
+import {
+  filtersForReportPeriod,
+  lastConcludedMonth,
+  readCustomReportPeriod,
+  readReportPeriodPreset,
+  reportPeriodPresets,
+  saveCustomReportPeriod,
+  saveReportPeriodPreset
+} from "../utils/reportPeriodPresets";
+import useReportsWorkspaceData from "../hooks/useReportsWorkspaceData";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const moneyOrDash = (value) => (value === null || value === undefined ? "-" : money(value));
@@ -27,20 +55,16 @@ const agingBucketFields = [
   "total_amount"
 ];
 
-const localDateInput = (dateValue = new Date()) => {
-  const year = dateValue.getFullYear();
-  const month = String(dateValue.getMonth() + 1).padStart(2, "0");
-  const day = String(dateValue.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-};
-
-const defaultFilters = () => {
-  const today = new Date();
-  return {
-    start_date: localDateInput(new Date(today.getFullYear(), today.getMonth(), 1)),
-    end_date: localDateInput(today)
-  };
-};
+const defaultFilters = () => filtersForReportPeriod("previous_month");
+const blankMonthlyBudget = () => ({
+  budget_month: lastConcludedMonth().key,
+  revenue_target: "",
+  collection_target: "",
+  operating_expense_budget: "",
+  notes: ""
+});
+const monthLabel = (value) =>
+  new Date(`${String(value || "").slice(0, 7)}-01T00:00:00`).toLocaleDateString("en-KE", { month: "long", year: "numeric" });
 
 const EmptyRow = ({ colSpan }) => (
   <EmptyTableRow colSpan={colSpan} title="No records found" detail="This report has no rows for the current filters." />
@@ -104,38 +128,47 @@ const dataQualityRecordColumns = {
 const reportSectionClass = (baseClass, isVisible) =>
   `${baseClass} ${isVisible ? "" : "report-section-collapsed"}`;
 
-function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
-  const [data, setData] = useState(null);
-  const [accountantData, setAccountantData] = useState(null);
-  const [businessSettings, setBusinessSettings] = useState(null);
+function ReportsPage({ user, navigationIntent, onClearNavigationIntent, onNavigate }) {
+  const [budgetForm, setBudgetForm] = useState(blankMonthlyBudget);
+  const [budgetSaving, setBudgetSaving] = useState(false);
+  const [budgetMessage, setBudgetMessage] = useState("");
   const [printScope, setPrintScope] = useState("accountant");
   const [printTarget, setPrintTarget] = useState("all");
   const [filters, setFilters] = useState(defaultFilters);
-  const [message, setMessage] = useState("");
-  const [accountantMessage, setAccountantMessage] = useState("");
+  const [periodPreset, setPeriodPreset] = useState(() => readReportPeriodPreset(user));
   const [printAllRows, setPrintAllRows] = useState(false);
-  const [dataQuality, setDataQuality] = useState([]);
   const [selectedQualityKey, setSelectedQualityKey] = useState("");
   const [activeManagementReport, setActiveManagementReport] = useState("billingSummary");
   const [activeAccountantReport, setActiveAccountantReport] = useState("profitLoss");
+  const [metricDefinitionsOpen, setMetricDefinitionsOpen] = useState(false);
+  const {
+    accountantData,
+    accountantLoading,
+    accountantMessage,
+    budgetVariance,
+    businessSettings,
+    cashFlowForecast,
+    data,
+    dataQuality,
+    loadAccountantReports,
+    loadSummary,
+    productionReport,
+    setBudgetVariance,
+    summaryError,
+    summaryLoading
+  } = useReportsWorkspaceData();
 
   useEffect(() => {
-    api.reports.summary().then(setData).catch((err) => setMessage(err.message));
-    api.reports.dataQuality().then(setDataQuality).catch(() => {});
-    api.businessSettings.get().then(setBusinessSettings).catch(() => {});
+    loadSummary();
   }, []);
-
-  const loadAccountantReports = (nextFilters = filters) => {
-    setAccountantMessage("");
-    return api.reports
-      .accountant(nextFilters)
-      .then(setAccountantData)
-      .catch((err) => setAccountantMessage(err.message));
-  };
 
   useEffect(() => {
-    loadAccountantReports(defaultFilters());
-  }, []);
+    const savedPreset = readReportPeriodPreset(user);
+    const nextFilters = savedPreset === "custom" ? readCustomReportPeriod(user) || defaultFilters() : filtersForReportPeriod(savedPreset);
+    setPeriodPreset(savedPreset);
+    setFilters(nextFilters);
+    loadAccountantReports(nextFilters);
+  }, [user?.access_profile_id, user?.id, user?.role]);
 
   const totals = useMemo(() => {
     if (!data) return null;
@@ -147,7 +180,8 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
       maintenanceActive: Number(data.maintenanceTotals?.active_count || 0),
       maintenanceUrgent: Number(data.maintenanceTotals?.urgent_count || 0),
       maintenanceOverdue: Number(data.maintenanceTotals?.overdue_count || 0),
-      maintenanceResolved30d: Number(data.maintenanceTotals?.resolved_30d || 0)
+      maintenanceResolved30d: Number(data.maintenanceTotals?.resolved_30d || 0),
+      maintenanceResolutionDays: Number(data.maintenanceTotals?.avg_resolution_days || 0)
     };
   }, [data]);
 
@@ -164,18 +198,117 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
       serviceCharges: Number(accountantData.serviceChargeTotals?.charged_amount || 0),
       deposits: accountantData.depositRegister.reduce((sum, row) => sum + Number(row.deposit_amount || 0), 0),
       payables: Number(accountantData.contractorPayablesTotals?.open_amount || 0),
-      overduePayables: Number(accountantData.contractorPayablesTotals?.overdue_amount || 0)
+      overduePayables: Number(accountantData.contractorPayablesTotals?.overdue_amount || 0),
+      unitsBilled: Number(accountantData.billingTotals?.units_billed || 0),
+      approvedPayrollLiability: Number(accountantData.payrollLiabilityTotals?.approved_amount || 0),
+      approvedPayrollRuns: Number(accountantData.payrollLiabilityTotals?.approved_run_count || 0)
     };
   }, [accountantData]);
 
+  const productionTotals = useMemo(() => {
+    const weeks = productionReport?.weeks || [];
+    return weeks.reduce(
+      (summary, week) => ({
+        weekCount: summary.weekCount + 1,
+        consumption: summary.consumption + Number(week.total_consumption || 0),
+        revenue: summary.revenue + Number(week.total_revenue || 0)
+      }),
+      { weekCount: 0, consumption: 0, revenue: 0 }
+    );
+  }, [productionReport]);
+
+  const reportMetrics = useMemo(() => {
+    if (!accountantTotals || !totals) return [];
+    const productionGap = productionTotals.consumption - accountantTotals.unitsBilled;
+    return [
+      {
+        key: "production-variance",
+        label: "Output / billed variance",
+        value: productionTotals.weekCount ? `${productionGap > 0 ? "+" : productionGap < 0 ? "-" : ""}${number(Math.abs(productionGap))} units` : "Awaiting data",
+        target: { page: "production", focus: "production_gap", label: "Production report" }
+      },
+      {
+        key: "maintenance-turnaround",
+        label: "Maintenance turnaround",
+        value: `${totals.maintenanceResolutionDays.toFixed(1)} days`,
+        target: { page: "maintenance", focus: "overdue_maintenance", label: "Maintenance work" }
+      },
+      {
+        key: "approved-payroll-liability",
+        label: "Approved payroll liability",
+        value: money(accountantTotals.approvedPayrollLiability),
+        target: { page: "payroll", focus: "payroll_attention", label: "Payroll control" }
+      },
+      {
+        key: "contractor-payables",
+        label: "Open contractor payables",
+        value: money(accountantTotals.payables),
+        target: { page: "contractors", focus: "overdue_supplier_invoices", label: "Supplier payables" }
+      }
+    ];
+  }, [accountantTotals, productionTotals, totals]);
+
   const handleFilterChange = (event) => {
     const { name, value } = event.target;
-    setFilters((current) => ({ ...current, [name]: value }));
+    setPeriodPreset("custom");
+    saveReportPeriodPreset(user, "custom");
+    setFilters((current) => {
+      const nextFilters = { ...current, [name]: value };
+      saveCustomReportPeriod(user, nextFilters);
+      return nextFilters;
+    });
+  };
+
+  const handlePeriodPresetChange = (event) => {
+    const nextPreset = event.target.value;
+    setPeriodPreset(nextPreset);
+    saveReportPeriodPreset(user, nextPreset);
+    if (nextPreset === "custom") return;
+    const nextFilters = filtersForReportPeriod(nextPreset);
+    setFilters(nextFilters);
+    loadAccountantReports(nextFilters);
   };
 
   const handleFilterSubmit = (event) => {
     event.preventDefault();
     loadAccountantReports(filters);
+  };
+
+  const saveMonthlyBudget = async (event) => {
+    event.preventDefault();
+    setBudgetMessage("");
+    setBudgetSaving(true);
+    try {
+      await api.reports.saveMonthlyBudget(budgetForm.budget_month, {
+        revenue_target: Number(budgetForm.revenue_target),
+        collection_target: Number(budgetForm.collection_target),
+        operating_expense_budget: Number(budgetForm.operating_expense_budget),
+        notes: budgetForm.notes
+      });
+      setBudgetForm(blankMonthlyBudget());
+      setBudgetVariance(await api.reports.budgetVariance());
+      setBudgetMessage("Monthly budget saved.");
+    } catch (err) {
+      setBudgetMessage(err.message);
+    } finally {
+      setBudgetSaving(false);
+    }
+  };
+
+  const monthlyForecastBaseline = cashFlowForecast?.rows?.find(
+    (row) => String(row.month_start || "").slice(0, 7) === budgetForm.budget_month
+  );
+
+  const applyForecastBudgetBaseline = () => {
+    if (!monthlyForecastBaseline) return;
+    setBudgetForm((current) => ({
+      ...current,
+      revenue_target: String(monthlyForecastBaseline.expected_billings),
+      collection_target: String(monthlyForecastBaseline.projected_collections),
+      operating_expense_budget: String(monthlyForecastBaseline.projected_expenses),
+      notes: current.notes || "Forecast baseline loaded for review before budget approval."
+    }));
+    setBudgetMessage("Forecast baseline loaded. Review it before saving.");
   };
 
   const printReport = (scope, target = "all") => {
@@ -235,6 +368,7 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const focusKey = navigationIntent?.page === "reports" ? navigationIntent.focus : "";
   const dataQualityFocusKeys = ["duplicate_open_payable_bills", "future_dated_operational_records"];
   const hasDataQualityFocus = dataQualityFocusKeys.includes(focusKey);
+  const hasMonthlyBudgetFocus = focusKey === "monthly_budget";
   const visibleDataQuality = hasDataQualityFocus
     ? dataQuality.filter((check) => check.key === focusKey)
     : dataQuality;
@@ -255,6 +389,11 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
     .filter((check) => check.severity === "high")
     .reduce((sum, check) => sum + Number(check.count || 0), 0);
   const reviewableQualityCount = dataQuality.filter((check) => Number(check.count || 0) > 0 && check.records?.length).length;
+  const budgetRows = budgetVariance?.rows || [];
+  const budgetAttentionCount = budgetRows.filter((row) => row.revenue_status === "behind").length;
+  const currentBudgetMonth = lastConcludedMonth().key;
+  const currentBudget = budgetRows.find((row) => String(row.budget_month).startsWith(currentBudgetMonth));
+  const canManageMonthlyBudget = ["admin", "accountant"].includes(user?.role);
   const receiptRegisterTable = useTableControls(accountantData?.receiptRegister || [], {
     searchFields: ["receipt_number", "payment_date", "customer_name", "acc_number", "payment_channel", "external_reference", "recorded_by_name"]
   });
@@ -492,103 +631,23 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
     printAllRows && printScope === "management" ? printTarget === "all" || printTarget === key : activeManagementReport === key;
   const showAccountantReport = (key) =>
     printAllRows && printScope === "accountant" ? printTarget === "all" || printTarget === key : activeAccountantReport === key;
-  const renderProfitStatement = (statement, title, variant) => (
-    <div className={`panel profit-loss-statement profit-loss-statement-${variant}`}>
-      <div className="panel-heading compact-heading">
-        <h3>{title}</h3>
-        <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", `${variant}ProfitLoss`)} title={`Print ${title.toLowerCase()}`}>
-          <Printer size={17} />
-        </button>
-      </div>
-      <div className="reading-context">
-        <div>
-          <span>Revenue</span>
-          <strong>{money(statement.totals?.revenue)}</strong>
-        </div>
-        <div>
-          <span>Expenses</span>
-          <strong>{money(statement.totals?.expenses)}</strong>
-        </div>
-        <div>
-          <span>Net profit</span>
-          <strong>{money(statement.totals?.net_profit)}</strong>
-        </div>
-        <div>
-          <span>Margin</span>
-          <strong>{percent(statement.totals?.margin)}</strong>
-        </div>
-      </div>
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Line</th>
-              <th>Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr className="muted-total">
-              <td colSpan="2">Revenue</td>
-            </tr>
-            {statement.revenue_lines?.map((row) => (
-              <tr key={`revenue-${title}-${row.label}`}>
-                <td>
-                  {row.label}
-                  {row.detail ? <small>{row.detail}</small> : null}
-                </td>
-                <td>{money(row.amount)}</td>
-              </tr>
-            ))}
-            <tr className="muted-total">
-              <td colSpan="2">Expenses</td>
-            </tr>
-            {statement.expense_lines?.length ? (
-              statement.expense_lines.map((row) => (
-                <tr key={`expense-${title}-${row.label}`}>
-                  <td>
-                    {row.label}
-                    {row.detail ? <small>{row.detail}</small> : null}
-                  </td>
-                  <td>{money(row.amount)}</td>
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td>No expenses recorded</td>
-                <td>{money(0)}</td>
-              </tr>
-            )}
-            {statement.notes?.length ? (
-              <>
-                <tr className="muted-total">
-                  <td colSpan="2">Notes</td>
-                </tr>
-                {statement.notes.map((row) => (
-                  <tr key={`note-${title}-${row.label}`}>
-                    <td>
-                      {row.label}
-                      {row.detail ? <small>{row.detail}</small> : null}
-                    </td>
-                    <td>{money(row.amount)}</td>
-                  </tr>
-                ))}
-              </>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-
-  if (message) return <p className="form-error">{message}</p>;
-  if (!data || !totals) return <p className="muted">Loading reports...</p>;
+  if (summaryLoading) {
+    return <WorkspaceState title="Preparing management reports" detail="Retrieving current billing, collections, customer, and field reporting measures." />;
+  }
+  if (summaryError) {
+    return <WorkspaceState state="error" title="Management reports could not load" detail={summaryError} onRetry={loadSummary} />;
+  }
+  if (!data || !totals) {
+    return <WorkspaceState state="error" title="Management reports are unavailable" detail="No reporting summary was returned. Retry when the service is available." onRetry={loadSummary} />;
+  }
 
   return (
-    <section className="page-stack">
-      <header className="page-header">
+    <section className="page-stack performance-reporting-page">
+      <header className="page-header performance-reporting-header">
         <div>
           <p className="eyebrow">Management</p>
-          <h2>Reports</h2>
+          <h2>Management intelligence</h2>
+          <p>Track cash, arrears, delivery, and field exposure before they become a month-end surprise.</p>
         </div>
         <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "all")} title="Print management reports">
           <Printer size={18} />
@@ -602,485 +661,143 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
           onClear={onClearNavigationIntent}
         />
       ) : null}
+      {hasMonthlyBudgetFocus ? (
+        <FocusNotice
+          title="Monthly budget control"
+          detail="Review the current revenue, collection, and operating-cost variances, then update the recorded target when its approved basis changes."
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
 
-      <div className="panel screen-only">
-        <div className="panel-heading">
-          <div>
-            <h3>Data Quality Checks</h3>
-            <p className="muted">
-              {qualityIssueCount
-                ? `${number(qualityIssueCount)} finding(s), ${number(highQualityIssueCount)} high priority.`
-                : "No active findings from the current checks."}
-            </p>
-          </div>
-          {reviewableQualityCount ? (
-            <span className="status status-pending">{number(reviewableQualityCount)} reviewable</span>
-          ) : (
-            <span className="status status-paid">clear</span>
-          )}
-        </div>
-        <div className="report-catalog compact-report-catalog">
-          {visibleDataQuality.map((check) => (
-            <button
-              className={selectedQuality?.key === check.key ? "report-catalog-item active" : "report-catalog-item"}
-              disabled={!check.records?.length}
-              key={check.key}
-              onClick={() => setSelectedQualityKey(check.key)}
-              type="button"
-            >
-              <strong>{check.label}</strong>
-              <span>{label(check.severity)} | {number(check.count)} finding(s)</span>
-              <small>{check.records?.length ? "Open review detail" : check.detail}</small>
-            </button>
-          ))}
-          {!visibleDataQuality.length ? <p className="muted">No checks available.</p> : null}
-        </div>
-        {selectedQuality && selectedQualityColumns.length ? (
-          <div className="quality-detail-panel">
-            <div className="panel-heading compact-heading">
-              <div>
-                <h3>{selectedQuality.label}</h3>
-                <small>
-                  Showing up to {number(selectedQualityRecords.length)} affected records for review.
-                </small>
-              </div>
-            </div>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    {selectedQualityColumns.map(([column]) => (
-                      <th key={column}>{column}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedQualityRecords.length ? (
-                    selectedQualityRecords.map((row, index) => (
-                      <tr key={`${selectedQuality.key}-${row.id || index}-${index}`}>
-                        {selectedQualityColumns.map(([column, value]) => (
-                          <td key={column}>{value(row) || "-"}</td>
-                        ))}
-                      </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={selectedQualityColumns.length} className="muted">
-                        No affected records returned for this check.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : null}
+      <ManagementPerformanceMetrics
+        accountantTotals={accountantTotals || { approvedPayrollLiability: 0, approvedPayrollRuns: 0, overduePayables: 0, payables: 0, unitsBilled: 0 }}
+        highPriorityQualityCount={highQualityIssueCount}
+        money={money}
+        number={number}
+        productionTotals={productionTotals}
+        qualityIssueCount={qualityIssueCount}
+        totals={totals}
+      />
+
+      <div className="management-metric-definition-trigger screen-only">
+        <p>Report measures preserve their own reporting basis and open the operating surface that can improve the result.</p>
+        <button className="icon-button" type="button" onClick={() => setMetricDefinitionsOpen((current) => !current)} title="Review report metric definitions" aria-label="Review report metric definitions" aria-expanded={metricDefinitionsOpen}><Info size={16} /></button>
       </div>
 
-      <div className="panel screen-only">
-        <div className="panel-heading">
-          <div>
-            <h3>Management Report Catalog</h3>
-            <p className="muted">Choose one report to open. Print all remains available from the page header.</p>
-          </div>
-        </div>
-        <div className="report-catalog">
-          {managementReportCatalog.map((report) => (
-            <button
-              className={activeManagementReport === report.key ? "report-catalog-item active" : "report-catalog-item"}
-              key={report.key}
-              onClick={() => setActiveManagementReport(report.key)}
-              type="button"
-            >
-              <strong>{report.title}</strong>
-              <span>{report.detail}</span>
-            </button>
-          ))}
-        </div>
-      </div>
+      {metricDefinitionsOpen ? (
+        <ManagementMetricDefinitions
+          description="These operational measures use the selected report period where stated. Production, field, payroll, and supplier figures remain distinct instead of being combined into an untraceable total."
+          metrics={reportMetrics}
+          onClose={() => setMetricDefinitionsOpen(false)}
+          onNavigate={onNavigate}
+          title="Management report definitions"
+        />
+      ) : null}
+
+      <CashFlowForecastPanel
+        forecast={cashFlowForecast}
+        money={money}
+        moneyOrDash={moneyOrDash}
+        number={number}
+        percent={percent}
+        sumRows={sumRows}
+      />
+
+      <MonthlyBudgetControl
+        attentionCount={budgetAttentionCount}
+        budgetForm={budgetForm}
+        budgetMessage={budgetMessage}
+        budgetRows={budgetRows}
+        budgetSaving={budgetSaving}
+        canManage={canManageMonthlyBudget}
+        currentBudget={currentBudget}
+        monthLabel={monthLabel}
+        money={money}
+        monthlyForecastBaseline={monthlyForecastBaseline}
+        number={number}
+        onApplyForecastBaseline={applyForecastBudgetBaseline}
+        onChange={(field, value) => setBudgetForm((current) => ({ ...current, [field]: value }))}
+        onSave={saveMonthlyBudget}
+      />
+
+      <DataQualityPanel
+        highPriorityCount={highQualityIssueCount}
+        issueCount={qualityIssueCount}
+        label={label}
+        number={number}
+        onSelect={setSelectedQualityKey}
+        reviewableCount={reviewableQualityCount}
+        selectedCheck={selectedQuality}
+        selectedColumns={selectedQualityColumns}
+        selectedRecords={selectedQualityRecords}
+        visibleChecks={visibleDataQuality}
+      />
+
+      <ReportCatalog
+        activeKey={activeManagementReport}
+        description="Open a report for review or print it directly. Print all remains available from the page header."
+        items={managementReportCatalog}
+        onPrint={(target) => printReport("management", target)}
+        onSelect={setActiveManagementReport}
+        title="Management Report Catalog"
+      />
 
       <div className={`print-surface report-print report-print-management report-print-${printTarget} ${printScope === "management" ? "active-print-surface" : ""}`}>
-        <div className="report-print-header">
-          {businessSettings?.logo_url ? (
-            <img className="receipt-logo" src={assetUrl(businessSettings.logo_url)} alt="Business logo" />
-          ) : (
-            <div className="receipt-logo-mark">{businessSettings?.business_name?.slice(0, 2) || "AG"}</div>
-          )}
-          <div>
-            <h3>{businessSettings?.business_name || "Water Billing"}</h3>
-            {businessSettings?.legal_name ? <p>{businessSettings.legal_name}</p> : null}
-            {businessSettings?.physical_address ? <p>{businessSettings.physical_address}</p> : null}
-            <p>{[businessSettings?.phone, businessSettings?.email].filter(Boolean).join(" | ")}</p>
-            {businessSettings?.tax_pin ? <p>PIN: {businessSettings.tax_pin}</p> : null}
-          </div>
-          <div className="report-print-meta">
-            <span>{managementPrintTitle}</span>
-            <strong>As at {date(new Date().toISOString())}</strong>
-            <small>Printed {date(new Date().toISOString())}</small>
-          </div>
-        </div>
+        <ReportPrintHeader
+          assetUrl={assetUrl}
+          businessSettings={businessSettings}
+          printedAt={date(new Date().toISOString())}
+          reportPeriod={`As at ${date(new Date().toISOString())}`}
+          reportTitle={managementPrintTitle}
+        />
 
-        <div className="stat-grid report-summary-section">
-          <StatCard label="Billed" value={money(totals.billed)} detail="Last 12 billing periods" />
-          <StatCard label="Collected" value={money(totals.collected)} detail="Recent posted receipts" />
-          <StatCard label="Outstanding" value={money(totals.arrears)} detail="Open balances" />
-          <StatCard label="Customers owing" value={number(totals.openCustomers)} detail="Accounts with arrears" />
-          <StatCard label="Maintenance active" value={number(totals.maintenanceActive)} detail="Open and in progress" />
-          <StatCard label="Maintenance urgent" value={number(totals.maintenanceUrgent)} detail="Active urgent requests" />
-          <StatCard label="Maintenance overdue" value={number(totals.maintenanceOverdue)} detail="Past target date" />
-          <StatCard label="Resolved 30d" value={number(totals.maintenanceResolved30d)} detail="Closed recently" />
-        </div>
+        <ReportSummaryCards
+          items={[
+            { label: "Billed", value: money(totals.billed), detail: "Last 12 billing periods" },
+            { label: "Collected", value: money(totals.collected), detail: "Recent posted receipts" },
+            { label: "Outstanding", value: money(totals.arrears), detail: "Open balances" },
+            { label: "Customers owing", value: number(totals.openCustomers), detail: "Accounts with arrears" },
+            { label: "Maintenance active", value: number(totals.maintenanceActive), detail: "Open and in progress" },
+            { label: "Maintenance urgent", value: number(totals.maintenanceUrgent), detail: "Active urgent requests" },
+            { label: "Maintenance overdue", value: number(totals.maintenanceOverdue), detail: "Past target date" },
+            { label: "Resolved 30d", value: number(totals.maintenanceResolved30d), detail: "Closed recently" }
+          ]}
+        />
 
       <section className="report-grid">
-        <div className={reportSectionClass("panel management-section management-section-billingSummary", showManagementReport("billingSummary"))}>
-          <div className="panel-heading">
-            <h3>Billing Summary</h3>
-            <div className="row-actions">
-              <FileSpreadsheet size={18} />
-              <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "billingSummary")} title="Print billing summary">
-                <Printer size={17} />
-              </button>
-            </div>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Period</th>
-                  <th>Bills</th>
-                  <th>Units</th>
-                  <th>Billed</th>
-                  <th>Paid</th>
-                  <th>Balance</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.billingSummary.map((row) => (
-                  <tr key={row.period_start}>
-                    <td>{row.period_name}</td>
-                    <td>{number(row.bill_count)}</td>
-                    <td>{number(row.units_billed)}</td>
-                    <td>{money(row.billed_amount)}</td>
-                    <td>{money(row.paid_amount)}</td>
-                    <td>{money(row.balance_amount)}</td>
-                  </tr>
-                ))}
-                {data.billingSummary.length ? (
-                  <tr className="muted-total">
-                    <td><strong>Total</strong></td>
-                    <td><strong>{number(billingSummaryTotals.bill_count)}</strong></td>
-                    <td><strong>{number(billingSummaryTotals.units_billed)}</strong></td>
-                    <td><strong>{money(billingSummaryTotals.billed_amount)}</strong></td>
-                    <td><strong>{money(billingSummaryTotals.paid_amount)}</strong></td>
-                    <td><strong>{money(billingSummaryTotals.balance_amount)}</strong></td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <ManagementRevenueReports
+          agingRows={data.agingSummary}
+          agingTotals={agingSummaryTotals}
+          billingRows={data.billingSummary}
+          billingTotals={billingSummaryTotals}
+          collectionsRows={data.collectionsSummary}
+          collectionsTotals={collectionsSummaryTotals}
+          date={date}
+          isVisible={showManagementReport}
+          money={money}
+          number={number}
+          onPrint={(target) => printReport("management", target)}
+          routeRows={data.zoneReadingSummary}
+          routeTotals={zoneReadingTotals}
+        />
 
-        <div className={reportSectionClass("panel management-section management-section-agingAnalysis", showManagementReport("agingAnalysis"))}>
-          <div className="panel-heading">
-            <h3>Aging Analysis</h3>
-            <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "agingAnalysis")} title="Print aging analysis">
-              <Printer size={17} />
-            </button>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Bucket</th>
-                  <th>Bills</th>
-                  <th>Balance</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.agingSummary.map((row) => (
-                  <tr key={row.bucket}>
-                    <td>{row.bucket}</td>
-                    <td>{number(row.bill_count)}</td>
-                    <td>{money(row.balance_amount)}</td>
-                  </tr>
-                ))}
-                {data.agingSummary.length ? (
-                  <tr className="muted-total">
-                    <td><strong>Total</strong></td>
-                    <td><strong>{number(agingSummaryTotals.bill_count)}</strong></td>
-                    <td><strong>{money(agingSummaryTotals.balance_amount)}</strong></td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className={reportSectionClass("panel management-section management-section-collections", showManagementReport("collections"))}>
-          <div className="panel-heading">
-            <h3>Collections</h3>
-            <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "collections")} title="Print collections">
-              <Printer size={17} />
-            </button>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Channel</th>
-                  <th>Receipts</th>
-                  <th>Received</th>
-                  <th>Allocated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.collectionsSummary.map((row) => (
-                  <tr key={`${row.payment_date}-${row.payment_channel}`}>
-                    <td>{date(row.payment_date)}</td>
-                    <td>{row.payment_channel}</td>
-                    <td>{number(row.receipt_count)}</td>
-                    <td>{money(row.received_amount)}</td>
-                    <td>{money(row.allocated_amount)}</td>
-                  </tr>
-                ))}
-                {data.collectionsSummary.length ? (
-                  <tr className="muted-total">
-                    <td colSpan="2"><strong>Total</strong></td>
-                    <td><strong>{number(collectionsSummaryTotals.receipt_count)}</strong></td>
-                    <td><strong>{money(collectionsSummaryTotals.received_amount)}</strong></td>
-                    <td><strong>{money(collectionsSummaryTotals.allocated_amount)}</strong></td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className={reportSectionClass("panel management-section management-section-routeSummary", showManagementReport("routeSummary"))}>
-          <div className="panel-heading">
-            <h3>Route Reading Summary</h3>
-            <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "routeSummary")} title="Print route reading summary">
-              <Printer size={17} />
-            </button>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Zone</th>
-                  <th>Customers</th>
-                  <th>With Readings</th>
-                  <th>Missing</th>
-                  <th>Latest Reading</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.zoneReadingSummary.map((row) => (
-                  <tr key={row.zone_id}>
-                    <td>{row.zone_name}</td>
-                    <td>{number(row.customer_count)}</td>
-                    <td>{number(row.customers_with_readings)}</td>
-                    <td>{number(row.customers_without_readings)}</td>
-                    <td>{date(row.latest_reading_date)}</td>
-                  </tr>
-                ))}
-                {data.zoneReadingSummary.length ? (
-                  <tr className="muted-total">
-                    <td><strong>Total</strong></td>
-                    <td><strong>{number(zoneReadingTotals.customer_count)}</strong></td>
-                    <td><strong>{number(zoneReadingTotals.customers_with_readings)}</strong></td>
-                    <td><strong>{number(zoneReadingTotals.customers_without_readings)}</strong></td>
-                    <td>-</td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className={reportSectionClass("panel management-section management-section-maintenanceStatus", showManagementReport("maintenanceStatus"))}>
-          <div className="panel-heading">
-            <h3>Maintenance Status</h3>
-            <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "maintenanceStatus")} title="Print maintenance status">
-              <Printer size={17} />
-            </button>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Status</th>
-                  <th>Requests</th>
-                  <th>Urgent</th>
-                  <th>Overdue</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.maintenanceByStatus?.length ? (
-                  data.maintenanceByStatus.map((row) => (
-                    <tr key={row.status}>
-                      <td>{label(row.status)}</td>
-                      <td>{number(row.request_count)}</td>
-                      <td>{number(row.urgent_count)}</td>
-                      <td>{number(row.overdue_count)}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <EmptyRow colSpan={4} />
-                )}
-                {data.maintenanceByStatus?.length ? (
-                  <tr className="muted-total">
-                    <td><strong>Total</strong></td>
-                    <td><strong>{number(maintenanceStatusTotals.request_count)}</strong></td>
-                    <td><strong>{number(maintenanceStatusTotals.urgent_count)}</strong></td>
-                    <td><strong>{number(maintenanceStatusTotals.overdue_count)}</strong></td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className={reportSectionClass("panel management-section management-section-maintenanceCategory", showManagementReport("maintenanceCategory"))}>
-          <div className="panel-heading">
-            <h3>Maintenance By Category</h3>
-            <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "maintenanceCategory")} title="Print maintenance by category">
-              <Printer size={17} />
-            </button>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Category</th>
-                  <th>Active</th>
-                  <th>Urgent</th>
-                  <th>Overdue</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.maintenanceByCategory?.length ? (
-                  data.maintenanceByCategory.map((row) => (
-                    <tr key={row.category}>
-                      <td>{label(row.category)}</td>
-                      <td>{number(row.request_count)}</td>
-                      <td>{number(row.urgent_count)}</td>
-                      <td>{number(row.overdue_count)}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <EmptyRow colSpan={4} />
-                )}
-                {data.maintenanceByCategory?.length ? (
-                  <tr className="muted-total">
-                    <td><strong>Total</strong></td>
-                    <td><strong>{number(maintenanceCategoryTotals.request_count)}</strong></td>
-                    <td><strong>{number(maintenanceCategoryTotals.urgent_count)}</strong></td>
-                    <td><strong>{number(maintenanceCategoryTotals.overdue_count)}</strong></td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className={reportSectionClass("panel management-section management-section-maintenanceZone", showManagementReport("maintenanceZone"))}>
-          <div className="panel-heading">
-            <h3>Maintenance By Zone</h3>
-            <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "maintenanceZone")} title="Print maintenance by zone">
-              <Printer size={17} />
-            </button>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Zone</th>
-                  <th>Active</th>
-                  <th>Urgent</th>
-                  <th>Overdue</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.maintenanceByZone?.length ? (
-                  data.maintenanceByZone.map((row) => (
-                    <tr key={row.zone_name}>
-                      <td>{row.zone_name}</td>
-                      <td>{number(row.request_count)}</td>
-                      <td>{number(row.urgent_count)}</td>
-                      <td>{number(row.overdue_count)}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <EmptyRow colSpan={4} />
-                )}
-                {data.maintenanceByZone?.length ? (
-                  <tr className="muted-total">
-                    <td><strong>Total</strong></td>
-                    <td><strong>{number(maintenanceZoneTotals.request_count)}</strong></td>
-                    <td><strong>{number(maintenanceZoneTotals.urgent_count)}</strong></td>
-                    <td><strong>{number(maintenanceZoneTotals.overdue_count)}</strong></td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className={reportSectionClass("panel management-section management-section-maintenanceAssignee", showManagementReport("maintenanceAssignee"))}>
-          <div className="panel-heading">
-            <h3>Maintenance Assignment</h3>
-            <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "maintenanceAssignee")} title="Print maintenance assignment">
-              <Printer size={17} />
-            </button>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Assigned To</th>
-                  <th>Active</th>
-                  <th>Open</th>
-                  <th>In Progress</th>
-                  <th>Overdue</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.maintenanceByAssignee?.length ? (
-                  data.maintenanceByAssignee.map((row) => (
-                    <tr key={row.assigned_to_name}>
-                      <td>{row.assigned_to_name}</td>
-                      <td>{number(row.request_count)}</td>
-                      <td>{number(row.open_count)}</td>
-                      <td>{number(row.in_progress_count)}</td>
-                      <td>{number(row.overdue_count)}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <EmptyRow colSpan={5} />
-                )}
-                {data.maintenanceByAssignee?.length ? (
-                  <tr className="muted-total">
-                    <td><strong>Total</strong></td>
-                    <td><strong>{number(maintenanceAssigneeTotals.request_count)}</strong></td>
-                    <td><strong>{number(maintenanceAssigneeTotals.open_count)}</strong></td>
-                    <td><strong>{number(maintenanceAssigneeTotals.in_progress_count)}</strong></td>
-                    <td><strong>{number(maintenanceAssigneeTotals.overdue_count)}</strong></td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <ManagementMaintenanceReports
+          assigneeTotals={maintenanceAssigneeTotals}
+          byAssigneeRows={data.maintenanceByAssignee || []}
+          byCategoryRows={data.maintenanceByCategory || []}
+          byStatusRows={data.maintenanceByStatus || []}
+          byZoneRows={data.maintenanceByZone || []}
+          categoryTotals={maintenanceCategoryTotals}
+          isVisible={showManagementReport}
+          label={label}
+          number={number}
+          onPrint={(target) => printReport("management", target)}
+          statusTotals={maintenanceStatusTotals}
+          zoneTotals={maintenanceZoneTotals}
+        />
 
         <div className={reportSectionClass("panel full-span management-section management-section-maintenanceRegister", showManagementReport("maintenanceRegister"))}>
-          <div className="panel-heading">
-            <h3>Maintenance Register</h3>
-            <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "maintenanceRegister")} title="Print maintenance register">
-              <Printer size={17} />
-            </button>
-          </div>
+          <ReportPanelHeading title="Maintenance Register" printLabel="maintenance register" onPrint={() => printReport("management", "maintenanceRegister")} />
           <TableControls table={maintenanceRegisterTable} label="requests" placeholder="Search maintenance" />
           <div className="table-wrap">
             <table>
@@ -1125,110 +842,21 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
           </div>
         </div>
 
-        <div className={reportSectionClass("panel full-span management-section management-section-clientFinancialSummary", showManagementReport("clientFinancialSummary"))}>
-          <div className="panel-heading">
-            <h3>Client Financial Summary</h3>
-            <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "clientFinancialSummary")} title="Print client financial summary">
-              <Printer size={17} />
-            </button>
-          </div>
-          <TableControls table={clientFinancialSummaryTable} label="clients" placeholder="Search client finances" />
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Customer</th>
-                  <th>Acc Number</th>
-                  <th>Last Billed Period</th>
-                  <th>Last Due Date</th>
-                  <th>Last Payment Date</th>
-                  <th>Last Payment Amount</th>
-                  <th>Current Outstanding</th>
-                  <th>Open Bills</th>
-                  <th>Months Unpaid</th>
-                  <th>Payment Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {clientFinancialSummaryTable.total ? (
-                  clientFinancialSummaryRows.map((row) => (
-                    <tr key={row.id}>
-                      <td>{row.customer}</td>
-                      <td>{row.acc_number}</td>
-                      <td>{row.last_billed_period || "-"}</td>
-                      <td>{date(row.last_due_date)}</td>
-                      <td>{date(row.last_payment_date)}</td>
-                      <td>{moneyOrDash(row.last_payment_amount)}</td>
-                      <td>{money(row.current_outstanding)}</td>
-                      <td>{number(row.open_bills)}</td>
-                      <td>{number(row.months_unpaid)}</td>
-                      <td><StatusBadge status={statusKey(row.payment_status)} /></td>
-                    </tr>
-                  ))
-                ) : (
-                  <EmptyRow colSpan={10} />
-                )}
-                {clientFinancialSummaryTable.total ? (
-                  <tr className="muted-total">
-                    <td colSpan="6"><strong>Total</strong></td>
-                    <td><strong>{money(clientFinancialSummaryTotals.current_outstanding)}</strong></td>
-                    <td><strong>{number(clientFinancialSummaryTotals.open_bills)}</strong></td>
-                    <td>-</td>
-                    <td>-</td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className={reportSectionClass("panel full-span management-section management-section-customerBalances", showManagementReport("customerBalances"))}>
-          <div className="panel-heading">
-            <h3>Customer Balances</h3>
-            <button className="icon-button screen-only" type="button" onClick={() => printReport("management", "customerBalances")} title="Print customer balances">
-              <Printer size={17} />
-            </button>
-          </div>
-          <TableControls table={customerBalanceTable} label="customers" placeholder="Search balances" />
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Customer</th>
-                  <th>Account</th>
-                  <th>Zone</th>
-                  <th>Open Bills</th>
-                  <th>Oldest Due</th>
-                  <th>Balance</th>
-                </tr>
-              </thead>
-              <tbody>
-                {customerBalanceTable.total ? (
-                  customerBalanceRows.map((row) => (
-                    <tr key={row.id}>
-                      <td>{row.name}</td>
-                      <td>{row.acc_number}</td>
-                      <td>{row.zone_name}</td>
-                      <td>{number(row.open_bills)}</td>
-                      <td>{date(row.oldest_due_date)}</td>
-                      <td>{money(row.balance_due)}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <EmptyRow colSpan={6} />
-                )}
-                {customerBalanceTable.total ? (
-                  <tr className="muted-total">
-                    <td colSpan="3"><strong>Total</strong></td>
-                    <td><strong>{number(customerBalanceTotals.open_bills)}</strong></td>
-                    <td>-</td>
-                    <td><strong>{money(customerBalanceTotals.balance_due)}</strong></td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <ManagementCustomerReports
+          balanceRows={customerBalanceRows}
+          balanceTable={customerBalanceTable}
+          balanceTotals={customerBalanceTotals}
+          clientRows={clientFinancialSummaryRows}
+          clientTable={clientFinancialSummaryTable}
+          clientTotals={clientFinancialSummaryTotals}
+          date={date}
+          isVisible={showManagementReport}
+          money={money}
+          moneyOrDash={moneyOrDash}
+          number={number}
+          onPrint={(target) => printReport("management", target)}
+          statusKey={statusKey}
+        />
       </section>
         <div className="report-print-footer">
           {businessSettings?.report_footer_note ? <p>{businessSettings.report_footer_note}</p> : null}
@@ -1236,13 +864,20 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
         </div>
       </div>
 
-      <section className="page-stack">
-        <header className="page-header">
+      <section className="page-stack accounting-insight-section">
+        <header className="page-header accounting-insight-header">
           <div>
             <p className="eyebrow">Accountant</p>
-            <h2>Accounting Reports</h2>
+            <h2>Finance performance</h2>
+            <p>Review cash performance, operating costs, receivables, and payables for the selected reporting period.</p>
           </div>
-          <form className="filter-bar" onSubmit={handleFilterSubmit}>
+          <form className="filter-bar report-period-filter" onSubmit={handleFilterSubmit}>
+            <label>
+              Saved period
+              <select value={periodPreset} onChange={handlePeriodPresetChange}>
+                {reportPeriodPresets.map((preset) => <option key={preset.key} value={preset.key}>{preset.label}</option>)}
+              </select>
+            </label>
             <label>
               From
               <input type="date" name="start_date" value={filters.start_date} onChange={handleFilterChange} />
@@ -1260,970 +895,169 @@ function ReportsPage({ user, navigationIntent, onClearNavigationIntent }) {
           </form>
         </header>
 
-        {accountantMessage && <p className="form-error">{accountantMessage}</p>}
+        {accountantMessage && accountantData && accountantTotals ? (
+          <WorkspaceState state="error" title="Accounting data was not refreshed" detail={accountantMessage} onRetry={() => loadAccountantReports(filters)} />
+        ) : null}
         {accountantData && accountantTotals ? (
-          <div className="panel screen-only">
-            <div className="panel-heading">
-              <div>
-                <h3>Accountant Report Catalog</h3>
-                <p className="muted">Choose one report to open for review. Use the printer button in a report for individual printing.</p>
-              </div>
-            </div>
-            <div className="report-catalog">
-              {accountantReportCatalog.map((report) => (
-                <button
-                  className={activeAccountantReport === report.key ? "report-catalog-item active" : "report-catalog-item"}
-                  key={report.key}
-                  onClick={() => setActiveAccountantReport(report.key)}
-                  type="button"
-                >
-                  <strong>{report.title}</strong>
-                  <span>{report.detail}</span>
-                </button>
-              ))}
-            </div>
-          </div>
+          <ReportCatalog
+            activeKey={activeAccountantReport}
+            description="Open a report for review or print it directly."
+            items={accountantReportCatalog}
+            onPrint={(target) => printReport("accountant", target)}
+            onSelect={setActiveAccountantReport}
+            title="Accountant Report Catalog"
+            variant="accounting-report-catalog-panel"
+          />
         ) : null}
         {!accountantData || !accountantTotals ? (
-          <p className="muted">Loading accounting reports...</p>
+          accountantMessage ? (
+            <WorkspaceState state="error" title="Accounting reports could not load" detail={accountantMessage} onRetry={() => loadAccountantReports(filters)} />
+          ) : (
+            <WorkspaceState title="Preparing accounting reports" detail={accountantLoading ? "Retrieving the selected period's billing, collections, cost, and payables measures." : "Refreshing the selected reporting period."} />
+          )
         ) : (
           <div className={`print-surface report-print report-print-accountant report-print-${printTarget} ${printScope === "accountant" ? "active-print-surface" : ""}`}>
-            <div className="report-print-header">
-              {businessSettings?.logo_url ? (
-                <img className="receipt-logo" src={assetUrl(businessSettings.logo_url)} alt="Business logo" />
-              ) : (
-                <div className="receipt-logo-mark">{businessSettings?.business_name?.slice(0, 2) || "AG"}</div>
-              )}
-              <div>
-                <h3>{businessSettings?.business_name || "Water Billing"}</h3>
-                {businessSettings?.legal_name ? <p>{businessSettings.legal_name}</p> : null}
-                {businessSettings?.physical_address ? <p>{businessSettings.physical_address}</p> : null}
-                <p>{[businessSettings?.phone, businessSettings?.email].filter(Boolean).join(" | ")}</p>
-                {businessSettings?.tax_pin ? <p>PIN: {businessSettings.tax_pin}</p> : null}
-              </div>
-              <div className="report-print-meta">
-                <span>{accountantPrintTitle}</span>
-                <strong>{date(accountantData.reportPeriod.start_date)} to {date(accountantData.reportPeriod.end_date)}</strong>
-                <small>Printed {date(new Date().toISOString())}</small>
-              </div>
-            </div>
+            <ReportPrintHeader
+              assetUrl={assetUrl}
+              businessSettings={businessSettings}
+              printedAt={date(new Date().toISOString())}
+              reportPeriod={`${date(accountantData.reportPeriod.start_date)} to ${date(accountantData.reportPeriod.end_date)}`}
+              reportTitle={accountantPrintTitle}
+            />
 
-            <div className="stat-grid report-summary-section">
-              <StatCard label="Period billed" value={money(accountantTotals.billed)} detail="Billing register total" />
-              <StatCard label="Period collected" value={money(accountantTotals.collected)} detail="Posted receipts" />
-              <StatCard label="Period balance" value={money(accountantTotals.outstanding)} detail="Bill balances" />
-              <StatCard label="Service charges" value={money(accountantTotals.serviceCharges)} detail="Chargeable customer services" />
-              <StatCard label="Period expenses" value={money(accountantTotals.expenses)} detail="Operating costs" />
-              <StatCard label="Open payables" value={money(accountantTotals.payables)} detail="Contractor invoices not posted/paid" />
-              <StatCard label="Overdue payables" value={money(accountantTotals.overduePayables)} detail="Past due contractor invoices" />
-              <StatCard label="Cash net profit" value={money(cashProfit.totals?.net_profit)} detail={`Margin ${percent(cashProfit.totals?.margin)}`} />
-              <StatCard label="Accrual net profit" value={money(accrualProfit.totals?.net_profit)} detail={`Margin ${percent(accrualProfit.totals?.margin)}`} />
-            </div>
+            <ReportSummaryCards
+              items={[
+                { label: "Period billed", value: money(accountantTotals.billed), detail: "Billing register total" },
+                { label: "Period collected", value: money(accountantTotals.collected), detail: "Posted receipts" },
+                { label: "Period balance", value: money(accountantTotals.outstanding), detail: "Bill balances" },
+                { label: "Service charges", value: money(accountantTotals.serviceCharges), detail: "Chargeable customer services" },
+                { label: "Period expenses", value: money(accountantTotals.expenses), detail: "Operating costs" },
+                { label: "Open payables", value: money(accountantTotals.payables), detail: "Contractor invoices not posted/paid" },
+                { label: "Overdue payables", value: money(accountantTotals.overduePayables), detail: "Past due contractor invoices" },
+                { label: "Cash net profit", value: money(cashProfit.totals?.net_profit), detail: `Margin ${percent(cashProfit.totals?.margin)}` },
+                { label: "Accrual net profit", value: money(accrualProfit.totals?.net_profit), detail: `Margin ${percent(accrualProfit.totals?.margin)}` }
+              ]}
+            />
 
             <section className="report-grid">
               <div className={reportSectionClass("full-span report-section report-section-profitLoss", showAccountantReport("profitLoss"))}>
-                <div className="panel-heading">
-                  <h3>Profit And Loss</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "profitLoss")} title="Print profit and loss">
-                    <Printer size={17} />
-                  </button>
-                </div>
+                <ReportPanelHeading title="Profit And Loss" printLabel="profit and loss" onPrint={() => printReport("accountant", "profitLoss")} />
                 <div className="profit-loss-grid">
-                  {renderProfitStatement(cashProfit, "Cash Basis", "cash")}
-                  {renderProfitStatement(accrualProfit, "Accrual Basis", "accrual")}
+                  <ProfitStatement
+                    money={money}
+                    onPrint={() => printReport("accountant", "cashProfitLoss")}
+                    percent={percent}
+                    statement={cashProfit}
+                    title="Cash Basis"
+                    variant="cash"
+                  />
+                  <ProfitStatement
+                    money={money}
+                    onPrint={() => printReport("accountant", "accrualProfitLoss")}
+                    percent={percent}
+                    statement={accrualProfit}
+                    title="Accrual Basis"
+                    variant="accrual"
+                  />
                 </div>
               </div>
 
-              <div className={reportSectionClass("panel report-section report-section-billingStatus", showAccountantReport("billingStatus"))}>
-                <div className="panel-heading">
-                  <h3>Billing By Status</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "billingStatus")} title="Print billing by status">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Status</th>
-                        <th>Bills</th>
-                        <th>Billed</th>
-                        <th>Paid</th>
-                        <th>Balance</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {accountantData.billingByStatus.length ? (
-                        accountantData.billingByStatus.map((row) => (
-                          <tr key={row.status}>
-                            <td>{label(row.status)}</td>
-                            <td>{number(row.bill_count)}</td>
-                            <td>{money(row.billed_amount)}</td>
-                            <td>{money(row.paid_amount)}</td>
-                            <td>{money(row.balance_amount)}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <EmptyRow colSpan={5} />
-                      )}
-                      {accountantData.billingByStatus.length ? (
-                        <tr className="muted-total">
-                          <td><strong>Total</strong></td>
-                          <td><strong>{number(billingByStatusTotals.bill_count)}</strong></td>
-                          <td><strong>{money(billingByStatusTotals.billed_amount)}</strong></td>
-                          <td><strong>{money(billingByStatusTotals.paid_amount)}</strong></td>
-                          <td><strong>{money(billingByStatusTotals.balance_amount)}</strong></td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <AccountingRevenueReports
+                billingByStatusRows={accountantData.billingByStatus || []}
+                billingByStatusTotals={billingByStatusTotals}
+                billingByZoneRows={accountantData.billingByZone || []}
+                billingByZoneTotals={billingByZoneTotals}
+                collectionsByChannelRows={accountantData.collectionsByChannel || []}
+                collectionsByChannelTotals={collectionsByChannelTotals}
+                isVisible={showAccountantReport}
+                label={label}
+                money={money}
+                number={number}
+                onPrint={(target) => printReport("accountant", target)}
+              />
 
-              <div className={reportSectionClass("panel report-section report-section-collectionsChannel", showAccountantReport("collectionsChannel"))}>
-                <div className="panel-heading">
-                  <h3>Collections By Channel</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "collectionsChannel")} title="Print collections by channel">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Channel</th>
-                        <th>Receipts</th>
-                        <th>Received</th>
-                        <th>Allocated</th>
-                        <th>Unallocated</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {accountantData.collectionsByChannel.length ? (
-                        accountantData.collectionsByChannel.map((row) => (
-                          <tr key={row.payment_channel}>
-                            <td>{label(row.payment_channel)}</td>
-                            <td>{number(row.receipt_count)}</td>
-                            <td>{money(row.received_amount)}</td>
-                            <td>{money(row.allocated_amount)}</td>
-                            <td>{money(row.unallocated_amount)}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <EmptyRow colSpan={5} />
-                      )}
-                      {accountantData.collectionsByChannel.length ? (
-                        <tr className="muted-total">
-                          <td><strong>Total</strong></td>
-                          <td><strong>{number(collectionsByChannelTotals.receipt_count)}</strong></td>
-                          <td><strong>{money(collectionsByChannelTotals.received_amount)}</strong></td>
-                          <td><strong>{money(collectionsByChannelTotals.allocated_amount)}</strong></td>
-                          <td><strong>{money(collectionsByChannelTotals.unallocated_amount)}</strong></td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <AccountingBillingOperationsReports
+                billingRows={billingRegisterRows}
+                billingTable={billingRegisterTable}
+                billingTotals={billingRegisterTotals}
+                date={date}
+                isVisible={showAccountantReport}
+                label={label}
+                meterRows={meterConsumptionComparisonRows}
+                meterTable={meterConsumptionComparisonTable}
+                meterTotals={meterConsumptionComparisonTotals}
+                money={money}
+                number={number}
+                onPrint={(target) => printReport("accountant", target)}
+                percent={percent}
+                serviceRows={serviceChargeRows}
+                serviceTable={serviceChargeRegisterTable}
+                serviceTotals={serviceChargeRegisterTotals}
+              />
 
-              <div className={reportSectionClass("panel full-span report-section report-section-billingZone", showAccountantReport("billingZone"))}>
-                <div className="panel-heading">
-                  <h3>Billing By Zone</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "billingZone")} title="Print billing by zone">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Zone</th>
-                        <th>Bills</th>
-                        <th>Units</th>
-                        <th>Billed</th>
-                        <th>Paid</th>
-                        <th>Balance</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {accountantData.billingByZone.length ? (
-                        accountantData.billingByZone.map((row) => (
-                          <tr key={row.zone_id}>
-                            <td>{row.zone_name}</td>
-                            <td>{number(row.bill_count)}</td>
-                            <td>{number(row.units_billed)}</td>
-                            <td>{money(row.billed_amount)}</td>
-                            <td>{money(row.paid_amount)}</td>
-                            <td>{money(row.balance_amount)}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <EmptyRow colSpan={6} />
-                      )}
-                      {accountantData.billingByZone.length ? (
-                        <tr className="muted-total">
-                          <td><strong>Total</strong></td>
-                          <td><strong>{number(billingByZoneTotals.bill_count)}</strong></td>
-                          <td><strong>{number(billingByZoneTotals.units_billed)}</strong></td>
-                          <td><strong>{money(billingByZoneTotals.billed_amount)}</strong></td>
-                          <td><strong>{money(billingByZoneTotals.paid_amount)}</strong></td>
-                          <td><strong>{money(billingByZoneTotals.balance_amount)}</strong></td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <AccountingCollectionsControlReports
+                agingRows={receivablesAgingRows}
+                agingTable={receivablesAgingTable}
+                agingTotals={receivablesAgingTotals}
+                allocationRows={allocationLedgerRows}
+                allocationTable={allocationLedgerTable}
+                allocationTotals={allocationLedgerTotals}
+                date={date}
+                isVisible={showAccountantReport}
+                label={label}
+                money={money}
+                number={number}
+                onPrint={(target) => printReport("accountant", target)}
+                receiptRows={receiptRegisterRows}
+                receiptTable={receiptRegisterTable}
+                receiptTotals={receiptRegisterTotals}
+              />
 
-              <div className={reportSectionClass("panel full-span report-section report-section-billingRegister", showAccountantReport("billingRegister"))}>
-                <div className="panel-heading">
-                  <h3>Billing Register</h3>
-                  <div className="row-actions">
-                    <FileSpreadsheet size={18} />
-                    <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "billingRegister")} title="Print billing register">
-                      <Printer size={17} />
-                    </button>
-                  </div>
-                </div>
-                <TableControls table={billingRegisterTable} label="bills" placeholder="Search billing register" />
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Bill</th>
-                        <th>Period</th>
-                        <th>Customer</th>
-                        <th>Zone</th>
-                        <th>Units</th>
-                        <th>Rate</th>
-                        <th>Subtotal</th>
-                        <th>Fixed</th>
-                        <th>Penalty</th>
-                        <th>VAT</th>
-                        <th>Adjustment</th>
-                        <th>Total</th>
-                        <th>Paid</th>
-                        <th>Balance</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {billingRegisterTable.total ? (
-                        <>
-                          {billingRegisterRows.map((row) => (
-                            <tr key={row.id}>
-                              <td>
-                                {row.bill_number || `Bill ${row.id}`}
-                                <small>{date(row.due_date)}</small>
-                              </td>
-                              <td>{row.billing_period_name || date(row.billing_month)}</td>
-                              <td>
-                                {row.customer_name}
-                                <small>{row.acc_number}</small>
-                              </td>
-                              <td>{row.zone_name}</td>
-                              <td>{number(row.units_used)}</td>
-                              <td>{money(row.rate)}</td>
-                              <td>{money(row.subtotal_amount)}</td>
-                              <td>{money(row.fixed_charge_amount)}</td>
-                              <td>{money(row.penalty_amount)}</td>
-                              <td>{money(row.vat_amount)}</td>
-                              <td>{money(row.adjustment_amount)}</td>
-                              <td>{money(row.billed_amount)}</td>
-                              <td>{money(row.paid_amount)}</td>
-                              <td>{money(row.balance_amount)}</td>
-                            </tr>
-                          ))}
-                          <tr className="muted-total">
-                            <td colSpan="4"><strong>Total</strong></td>
-                            <td><strong>{number(billingRegisterTotals.units_used)}</strong></td>
-                            <td>-</td>
-                            <td><strong>{money(billingRegisterTotals.subtotal_amount)}</strong></td>
-                            <td><strong>{money(billingRegisterTotals.fixed_charge_amount)}</strong></td>
-                            <td><strong>{money(billingRegisterTotals.penalty_amount)}</strong></td>
-                            <td><strong>{money(billingRegisterTotals.vat_amount)}</strong></td>
-                            <td><strong>{money(billingRegisterTotals.adjustment_amount)}</strong></td>
-                            <td><strong>{money(billingRegisterTotals.billed_amount)}</strong></td>
-                            <td><strong>{money(billingRegisterTotals.paid_amount)}</strong></td>
-                            <td><strong>{money(billingRegisterTotals.balance_amount)}</strong></td>
-                          </tr>
-                        </>
-                      ) : (
-                        <EmptyRow colSpan={14} />
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className={reportSectionClass("panel full-span report-section report-section-serviceCharges", showAccountantReport("serviceCharges"))}>
-                <div className="panel-heading">
-                  <h3>Customer Service Charges</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "serviceCharges")} title="Print customer service charges">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <TableControls table={serviceChargeRegisterTable} label="service charges" placeholder="Search service charges" />
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Charge</th>
-                        <th>Customer</th>
-                        <th>Type</th>
-                        <th>Date</th>
-                        <th>Amount</th>
-                        <th>Paid</th>
-                        <th>Balance</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {serviceChargeRegisterTable.total ? (
-                        <>
-                          {serviceChargeRows.map((row) => (
-                            <tr key={row.id}>
-                              <td>
-                                {row.charge_number || `Charge ${row.id}`}
-                                <small>{row.description}</small>
-                                {row.bill_number ? <small>Bill {row.bill_number}</small> : null}
-                              </td>
-                              <td>
-                                {row.customer_name}
-                                <small>{row.acc_number} | {row.zone_name}</small>
-                              </td>
-                              <td>{label(row.charge_type)}</td>
-                              <td>
-                                {date(row.charge_date)}
-                                <small>{row.due_date ? `Due ${date(row.due_date)}` : "-"}</small>
-                              </td>
-                              <td>{money(row.amount)}</td>
-                              <td>{money(row.paid_amount)}</td>
-                              <td>{money(row.balance_amount)}</td>
-                              <td>{label(row.status === "payable" ? row.bill_status || row.status : row.status)}</td>
-                            </tr>
-                          ))}
-                          <tr className="muted-total">
-                            <td colSpan="4"><strong>Total</strong></td>
-                            <td><strong>{money(serviceChargeRegisterTotals.amount)}</strong></td>
-                            <td><strong>{money(serviceChargeRegisterTotals.paid_amount)}</strong></td>
-                            <td><strong>{money(serviceChargeRegisterTotals.balance_amount)}</strong></td>
-                            <td><strong>{number(serviceChargeRegisterTotals.charge_count)} charges</strong></td>
-                          </tr>
-                        </>
-                      ) : (
-                        <EmptyRow colSpan={8} />
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className={reportSectionClass("panel full-span report-section report-section-meterConsumptionComparison", showAccountantReport("meterConsumptionComparison"))}>
-                <div className="panel-heading">
-                  <h3>Meter Consumption Comparison</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "meterConsumptionComparison")} title="Print meter consumption comparison">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <TableControls table={meterConsumptionComparisonTable} label="meter comparisons" placeholder="Search meter comparisons" />
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Customer</th>
-                        <th>Primary Meter</th>
-                        <th>Second Meter</th>
-                        <th>Primary Units</th>
-                        <th>Second Units</th>
-                        <th>Variance</th>
-                        <th>Variance %</th>
-                        <th>Bills</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {meterConsumptionComparisonTable.total ? (
-                        <>
-                          {meterConsumptionComparisonRows.map((row) => (
-                            <tr key={`${row.customer_id}-${row.source_meter_id}`}>
-                              <td>
-                                {row.customer_name}
-                                <small>{row.acc_number} | {row.zone_name || "-"}</small>
-                              </td>
-                              <td>
-                                {row.client_meter_number || "-"}
-                                <small>{row.client_reading_date ? `Reading ${date(row.client_reading_date)}` : "No primary reading"}</small>
-                              </td>
-                              <td>
-                                {row.source_meter_number || "-"}
-                                <small>{row.source_reading_date ? `Reading ${date(row.source_reading_date)}` : "No second reading"}</small>
-                              </td>
-                              <td>{number(row.client_units_used)}</td>
-                              <td>{number(row.source_units_used)}</td>
-                              <td>{number(row.variance_units)}</td>
-                              <td>{row.variance_percent === null || row.variance_percent === undefined ? "-" : percent(row.variance_percent)}</td>
-                              <td>
-                                <small>Primary: {row.client_bill_number || "-"} {row.client_bill_pay_status ? `| ${label(row.client_bill_pay_status)}` : ""}</small>
-                                <small>Second: {row.source_bill_number || "-"} {row.source_bill_pay_status ? `| ${label(row.source_bill_pay_status)}` : ""}</small>
-                              </td>
-                              <td>{label(row.comparison_status)}</td>
-                            </tr>
-                          ))}
-                          <tr className="muted-total">
-                            <td colSpan="3"><strong>Total</strong></td>
-                            <td><strong>{number(meterConsumptionComparisonTotals.client_units_used)}</strong></td>
-                            <td><strong>{number(meterConsumptionComparisonTotals.source_units_used)}</strong></td>
-                            <td><strong>{number(meterConsumptionComparisonTotals.variance_units)}</strong></td>
-                            <td colSpan="3">-</td>
-                          </tr>
-                        </>
-                      ) : (
-                        <EmptyRow colSpan={9} />
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className={reportSectionClass("panel full-span report-section report-section-receiptRegister", showAccountantReport("receiptRegister"))}>
-                <div className="panel-heading">
-                  <h3>Receipt Register</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "receiptRegister")} title="Print receipt register">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <TableControls table={receiptRegisterTable} label="receipts" placeholder="Search receipts" />
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Receipt</th>
-                        <th>Date</th>
-                        <th>Customer</th>
-                        <th>Channel</th>
-                        <th>Reference</th>
-                        <th>Received</th>
-                        <th>Allocated</th>
-                        <th>Recorded By</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {receiptRegisterTable.total ? (
-                        <>
-                          {receiptRegisterRows.map((row) => (
-                            <tr key={row.id}>
-                              <td>{row.receipt_number}</td>
-                              <td>{date(row.payment_date)}</td>
-                              <td>
-                                {row.customer_name}
-                                <small>{row.acc_number}</small>
-                              </td>
-                              <td>{label(row.payment_channel)}</td>
-                              <td>{row.external_reference || "-"}</td>
-                              <td>{money(row.amount)}</td>
-                              <td>{money(row.total_allocated_amount)}</td>
-                              <td>{row.recorded_by_name || "-"}</td>
-                            </tr>
-                          ))}
-                          <tr className="muted-total">
-                            <td colSpan="5"><strong>Total</strong></td>
-                            <td><strong>{money(receiptRegisterTotals.amount)}</strong></td>
-                            <td><strong>{money(receiptRegisterTotals.total_allocated_amount)}</strong></td>
-                            <td>-</td>
-                          </tr>
-                        </>
-                      ) : (
-                        <EmptyRow colSpan={8} />
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className={reportSectionClass("panel full-span report-section report-section-allocationLedger", showAccountantReport("allocationLedger"))}>
-                <div className="panel-heading">
-                  <h3>Payment Allocation Ledger</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "allocationLedger")} title="Print payment allocation ledger">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <TableControls table={allocationLedgerTable} label="allocations" placeholder="Search allocations" />
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Receipt</th>
-                        <th>Date</th>
-                        <th>Customer</th>
-                        <th>Bill</th>
-                        <th>Billing Month</th>
-                        <th>Channel</th>
-                        <th>Allocated</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {allocationLedgerTable.total ? (
-                        <>
-                          {allocationLedgerRows.map((row) => (
-                            <tr key={row.id}>
-                              <td>{row.receipt_number}</td>
-                              <td>{date(row.payment_date)}</td>
-                              <td>
-                                {row.customer_name}
-                                <small>{row.acc_number}</small>
-                              </td>
-                              <td>{row.bill_number || "-"}</td>
-                              <td>{date(row.billing_month)}</td>
-                              <td>{label(row.payment_channel)}</td>
-                              <td>{money(row.allocated_amount)}</td>
-                            </tr>
-                          ))}
-                          <tr className="muted-total">
-                            <td colSpan="6"><strong>Total</strong></td>
-                            <td><strong>{money(allocationLedgerTotals.allocated_amount)}</strong></td>
-                          </tr>
-                        </>
-                      ) : (
-                        <EmptyRow colSpan={7} />
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className={reportSectionClass("panel full-span report-section report-section-agingDetail", showAccountantReport("agingDetail"))}>
-                <div className="panel-heading">
-                  <h3>Receivables Aging Detail</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "agingDetail")} title="Print aging detail">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <TableControls table={receivablesAgingTable} label="customers" placeholder="Search aging detail" />
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Customer</th>
-                        <th>Current</th>
-                        <th>1-30</th>
-                        <th>31-60</th>
-                        <th>61-90</th>
-                        <th>91 and over</th>
-                        <th>Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {receivablesAgingTable.total ? (
-                        <>
-                          {receivablesAgingRows.map((row) => (
-                            <tr key={row.customer_id}>
-                              <td>
-                                {row.customer_name}
-                                <small>{row.acc_number} | {row.zone_name}</small>
-                                <small>{number(row.open_bill_count)} bill(s), oldest due {date(row.oldest_due_date)}</small>
-                              </td>
-                              <td>{money(row.current_amount)}</td>
-                              <td>{money(row.days_1_30_amount)}</td>
-                              <td>{money(row.days_31_60_amount)}</td>
-                              <td>{money(row.days_61_90_amount)}</td>
-                              <td>{money(row.days_91_over_amount)}</td>
-                              <td>{money(row.total_amount)}</td>
-                            </tr>
-                          ))}
-                          <tr className="muted-total">
-                            <td>
-                              <strong>Total</strong>
-                              <small>{number(receivablesAgingTotals.open_bill_count)} open bill(s)</small>
-                            </td>
-                            <td><strong>{money(receivablesAgingTotals.current_amount)}</strong></td>
-                            <td><strong>{money(receivablesAgingTotals.days_1_30_amount)}</strong></td>
-                            <td><strong>{money(receivablesAgingTotals.days_31_60_amount)}</strong></td>
-                            <td><strong>{money(receivablesAgingTotals.days_61_90_amount)}</strong></td>
-                            <td><strong>{money(receivablesAgingTotals.days_91_over_amount)}</strong></td>
-                            <td><strong>{money(receivablesAgingTotals.total_amount)}</strong></td>
-                          </tr>
-                        </>
-                      ) : (
-                        <EmptyRow colSpan={7} />
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className={reportSectionClass("panel full-span report-section report-section-depositRegister", showAccountantReport("depositRegister"))}>
-                <div className="panel-heading">
-                  <h3>Deposit Register</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "depositRegister")} title="Print deposit register">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <TableControls table={depositRegisterTable} label="deposits" placeholder="Search deposits" />
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Customer</th>
-                        <th>Zone</th>
-                        <th>Deposit</th>
-                        <th>Status</th>
-                        <th>Paid On</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {depositRegisterTable.total ? (
-                        <>
-                          {depositRegisterRows.map((row) => (
-                            <tr key={row.id}>
-                              <td>
-                                {row.customer_name}
-                                <small>{row.acc_number}</small>
-                              </td>
-                              <td>{row.zone_name}</td>
-                              <td>{money(row.deposit_amount)}</td>
-                              <td>{row.deposit_paid ? "Paid" : "Unpaid"}</td>
-                              <td>{date(row.deposit_paid_at)}</td>
-                            </tr>
-                          ))}
-                          <tr className="muted-total">
-                            <td colSpan="2"><strong>Total</strong></td>
-                            <td><strong>{money(depositRegisterTotals.deposit_amount)}</strong></td>
-                            <td colSpan="2">-</td>
-                          </tr>
-                        </>
-                      ) : (
-                        <EmptyRow colSpan={5} />
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className={reportSectionClass("panel report-section report-section-expensesCategory", showAccountantReport("expensesCategory"))}>
-                <div className="panel-heading">
-                  <h3>Expenses By Category</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "expensesCategory")} title="Print expenses by category">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Category</th>
-                        <th>Entries</th>
-                        <th>Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {accountantData.expensesByCategory.length ? (
-                        accountantData.expensesByCategory.map((row) => (
-                          <tr key={row.category}>
-                            <td>{row.category}</td>
-                            <td>{number(row.expense_count)}</td>
-                            <td>{money(row.expense_amount)}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <EmptyRow colSpan={3} />
-                      )}
-                      {accountantData.expensesByCategory.length ? (
-                        <tr className="muted-total">
-                          <td><strong>Total</strong></td>
-                          <td><strong>{number(expenseCategoryTotals.expense_count)}</strong></td>
-                          <td><strong>{money(expenseCategoryTotals.expense_amount)}</strong></td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className={reportSectionClass("panel full-span report-section report-section-expenseRegister", showAccountantReport("expenseRegister"))}>
-                <div className="panel-heading">
-                  <h3>Expense Register</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "expenseRegister")} title="Print expense register">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <TableControls table={expenseRegisterTable} label="expenses" placeholder="Search expense register" />
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Date</th>
-                        <th>Category</th>
-                        <th>Vendor</th>
-                        <th>Description</th>
-                        <th>Channel</th>
-                        <th>Reference</th>
-                        <th>Recorded By</th>
-                        <th>Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {expenseRegisterTable.total ? (
-                        <>
-                          {expenseRegisterRows.map((row) => (
-                            <tr key={row.id}>
-                              <td>{date(row.expense_date)}</td>
-                              <td>{row.category}</td>
-                              <td>{row.vendor || "-"}</td>
-                              <td>{row.description}</td>
-                              <td>{label(row.payment_channel)}</td>
-                              <td>{row.reference || row.receipt_number || "-"}</td>
-                              <td>{row.recorded_by_name || "-"}</td>
-                              <td>{money(row.amount)}</td>
-                            </tr>
-                          ))}
-                          <tr className="muted-total">
-                            <td colSpan="7"><strong>Total</strong></td>
-                            <td><strong>{money(expenseRegisterTotals.amount)}</strong></td>
-                          </tr>
-                        </>
-                      ) : (
-                        <EmptyRow colSpan={8} />
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <AccountingCloseSupportReports
+                date={date}
+                depositRows={depositRegisterRows}
+                depositTable={depositRegisterTable}
+                depositTotals={depositRegisterTotals}
+                expenseCategoryRows={accountantData.expensesByCategory || []}
+                expenseCategoryTotals={expenseCategoryTotals}
+                expenseRows={expenseRegisterRows}
+                expenseTable={expenseRegisterTable}
+                expenseTotals={expenseRegisterTotals}
+                isVisible={showAccountantReport}
+                label={label}
+                money={money}
+                number={number}
+                onPrint={(target) => printReport("accountant", target)}
+              />
 
               <div className={reportSectionClass("panel full-span report-section report-section-contractorPayables", showAccountantReport("contractorPayables"))}>
-                <div className="panel-heading">
-                  <h3>Contractor Payables</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "contractorPayables")} title="Print contractor payables">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <div className="reading-context">
-                  <div>
-                    <span>Open invoices</span>
-                    <strong>{number(accountantData.contractorPayablesTotals?.open_invoice_count)}</strong>
-                  </div>
-                  <div>
-                    <span>Open amount</span>
-                    <strong>{money(accountantData.contractorPayablesTotals?.open_amount)}</strong>
-                  </div>
-                  <div>
-                    <span>Approved</span>
-                    <strong>{money(accountantData.contractorPayablesTotals?.approved_amount)}</strong>
-                  </div>
-                  <div>
-                    <span>Overdue</span>
-                    <strong>{money(accountantData.contractorPayablesTotals?.overdue_amount)}</strong>
-                  </div>
-                  <div>
-                    <span>Posted this period</span>
-                    <strong>{money(accountantData.contractorPayablesTotals?.posted_amount)}</strong>
-                  </div>
-                </div>
-                <div className="report-grid">
-                  <div className="panel">
-                    <div className="panel-heading compact-heading">
-                      <h3>By Status</h3>
-                    </div>
-                    <div className="table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Status</th>
-                            <th>Invoices</th>
-                            <th>Amount</th>
-                            <th>Overdue</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {accountantData.contractorPayablesByStatus.length ? (
-                            accountantData.contractorPayablesByStatus.map((row) => (
-                              <tr key={row.status}>
-                                <td>{label(row.status)}</td>
-                                <td>{number(row.invoice_count)}</td>
-                                <td>{money(row.invoice_amount)}</td>
-                                <td>{money(row.overdue_amount)}</td>
-                              </tr>
-                            ))
-                          ) : (
-                            <EmptyRow colSpan={4} />
-                          )}
-                          {accountantData.contractorPayablesByStatus.length ? (
-                            <tr className="muted-total">
-                              <td><strong>Total</strong></td>
-                              <td><strong>{number(contractorPayablesByStatusTotals.invoice_count)}</strong></td>
-                              <td><strong>{money(contractorPayablesByStatusTotals.invoice_amount)}</strong></td>
-                              <td><strong>{money(contractorPayablesByStatusTotals.overdue_amount)}</strong></td>
-                            </tr>
-                          ) : null}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                  <div className="panel">
-                    <div className="panel-heading compact-heading">
-                      <h3>Aging</h3>
-                    </div>
-                    <div className="table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Bucket</th>
-                            <th>Invoices</th>
-                            <th>Amount</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {accountantData.contractorPayablesAging.length ? (
-                            accountantData.contractorPayablesAging.map((row) => (
-                              <tr key={row.bucket}>
-                                <td>{row.bucket}</td>
-                                <td>{number(row.invoice_count)}</td>
-                                <td>{money(row.invoice_amount)}</td>
-                              </tr>
-                            ))
-                          ) : (
-                            <EmptyRow colSpan={3} />
-                          )}
-                          {accountantData.contractorPayablesAging.length ? (
-                            <tr className="muted-total">
-                              <td><strong>Total</strong></td>
-                              <td><strong>{number(contractorPayablesAgingTotals.invoice_count)}</strong></td>
-                              <td><strong>{money(contractorPayablesAgingTotals.invoice_amount)}</strong></td>
-                            </tr>
-                          ) : null}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
+                <ReportPanelHeading title="Contractor Payables" printLabel="contractor payables" onPrint={() => printReport("accountant", "contractorPayables")} />
+                <ContractorPayablesReport
+                  agingRows={accountantData.contractorPayablesAging}
+                  agingTotals={contractorPayablesAgingTotals}
+                  byStatusRows={accountantData.contractorPayablesByStatus}
+                  byStatusTotals={contractorPayablesByStatusTotals}
+                  label={label}
+                  money={money}
+                  number={number}
+                  totals={accountantData.contractorPayablesTotals}
+                />
               </div>
 
-              <div className={reportSectionClass("panel full-span report-section report-section-contractorBalances", showAccountantReport("contractorBalances"))}>
-                <div className="panel-heading">
-                  <h3>Contractor Balances</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "contractorBalances")} title="Print contractor balances">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <TableControls table={contractorBalanceTable} label="contractors" placeholder="Search contractor balances" />
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Contractor</th>
-                        <th>Contact</th>
-                        <th>Open Invoices</th>
-                        <th>Oldest Due</th>
-                        <th>Open Amount</th>
-                        <th>Overdue</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {contractorBalanceTable.total ? (
-                        <>
-                          {contractorBalanceRows.map((row) => (
-                            <tr key={row.id}>
-                              <td>
-                                {row.contractor_name}
-                                <small>{row.tax_pin || "-"}</small>
-                              </td>
-                              <td>
-                                {row.phone || "-"}
-                                <small>{row.email || "-"}</small>
-                              </td>
-                              <td>{number(row.open_invoice_count)}</td>
-                              <td>{date(row.oldest_due_date)}</td>
-                              <td>{money(row.open_amount)}</td>
-                              <td>
-                                {money(row.overdue_amount)}
-                                <small>{number(row.overdue_invoice_count)} invoice(s)</small>
-                              </td>
-                            </tr>
-                          ))}
-                          <tr className="muted-total">
-                            <td colSpan="2"><strong>Total</strong></td>
-                            <td><strong>{number(contractorBalanceTotals.open_invoice_count)}</strong></td>
-                            <td>-</td>
-                            <td><strong>{money(contractorBalanceTotals.open_amount)}</strong></td>
-                            <td>
-                              <strong>{money(contractorBalanceTotals.overdue_amount)}</strong>
-                              <small>{number(contractorBalanceTotals.overdue_invoice_count)} invoice(s)</small>
-                            </td>
-                          </tr>
-                        </>
-                      ) : (
-                        <EmptyRow colSpan={6} />
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className={reportSectionClass("panel full-span report-section report-section-contractorInvoiceRegister", showAccountantReport("contractorInvoiceRegister"))}>
-                <div className="panel-heading">
-                  <h3>Contractor Invoice Register</h3>
-                  <button className="icon-button screen-only" type="button" onClick={() => printReport("accountant", "contractorInvoiceRegister")} title="Print contractor invoice register">
-                    <Printer size={17} />
-                  </button>
-                </div>
-                <TableControls table={contractorInvoiceTable} label="contractor invoices" placeholder="Search contractor invoices" />
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Invoice</th>
-                        <th>Contractor</th>
-                        <th>Dates</th>
-                        <th>Category</th>
-                        <th>Subtotal</th>
-                        <th>VAT</th>
-                        <th>Total</th>
-                        <th>Status</th>
-                        <th>Expense</th>
-                        <th>Documents</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {contractorInvoiceTable.total ? (
-                        <>
-                          {contractorInvoiceRows.map((row) => (
-                            <tr key={row.id}>
-                              <td>
-                                {row.invoice_number}
-                                <small>{row.description}</small>
-                              </td>
-                              <td>
-                                {row.contractor_name}
-                                <small>{row.contractor_tax_pin || "-"}</small>
-                              </td>
-                              <td>
-                                {date(row.invoice_date)}
-                                <small>Due {date(row.due_date)}</small>
-                              </td>
-                              <td>{row.category}</td>
-                              <td>{money(row.subtotal_amount)}</td>
-                              <td>{money(row.vat_amount)}</td>
-                              <td>{money(row.total_amount)}</td>
-                              <td>{label(row.status)}</td>
-                              <td>{row.expense_id ? `Expense #${row.expense_id}` : "-"}</td>
-                              <td>{number(row.document_count)}</td>
-                            </tr>
-                          ))}
-                          <tr className="muted-total">
-                            <td colSpan="4"><strong>Total</strong></td>
-                            <td><strong>{money(contractorInvoiceRegisterTotals.subtotal_amount)}</strong></td>
-                            <td><strong>{money(contractorInvoiceRegisterTotals.vat_amount)}</strong></td>
-                            <td><strong>{money(contractorInvoiceRegisterTotals.total_amount)}</strong></td>
-                            <td colSpan="2">-</td>
-                            <td><strong>{number(contractorInvoiceRegisterTotals.document_count)}</strong></td>
-                          </tr>
-                        </>
-                      ) : (
-                        <EmptyRow colSpan={10} />
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <AccountingContractorLedgerReports
+                balanceRows={contractorBalanceRows}
+                balanceTable={contractorBalanceTable}
+                balanceTotals={contractorBalanceTotals}
+                date={date}
+                invoiceRows={contractorInvoiceRows}
+                invoiceTable={contractorInvoiceTable}
+                invoiceTotals={contractorInvoiceRegisterTotals}
+                isVisible={showAccountantReport}
+                label={label}
+                money={money}
+                number={number}
+                onPrint={(target) => printReport("accountant", target)}
+              />
             </section>
             <div className="report-print-footer">
               {businessSettings?.report_footer_note ? <p>{businessSettings.report_footer_note}</p> : null}

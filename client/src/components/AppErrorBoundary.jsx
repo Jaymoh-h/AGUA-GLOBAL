@@ -1,4 +1,5 @@
 import { Component } from "react";
+import { RefreshCw } from "lucide-react";
 import { api } from "../services/api";
 
 class AppErrorBoundary extends Component {
@@ -30,6 +31,7 @@ class AppErrorBoundary extends Component {
           <div className="empty-state">
             <strong>Page crashed</strong>
             <span>Reload the page or navigate away. The error has been recorded for review.</span>
+            <button type="button" onClick={() => window.location.reload()}><RefreshCw size={15} />Reload page</button>
           </div>
         </div>
       );

@@ -5,6 +5,7 @@ DROP TABLE IF EXISTS system_event_logs CASCADE;
 DROP TABLE IF EXISTS rate_limit_buckets CASCADE;
 DROP TABLE IF EXISTS monitoring_alert_logs CASCADE;
 DROP TABLE IF EXISTS backup_restore_drills CASCADE;
+DROP TABLE IF EXISTS integration_commissioning_checks CASCADE;
 DROP TABLE IF EXISTS operational_reminder_logs CASCADE;
 DROP TABLE IF EXISTS knowledge_documents CASCADE;
 DROP TABLE IF EXISTS supporting_documents CASCADE;
@@ -190,7 +191,7 @@ CREATE INDEX idx_portal_user_customers_customer
 
 CREATE TABLE document_delivery_logs (
   id SERIAL PRIMARY KEY,
-  document_type VARCHAR(30) NOT NULL CHECK (document_type IN ('bill', 'receipt')),
+  document_type VARCHAR(30) NOT NULL CHECK (document_type IN ('bill', 'receipt', 'payment_arrangement', 'standing_order', 'disconnection_warning')),
   document_id INTEGER NOT NULL,
   customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
   channel VARCHAR(30) NOT NULL DEFAULT 'email' CHECK (channel IN ('email', 'sms', 'whatsapp')),
@@ -300,6 +301,24 @@ CREATE TABLE backup_restore_drills (
 CREATE INDEX idx_backup_restore_drills_date
   ON backup_restore_drills(drill_date DESC, id DESC);
 
+CREATE TABLE integration_commissioning_checks (
+  id SERIAL PRIMARY KEY,
+  check_key VARCHAR(60) NOT NULL CHECK (check_key IN (
+    'messaging_email', 'messaging_sms', 'messaging_whatsapp', 'mpesa_settlement',
+    'bank_feed', 'database_resilience', 'external_uptime'
+  )),
+  status VARCHAR(20) NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'passed', 'partial', 'failed')),
+  verification_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  evidence_reference VARCHAR(240),
+  findings TEXT,
+  follow_up_actions TEXT,
+  recorded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_integration_commissioning_checks_key_date
+  ON integration_commissioning_checks(check_key, verification_date DESC, id DESC);
+
 CREATE TABLE monitoring_alert_logs (
   id SERIAL PRIMARY KEY,
   alert_key VARCHAR(160) NOT NULL,
@@ -357,8 +376,9 @@ CREATE INDEX idx_knowledge_documents_status
 CREATE TABLE communication_campaigns (
   id SERIAL PRIMARY KEY,
   campaign_name VARCHAR(160) NOT NULL DEFAULT 'Invoice alert',
+  zone_name VARCHAR(160),
   alert_type VARCHAR(40) NOT NULL DEFAULT 'invoice_alert'
-    CHECK (alert_type IN ('invoice_alert')),
+    CHECK (alert_type IN ('invoice_alert', 'payment_plan_alert', 'standing_order_alert', 'disconnection_warning')),
   medium VARCHAR(30) NOT NULL
     CHECK (medium IN ('email', 'sms', 'whatsapp')),
   template TEXT NOT NULL,
@@ -380,7 +400,7 @@ CREATE TABLE communication_templates (
   id SERIAL PRIMARY KEY,
   name VARCHAR(160) NOT NULL,
   alert_type VARCHAR(40) NOT NULL DEFAULT 'invoice_alert'
-    CHECK (alert_type IN ('invoice_alert')),
+    CHECK (alert_type IN ('invoice_alert', 'payment_plan_alert', 'standing_order_alert', 'disconnection_warning')),
   medium VARCHAR(30) NOT NULL
     CHECK (medium IN ('email', 'sms', 'whatsapp')),
   body TEXT NOT NULL,
@@ -631,8 +651,54 @@ CREATE TABLE payments (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   notes TEXT,
   recorded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  idempotency_key VARCHAR(100),
+  allocation_mode VARCHAR(20) NOT NULL DEFAULT 'automatic' CHECK (allocation_mode IN ('automatic', 'targeted', 'cross_account')),
+  target_bill_id INTEGER REFERENCES bills(id) ON DELETE SET NULL,
+  allocation_plan JSONB NOT NULL DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE customer_reading_submissions (
+  id SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  meter_id INTEGER NOT NULL REFERENCES meters(id) ON DELETE RESTRICT,
+  reading_value NUMERIC(12, 2) NOT NULL CHECK (reading_value >= 0),
+  reading_date DATE NOT NULL,
+  notes TEXT,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+  submitted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ,
+  review_notes TEXT,
+  official_reading_id INTEGER REFERENCES meter_readings(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_payments_idempotency_key
+  ON payments(idempotency_key)
+  WHERE idempotency_key IS NOT NULL;
+
+CREATE UNIQUE INDEX idx_payments_channel_external_reference_posted
+  ON payments (payment_channel, LOWER(BTRIM(external_reference)))
+  WHERE status = 'posted'
+    AND payment_channel IN ('bank', 'mpesa_paybill')
+    AND NULLIF(BTRIM(external_reference), '') IS NOT NULL;
+
+CREATE TABLE payment_import_mapping_profiles (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  payment_channel VARCHAR(30) NOT NULL CHECK (payment_channel IN ('bank', 'mpesa_paybill')),
+  mapping JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_payment_import_mapping_profiles_channel_name
+  ON payment_import_mapping_profiles (payment_channel, LOWER(BTRIM(name)));
 
 CREATE TABLE payment_allocations (
   id SERIAL PRIMARY KEY,
@@ -722,7 +788,7 @@ CREATE TABLE maintenance_requests (
   meter_id INTEGER REFERENCES meters(id) ON DELETE SET NULL,
   title VARCHAR(180) NOT NULL,
   category VARCHAR(40) NOT NULL DEFAULT 'other'
-    CHECK (category IN ('leak', 'meter_fault', 'no_water', 'low_pressure', 'water_quality', 'connection', 'billing_support', 'other')),
+    CHECK (category IN ('leak', 'meter_fault', 'no_water', 'low_pressure', 'water_quality', 'connection', 'billing_support', 'billing_dispute', 'payment_plan', 'other')),
   priority VARCHAR(20) NOT NULL DEFAULT 'normal'
     CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
   status VARCHAR(20) NOT NULL DEFAULT 'open'
@@ -733,10 +799,48 @@ CREATE TABLE maintenance_requests (
   target_date DATE,
   assigned_to INTEGER REFERENCES users(id) ON DELETE SET NULL,
   description TEXT,
+  request_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   resolution_notes TEXT,
+  customer_resolution_summary TEXT,
   resolved_at TIMESTAMPTZ,
   resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE payment_arrangements (
+  id SERIAL PRIMARY KEY,
+  arrangement_number VARCHAR(40) UNIQUE,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
+  maintenance_request_id INTEGER REFERENCES maintenance_requests(id) ON DELETE SET NULL,
+  agreed_amount NUMERIC(12, 2) NOT NULL CHECK (agreed_amount > 0),
+  installment_amount NUMERIC(12, 2) NOT NULL CHECK (installment_amount > 0),
+  frequency VARCHAR(20) NOT NULL CHECK (frequency IN ('weekly', 'monthly')),
+  first_due_date DATE NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'defaulted', 'cancelled')),
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  approved_at TIMESTAMPTZ,
+  closed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  closed_at TIMESTAMPTZ,
+  closure_notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE standing_orders (
+  id SERIAL PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE RESTRICT,
+  mandate_reference VARCHAR(80) NOT NULL,
+  expected_amount NUMERIC(12, 2) NOT NULL CHECK (expected_amount > 0),
+  frequency VARCHAR(20) NOT NULL CHECK (frequency IN ('weekly', 'monthly')),
+  first_due_date DATE NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'cancelled')),
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -950,7 +1054,7 @@ CREATE TABLE audit_events (
 CREATE TABLE supporting_documents (
   id SERIAL PRIMARY KEY,
   entity_type VARCHAR(40) NOT NULL
-    CHECK (entity_type IN ('maintenance_request', 'expense', 'contractor_invoice')),
+    CHECK (entity_type IN ('maintenance_request', 'customer_reading_submission', 'expense', 'contractor_invoice')),
   entity_id INTEGER NOT NULL,
   original_name VARCHAR(255) NOT NULL,
   stored_name VARCHAR(255) NOT NULL,
@@ -959,6 +1063,8 @@ CREATE TABLE supporting_documents (
   file_size INTEGER NOT NULL CHECK (file_size > 0),
   file_data BYTEA,
   description TEXT,
+  evidence_metadata JSONB,
+  location_retention_until TIMESTAMPTZ,
   uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   deleted_at TIMESTAMPTZ,
   deleted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -973,6 +1079,13 @@ CREATE INDEX idx_customers_rate_id ON customers(rate_id);
 CREATE INDEX idx_customers_zone_id ON customers(zone_id);
 CREATE INDEX idx_meters_customer_status ON meters(customer_id, status);
 CREATE INDEX idx_meters_customer_role_status ON meters(customer_id, meter_role, status);
+CREATE UNIQUE INDEX idx_customer_reading_submissions_pending_meter_date
+  ON customer_reading_submissions(meter_id, reading_date)
+  WHERE status = 'pending';
+CREATE INDEX idx_customer_reading_submissions_review_queue
+  ON customer_reading_submissions(status, submitted_at DESC);
+CREATE INDEX idx_customer_reading_submissions_customer
+  ON customer_reading_submissions(customer_id, submitted_at DESC);
 CREATE INDEX idx_meter_events_customer_date ON meter_events(customer_id, event_date DESC);
 CREATE INDEX idx_meter_events_old_meter_id ON meter_events(old_meter_id);
 CREATE INDEX idx_meter_events_new_meter_id ON meter_events(new_meter_id);
@@ -1031,3 +1144,6 @@ CREATE INDEX idx_supporting_documents_entity
   ON supporting_documents(entity_type, entity_id)
   WHERE deleted_at IS NULL;
 CREATE INDEX idx_supporting_documents_uploaded_by ON supporting_documents(uploaded_by);
+CREATE INDEX idx_supporting_documents_location_retention
+  ON supporting_documents(location_retention_until)
+  WHERE location_retention_until IS NOT NULL;

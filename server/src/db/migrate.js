@@ -39,7 +39,8 @@ const ensureMigrationsTable = async (client) => {
   `);
 };
 
-const checksum = (content) => crypto.createHash("sha256").update(content).digest("hex");
+const checksum = (content) =>
+  crypto.createHash("sha256").update(String(content).replace(/\r\n/g, "\n")).digest("hex");
 
 const parseMigrationFile = (filename) => {
   const match = filename.match(/^(\d{3})_.+\.sql$/);

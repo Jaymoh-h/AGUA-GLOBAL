@@ -3,6 +3,7 @@ const {
   applyPenaltyApplications,
   createBillingPeriod,
   getBillingPeriodReadiness,
+  getRevenueAssurance,
   getBillingSettings,
   listPenaltyApplications,
   listBillingPeriods,
@@ -23,6 +24,7 @@ router.use(authenticate);
 router.get("/periods", authorize("admin", "accountant"), listBillingPeriods);
 router.post("/periods", authorize("admin", "accountant"), createBillingPeriod);
 router.get("/periods/:id/readiness", authorize("admin", "accountant"), getBillingPeriodReadiness);
+router.get("/periods/:id/revenue-assurance", authorize("admin", "accountant"), getRevenueAssurance);
 router.patch("/periods/:id/status", authorize("admin", "accountant"), updateBillingPeriodStatus);
 router.get("/settings", authorize("admin", "accountant"), getBillingSettings);
 router.put("/settings", authorize("admin", "accountant"), updateBillingSettings);

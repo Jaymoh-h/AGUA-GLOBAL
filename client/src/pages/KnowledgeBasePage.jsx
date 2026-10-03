@@ -1,7 +1,9 @@
 import { Archive, Download, FileText, Pencil, RefreshCw, ShieldCheck, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import ReviewDialog from "../components/ReviewDialog";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { useToastMessage } from "../components/ToastProvider";
+import WorkspaceState from "../components/WorkspaceState";
 import { api } from "../services/api";
 import { downloadBlobFile } from "../utils/exportNames";
 
@@ -42,8 +44,11 @@ const readFileAsDataUrl = (file) =>
 
 function KnowledgeBasePage({ user }) {
   const [documents, setDocuments] = useState([]);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [initialError, setInitialError] = useState("");
   const [form, setForm] = useState(initialForm);
   const [editing, setEditing] = useState(null);
+  const [archiveReview, setArchiveReview] = useState(null);
   const [loading, setLoading] = useState(false);
   const [, setMessage] = useToastMessage();
   const canManage = ["admin", "accountant"].includes(user.role);
@@ -57,20 +62,41 @@ function KnowledgeBasePage({ user }) {
     searchFields: ["title", "category", "sensitivity", "summary", "original_name", "version_label", "status"],
     pageSize: 10
   });
+  const knowledgeSummary = useMemo(
+    () => ({
+      documents: documents.length,
+      categories: categories.length,
+      restricted: documents.filter((document) => ["confidential", "restricted"].includes(document.sensitivity)).length,
+      recentlyUpdated: documents.filter((document) => {
+        const updated = new Date(document.updated_at || document.created_at || 0).getTime();
+        return Number.isFinite(updated) && updated >= Date.now() - 30 * 24 * 60 * 60 * 1000;
+      }).length
+    }),
+    [categories.length, documents]
+  );
 
-  const load = async () => {
+  const load = async ({ showInitialState = false } = {}) => {
+    if (showInitialState) {
+      setInitialLoading(true);
+      setInitialError("");
+    }
     setLoading(true);
     try {
       setDocuments(await api.knowledgeDocuments.list());
     } catch (err) {
+      if (showInitialState) {
+        setInitialError(err.message || "Knowledge documents could not be loaded.");
+        throw err;
+      }
       setMessage(err.message);
     } finally {
       setLoading(false);
+      if (showInitialState) setInitialLoading(false);
     }
   };
 
   useEffect(() => {
-    load();
+    load({ showInitialState: true }).catch(() => {});
   }, []);
 
   const updateForm = (key, value) => setForm((current) => ({ ...current, [key]: value }));
@@ -151,24 +177,46 @@ function KnowledgeBasePage({ user }) {
   };
 
   const archive = async (document) => {
-    const reason = window.prompt(`Reason for archiving "${document.title}":`);
-    if (reason === null) return;
+    setArchiveReview(document);
+  };
+
+  const confirmArchive = async (reason) => {
+    if (!archiveReview) return;
     setMessage("");
+    setLoading(true);
     try {
-      await api.knowledgeDocuments.remove(document.id, reason);
+      await api.knowledgeDocuments.remove(archiveReview.id, reason);
       await load();
+      setArchiveReview(null);
       setMessage("Knowledge document archived.");
     } catch (err) {
       setMessage(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
+  if (initialLoading) {
+    return <WorkspaceState detail="Retrieving documents available to your operational role." title="Preparing operational knowledge" />;
+  }
+
+  if (initialError) {
+    return (
+      <WorkspaceState
+        detail={initialError}
+        onRetry={() => load({ showInitialState: true }).catch(() => {})}
+        state="error"
+        title="Operational knowledge could not load"
+      />
+    );
+  }
+
   return (
-    <div className="page-stack">
-      <header className="page-header">
+    <div className="page-stack knowledge-operations-page">
+      <header className="page-header knowledge-operations-header">
         <div>
           <p className="eyebrow">Internal knowledge</p>
-          <h2>Knowledge Base</h2>
+          <h2>Operational knowledge</h2>
           <p>Private manuals, SOPs, setup notes, and controlled operational documents.</p>
         </div>
         <button type="button" onClick={load} disabled={loading}>
@@ -177,7 +225,14 @@ function KnowledgeBasePage({ user }) {
         </button>
       </header>
 
-      <section className="workspace-grid knowledge-grid">
+      <section className="knowledge-operations-metrics" aria-label="Knowledge overview">
+        <div><span>Available documents</span><strong>{knowledgeSummary.documents}</strong><small>Shared with your role</small></div>
+        <div><span>Knowledge categories</span><strong>{knowledgeSummary.categories}</strong><small>Operational subject areas</small></div>
+        <div><span>Updated recently</span><strong>{knowledgeSummary.recentlyUpdated}</strong><small>Changed within 30 days</small></div>
+        <div className={knowledgeSummary.restricted ? "needs-attention" : ""}><span>Controlled documents</span><strong>{knowledgeSummary.restricted}</strong><small>Confidential or restricted access</small></div>
+      </section>
+
+      <section className="workspace-grid knowledge-grid knowledge-operations-workspace">
         <div className="panel knowledge-register-panel">
           <div className="panel-heading">
             <div>
@@ -342,6 +397,19 @@ function KnowledgeBasePage({ user }) {
           </aside>
         )}
       </section>
+      <ReviewDialog
+        open={Boolean(archiveReview)}
+        eyebrow="Knowledge base"
+        title="Archive document"
+        description={archiveReview ? `Archive "${archiveReview.title}". Users will no longer see it in the active document library.` : ""}
+        confirmLabel="Archive document"
+        reasonLabel="Archive reason"
+        reasonPlaceholder="Explain why this document should be removed from active use"
+        busy={loading}
+        danger
+        onCancel={() => setArchiveReview(null)}
+        onConfirm={confirmArchive}
+      />
     </div>
   );
 }

@@ -516,6 +516,227 @@ const listReadings = asyncHandler(async (req, res) => {
   res.json(rows);
 });
 
+const listReadingRegister = asyncHandler(async (req, res) => {
+  const requestedLimit = Number.parseInt(req.query.limit, 10);
+  const requestedOffset = Number.parseInt(req.query.offset, 10);
+  const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 25;
+  const offset = Number.isFinite(requestedOffset) ? Math.max(requestedOffset, 0) : 0;
+  const customerId = String(req.query.customer_id || "").trim();
+  const dateFrom = String(req.query.date_from || "").trim();
+  const dateTo = String(req.query.date_to || "").trim();
+  const search = String(req.query.search || "").trim().slice(0, 120);
+
+  if (customerId && (!/^\d+$/.test(customerId) || Number(customerId) < 1)) {
+    throw new ApiError(400, "customer_id must be a positive numeric id.");
+  }
+  if (dateFrom && !isDateOnly(dateFrom)) throw new ApiError(400, "date_from must be a YYYY-MM-DD date.");
+  if (dateTo && !isDateOnly(dateTo)) throw new ApiError(400, "date_to must be a YYYY-MM-DD date.");
+  if (dateFrom && dateTo && dateFrom > dateTo) throw new ApiError(400, "date_from cannot be after date_to.");
+
+  const params = [];
+  const filters = ["1 = 1"];
+  if (customerId) filters.push(`mr.customer_id = $${params.push(Number(customerId))}`);
+  if (dateFrom) filters.push(`mr.reading_date >= $${params.push(dateFrom)}::date`);
+  if (dateTo) filters.push(`mr.reading_date <= $${params.push(dateTo)}::date`);
+  if (search) {
+    const searchTerm = `%${search.replace(/[\\%_]/g, "\\$&")}%`;
+    const placeholder = `$${params.push(searchTerm)}`;
+    filters.push(
+      `(c.name ILIKE ${placeholder} ESCAPE '\\' OR c.acc_number ILIKE ${placeholder} ESCAPE '\\' OR COALESCE(m.meter_number, '') ILIKE ${placeholder} ESCAPE '\\' OR COALESCE(u.name, '') ILIKE ${placeholder} ESCAPE '\\')`
+    );
+  }
+  const where = filters.join(" AND ");
+  const totalResult = await pool.query(
+    `SELECT COUNT(*)::int AS total
+     FROM meter_readings mr
+     JOIN customers c ON c.id = mr.customer_id
+     LEFT JOIN meters m ON m.id = mr.meter_id
+     LEFT JOIN users u ON u.id = mr.created_by
+     WHERE ${where}`,
+    params
+  );
+  const { rows } = await pool.query(
+    `SELECT mr.*,
+            c.name AS customer_name,
+            c.acc_number,
+            m.meter_number,
+            m.meter_role,
+            sbr.id AS source_billing_request_id,
+            sbr.status AS source_billing_request_status,
+            prev.reading_date AS previous_reading_date,
+            bp.name AS billing_period_name,
+            bp.status AS billing_period_status,
+            u.name AS created_by_name
+     FROM meter_readings mr
+     JOIN customers c ON c.id = mr.customer_id
+     LEFT JOIN meters m ON m.id = mr.meter_id
+     LEFT JOIN source_billing_requests sbr ON sbr.current_reading_id = mr.id
+     LEFT JOIN meter_readings prev ON prev.id = mr.previous_reading_id
+     LEFT JOIN billing_periods bp ON bp.id = mr.billing_period_id
+     LEFT JOIN users u ON u.id = mr.created_by
+     WHERE ${where}
+     ORDER BY mr.reading_date DESC, mr.created_at DESC
+     LIMIT $${params.push(limit)} OFFSET $${params.push(offset)}`,
+    params
+  );
+
+  res.json({ limit, offset, total: totalResult.rows[0].total, rows });
+});
+
+const listReadingAnomalies = asyncHandler(async (req, res) => {
+  if (req.query.period_start && !isDateOnly(req.query.period_start)) {
+    throw new ApiError(400, "period_start must be a YYYY-MM-DD date.");
+  }
+  const periodSeed = req.query.period_start || new Date().toISOString().slice(0, 10);
+  const period = getMonthlyPeriodDates(periodSeed);
+  const threshold = 0.5;
+  const baselineIntervals = 3;
+  const { rows } = await pool.query(
+    `WITH chronological_readings AS (
+       SELECT mr.id,
+              mr.customer_id,
+              mr.meter_id,
+              mr.billing_period_id,
+              mr.reading_value,
+              mr.reading_date,
+              LAG(mr.reading_value) OVER (
+                PARTITION BY mr.meter_id
+                ORDER BY mr.reading_date ASC, mr.id ASC
+              ) AS prior_reading_value
+       FROM meter_readings mr
+       WHERE mr.meter_id IS NOT NULL
+     ),
+     usage_rows AS (
+       SELECT *,
+              reading_value - prior_reading_value AS units_used
+       FROM chronological_readings
+       WHERE prior_reading_value IS NOT NULL
+         AND reading_value >= prior_reading_value
+     ),
+     benchmarked_rows AS (
+       SELECT usage_rows.*,
+              COUNT(*) OVER (
+                PARTITION BY meter_id
+                ORDER BY reading_date ASC, id ASC
+                ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING
+              ) AS baseline_interval_count,
+              AVG(units_used) OVER (
+                PARTITION BY meter_id
+                ORDER BY reading_date ASC, id ASC
+                ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING
+              ) AS average_units
+       FROM usage_rows
+     )
+     SELECT br.id,
+            br.id AS reading_id,
+            br.customer_id,
+            br.meter_id,
+            c.name AS customer_name,
+            c.acc_number,
+            m.meter_number,
+            br.billing_period_id,
+            bp.name AS billing_period_name,
+            br.reading_date,
+            br.prior_reading_value AS previous_reading_value,
+            br.reading_value,
+            br.units_used,
+            br.average_units,
+            br.baseline_interval_count,
+            ABS(br.units_used - br.average_units) / NULLIF(br.average_units, 0) AS variance_ratio,
+            CASE WHEN br.units_used > br.average_units THEN 'above_average' ELSE 'below_average' END AS direction
+     FROM benchmarked_rows br
+     JOIN meters m ON m.id = br.meter_id
+     JOIN customers c ON c.id = br.customer_id
+     LEFT JOIN billing_periods bp ON bp.id = br.billing_period_id
+     WHERE m.meter_role = 'client_billing'
+       AND br.reading_date >= $1::date
+       AND br.reading_date <= $2::date
+       AND br.baseline_interval_count >= $3
+       AND br.average_units > 0
+       AND ABS(br.units_used - br.average_units) / br.average_units > $4
+     ORDER BY variance_ratio DESC, br.reading_date DESC, br.id DESC`,
+    [period.periodStart, period.periodEnd, baselineIntervals, threshold]
+  );
+
+  res.json({ period, threshold, baseline_intervals: baselineIntervals, rows });
+});
+
+const listEstimatedReadingCandidates = asyncHandler(async (req, res) => {
+  if (req.query.period_start && !isDateOnly(req.query.period_start)) {
+    throw new ApiError(400, "period_start must be a YYYY-MM-DD date.");
+  }
+  const periodSeed = req.query.period_start || new Date().toISOString().slice(0, 10);
+  const period = getMonthlyPeriodDates(periodSeed);
+  const baselineIntervals = 3;
+  const { rows } = await pool.query(
+    `WITH chronological_readings AS (
+       SELECT mr.id,
+              mr.meter_id,
+              mr.reading_value,
+              mr.reading_date,
+              LAG(mr.reading_value) OVER (
+                PARTITION BY mr.meter_id
+                ORDER BY mr.reading_date ASC, mr.id ASC
+              ) AS prior_reading_value
+       FROM meter_readings mr
+       WHERE mr.meter_id IS NOT NULL
+         AND mr.reading_date < $1::date
+     ),
+     usage_rows AS (
+       SELECT *, reading_value - prior_reading_value AS units_used
+       FROM chronological_readings
+       WHERE prior_reading_value IS NOT NULL
+         AND reading_value >= prior_reading_value
+     )
+     SELECT c.id AS customer_id,
+            c.name AS customer_name,
+            c.acc_number,
+            m.id AS meter_id,
+            m.meter_number,
+            latest.reading_date AS last_reading_date,
+            latest.reading_value AS last_reading_value,
+            baseline.average_units,
+            baseline.interval_count,
+            ROUND((latest.reading_value + baseline.average_units)::numeric, 2) AS suggested_reading_value
+     FROM meters m
+     JOIN customers c ON c.id = m.customer_id
+     JOIN LATERAL (
+       SELECT cr.reading_date, cr.reading_value
+       FROM chronological_readings cr
+       WHERE cr.meter_id = m.id
+       ORDER BY cr.reading_date DESC, cr.id DESC
+       LIMIT 1
+     ) latest ON TRUE
+     JOIN LATERAL (
+       SELECT AVG(recent.units_used) AS average_units,
+              COUNT(*)::integer AS interval_count
+       FROM (
+         SELECT ur.units_used
+         FROM usage_rows ur
+         WHERE ur.meter_id = m.id
+         ORDER BY ur.reading_date DESC, ur.id DESC
+         LIMIT $2
+       ) recent
+     ) baseline ON TRUE
+     WHERE c.status = 'active'
+       AND m.status = 'active'
+       AND m.meter_role = 'client_billing'
+       AND baseline.interval_count = $2
+       AND baseline.average_units > 0
+       AND NOT EXISTS (
+         SELECT 1
+         FROM meter_readings current_period_reading
+         WHERE current_period_reading.meter_id = m.id
+           AND current_period_reading.reading_date >= $1::date
+           AND current_period_reading.reading_date <= $3::date
+       )
+     ORDER BY latest.reading_date ASC, c.acc_number ASC`,
+    [period.periodStart, baselineIntervals, period.periodEnd]
+  );
+
+  res.json({ period, baseline_intervals: baselineIntervals, rows });
+});
+
 const addMonthsUtc = (dateValue, months) => {
   const dateOnly = dateValue instanceof Date ? dateValue.toISOString().slice(0, 10) : String(dateValue).slice(0, 10);
   const date = new Date(`${dateOnly}T00:00:00.000Z`);
@@ -534,6 +755,8 @@ const listEligibleReadingCustomers = asyncHandler(async (req, res) => {
             z.name AS zone_name,
             COALESCE(balance.balance_due, 0) AS balance_due,
             meter_counts.active_meter_count,
+            active_meter.id AS active_meter_id,
+            active_meter.meter_number AS active_meter_number,
             latest.latest_reading_date,
             latest.latest_reading_value
      FROM customers c
@@ -545,13 +768,21 @@ const listEligibleReadingCustomers = asyncHandler(async (req, res) => {
          AND m.status = 'active'
          AND m.meter_role = 'client_billing'
      ) meter_counts ON TRUE
+     JOIN LATERAL (
+       SELECT m.id, m.meter_number
+       FROM meters m
+       WHERE m.customer_id = c.id
+         AND m.status = 'active'
+         AND m.meter_role = 'client_billing'
+       ORDER BY m.installed_at DESC NULLS LAST, m.id DESC
+       LIMIT 1
+     ) active_meter ON TRUE
      LEFT JOIN LATERAL (
        SELECT mr.reading_date AS latest_reading_date,
               mr.reading_value AS latest_reading_value
        FROM meter_readings mr
-       JOIN meters m ON m.id = mr.meter_id
-       WHERE mr.customer_id = c.id
-         AND m.meter_role = 'client_billing'
+       WHERE mr.meter_id = active_meter.id
+         AND mr.reading_date < $1::date
        ORDER BY mr.reading_date DESC, mr.id DESC
        LIMIT 1
      ) latest ON TRUE
@@ -682,6 +913,105 @@ const createReading = asyncHandler(async (req, res) => {
 
     await client.query("COMMIT");
     res.status(201).json({ reading, bill, sourceBillingRequest });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
+const listCustomerReadingSubmissions = asyncHandler(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT crs.id, crs.customer_id, crs.meter_id, crs.reading_value, crs.reading_date, crs.notes,
+            crs.status, crs.submitted_at, c.name AS customer_name, c.acc_number, m.meter_number,
+            previous.reading_value AS previous_reading_value, previous.reading_date AS previous_reading_date
+     FROM customer_reading_submissions crs
+     JOIN customers c ON c.id = crs.customer_id
+     JOIN meters m ON m.id = crs.meter_id
+     LEFT JOIN LATERAL (
+       SELECT reading_value, reading_date
+       FROM meter_readings
+       WHERE meter_id = crs.meter_id AND reading_date < crs.reading_date
+       ORDER BY reading_date DESC, id DESC
+       LIMIT 1
+     ) previous ON TRUE
+     WHERE crs.status = 'pending'
+     ORDER BY crs.submitted_at ASC`
+  );
+  res.json(rows);
+});
+
+const reviewCustomerReadingSubmission = asyncHandler(async (req, res) => {
+  const action = String(req.body?.action || "").toLowerCase();
+  const reviewNotes = String(req.body?.review_notes || "").trim();
+  if (!["approve", "reject"].includes(action)) throw new ApiError(400, "Review action must be approve or reject.");
+  if (action === "reject" && !reviewNotes) throw new ApiError(400, "Rejection reason is required.");
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const submissionResult = await client.query(
+      "SELECT * FROM customer_reading_submissions WHERE id = $1 FOR UPDATE",
+      [req.params.id]
+    );
+    const submission = submissionResult.rows[0];
+    if (!submission) throw new ApiError(404, "Customer reading submission not found.");
+    if (submission.status !== "pending") throw new ApiError(400, "This customer reading submission has already been reviewed.");
+
+    if (action === "reject") {
+      const { rows } = await client.query(
+        `UPDATE customer_reading_submissions
+         SET status = 'rejected', reviewed_by = $1, reviewed_at = NOW(), review_notes = $2, updated_at = NOW()
+         WHERE id = $3
+         RETURNING *`,
+        [req.user.id, reviewNotes, submission.id]
+      );
+      await recordAuditEvent(client, {
+        req,
+        action: "customer_reading_submission.rejected",
+        entityType: "customer_reading_submission",
+        entityId: submission.id,
+        beforeData: submission,
+        afterData: rows[0],
+        reason: reviewNotes
+      });
+      await client.query("COMMIT");
+      res.json({ submission: rows[0] });
+      return;
+    }
+
+    const { reading, bill, sourceBillingRequest } = await createReadingWithBill(
+      client,
+      req,
+      {
+        customer_id: submission.customer_id,
+        meter_id: submission.meter_id,
+        reading_value: submission.reading_value,
+        reading_date: submission.reading_date,
+        notes: [submission.notes, `Customer portal submission #${submission.id}`].filter(Boolean).join(" | ")
+      },
+      { source: "customer_portal", auditReason: reviewNotes || `Approved customer portal submission #${submission.id}` }
+    );
+    const { rows } = await client.query(
+      `UPDATE customer_reading_submissions
+       SET status = 'approved', reviewed_by = $1, reviewed_at = NOW(), review_notes = $2,
+           official_reading_id = $3, updated_at = NOW()
+       WHERE id = $4
+       RETURNING *`,
+      [req.user.id, reviewNotes || null, reading.id, submission.id]
+    );
+    await recordAuditEvent(client, {
+      req,
+      action: "customer_reading_submission.approved",
+      entityType: "customer_reading_submission",
+      entityId: submission.id,
+      beforeData: submission,
+      afterData: rows[0],
+      reason: reviewNotes || `Approved customer portal submission #${submission.id}`
+    });
+    await client.query("COMMIT");
+    res.json({ submission: rows[0], reading, bill, sourceBillingRequest });
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -1203,9 +1533,14 @@ module.exports = {
   commitReadingImport,
   getReadingContext,
   listEligibleReadingCustomers,
+  listEstimatedReadingCandidates,
+  listReadingAnomalies,
+  listCustomerReadingSubmissions,
+  listReadingRegister,
   listReadings,
   createReading,
   previewReadingImport,
   recalculateBillForReading,
+  reviewCustomerReadingSubmission,
   updateReading
 };

@@ -19,7 +19,9 @@ This folder is the operating memory for the AGUA Global water billing and custom
 - [10 Test Checklists](10-test-checklists.md)
 - [11 User Manual](11-user-manual.md)
 - [12 Implementation Records](12-implementation-records.md)
+- [13 Director Finance And Hosting Costs](13-director-finance-and-hosting-costs.md)
 - [13 Executive Finance And Hosting Costs](13-executive-finance-and-hosting-costs.md)
+- [14 Product Implementation Checklist](14-product-implementation-checklist.md)
 - [Core Business Model](core-business-model.md)
 
 ## Documentation Principles

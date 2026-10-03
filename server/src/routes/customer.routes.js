@@ -2,6 +2,7 @@ const express = require("express");
 const {
   listCustomers,
   getCustomer,
+  getCustomerOverview,
   getCustomerStatement,
   previewCustomerImport,
   commitCustomerImport,
@@ -23,6 +24,7 @@ router.post("/imports/commit", authorize("admin", "accountant"), commitCustomerI
 router.post("/opening-balances/imports/preview", authorize("admin", "accountant"), previewOpeningBalanceImport);
 router.post("/opening-balances/imports/commit", authorize("admin", "accountant"), commitOpeningBalanceImport);
 router.get("/:id/statement", authorize("admin", "accountant", "customer", "business_viewer"), getCustomerStatement);
+router.get("/:id/overview", authorize("admin", "accountant"), getCustomerOverview);
 router.get("/:id", authorize("admin", "accountant", "meter_reader", "business_viewer"), getCustomer);
 router.post("/", authorize("admin", "accountant"), createCustomer);
 router.post("/:id/close", authorize("admin", "accountant"), closeCustomerAccount);

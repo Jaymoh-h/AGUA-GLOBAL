@@ -351,7 +351,10 @@ const updateInvoiceStatus = asyncHandler(async (req, res) => {
   if (!["submitted", "approved", "rejected"].includes(status)) {
     throw new ApiError(400, "Status must be submitted, approved, or rejected.");
   }
-  const reason = String(req.body.reason || "").trim() || null;
+  const reason = String(req.body.reason || "").trim();
+  if (["approved", "rejected"].includes(status) && !reason) {
+    throw new ApiError(400, "Review notes are required for contractor invoice approval or rejection.");
+  }
 
   const client = await pool.connect();
   try {
@@ -384,7 +387,7 @@ const updateInvoiceStatus = asyncHandler(async (req, res) => {
       entityId: rows[0].id,
       beforeData: before,
       afterData: rows[0],
-      reason
+      reason: reason || null
     });
     await client.query("COMMIT");
     res.json(rows[0]);
@@ -412,6 +415,8 @@ const postInvoiceToExpense = asyncHandler(async (req, res) => {
     if (!invoice) throw new ApiError(404, "Contractor invoice not found.");
     if (invoice.status !== "approved") throw new ApiError(400, "Only approved contractor invoices can be posted to expenses.");
     if (invoice.expense_id) throw new ApiError(400, "This contractor invoice has already been posted to expenses.");
+    const reviewNotes = String(req.body.review_notes || "").trim();
+    if (!reviewNotes) throw new ApiError(400, "Posting approval notes are required before creating the expense.");
 
     const expense = await createExpenseRecord(
       client,
@@ -428,7 +433,7 @@ const postInvoiceToExpense = asyncHandler(async (req, res) => {
         notes: req.body.notes || `Contractor invoice ${invoice.invoice_number}`,
         contractor_invoice_id: invoice.id
       },
-      { auditReason: `Contractor invoice ${invoice.invoice_number}` }
+      { auditReason: reviewNotes }
     );
 
     const updatedResult = await client.query(
@@ -450,7 +455,7 @@ const postInvoiceToExpense = asyncHandler(async (req, res) => {
       entityId: invoice.id,
       beforeData: invoice,
       afterData: updatedResult.rows[0],
-      reason: `Posted to expense #${expense.id}`
+      reason: reviewNotes
     });
 
     await client.query("COMMIT");

@@ -1,8 +1,8 @@
 import { Download, Eye, History, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
 import TableControls, { useTableControls } from "../components/TableControls";
-import { useToastMessage } from "../components/ToastProvider";
+import WorkspaceState from "../components/WorkspaceState";
 import { api } from "../services/api";
 import { downloadCsvRows } from "../utils/csvTemplate";
 import { namedExport, localDateStamp } from "../utils/exportNames";
@@ -71,11 +71,27 @@ const changeSummary = (event) => {
 
 function AuditTrailPage() {
   const [events, setEvents] = useState([]);
-  const [, setMessage] = useToastMessage();
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [initialError, setInitialError] = useState("");
   const [selectedEvent, setSelectedEvent] = useState(null);
 
+  const load = async ({ showState = false } = {}) => {
+    if (showState) {
+      setInitialLoading(true);
+      setInitialError("");
+    }
+    try {
+      setEvents(await api.auditEvents.list());
+    } catch (err) {
+      if (showState) setInitialError(err.message || "Audit events could not be loaded.");
+      throw err;
+    } finally {
+      if (showState) setInitialLoading(false);
+    }
+  };
+
   useEffect(() => {
-    api.auditEvents.list().then(setEvents).catch((err) => setMessage(err.message));
+    load({ showState: true }).catch(() => {});
   }, []);
   const eventTable = useTableControls(events, {
     searchFields: ["actor_name", "actor_email", "action", "entity_type", "entity_id", "reason", "created_at"]
@@ -115,17 +131,50 @@ function AuditTrailPage() {
   };
 
   const selectedChanges = selectedEvent ? buildChangeRows(selectedEvent) : [];
+  const auditSummary = useMemo(() => {
+    const since = Date.now() - 24 * 60 * 60 * 1000;
+    const highRisk = events.filter((event) => /delete|archive|rollback|lock|disable|terminate/i.test(String(event.action || "")));
+    return {
+      recent: events.filter((event) => new Date(event.created_at || 0).getTime() >= since).length,
+      imports: importEvents.length,
+      system: events.filter((event) => !event.actor_name).length,
+      highRisk: highRisk.length
+    };
+  }, [events, importEvents.length]);
+
+  if (initialLoading) {
+    return <WorkspaceState detail="Retrieving accountability and import activity records." title="Preparing operational audit" />;
+  }
+
+  if (initialError) {
+    return (
+      <WorkspaceState
+        detail={initialError}
+        onRetry={() => load({ showState: true }).catch(() => {})}
+        state="error"
+        title="Operational audit could not load"
+      />
+    );
+  }
 
   return (
-    <section className="page-stack">
-      <header className="page-header">
+    <section className="page-stack audit-operations-page">
+      <header className="page-header audit-operations-header">
         <div>
           <p className="eyebrow">Accountability</p>
-          <h2>Audit Trail</h2>
+          <h2>Operational audit</h2>
+          <p>Trace important activity, inspect data movement, and review changes that alter customer, financial, or access records.</p>
         </div>
       </header>
 
-      <div className="panel">
+      <section className="audit-operations-metrics" aria-label="Audit overview">
+        <div><span>Events in 24 hours</span><strong>{auditSummary.recent}</strong><small>Recent recorded activity</small></div>
+        <div><span>Import commits</span><strong>{auditSummary.imports}</strong><small>Available for source review</small></div>
+        <div><span>System activity</span><strong>{auditSummary.system}</strong><small>Recorded without a named actor</small></div>
+        <div className={auditSummary.highRisk ? "needs-attention" : ""}><span>High-risk events</span><strong>{auditSummary.highRisk}</strong><small>{auditSummary.highRisk ? "Archive, rollback, lock, or disable actions" : "No flagged actions in history"}</small></div>
+      </section>
+
+      <div className="panel audit-import-panel">
         <div className="panel-heading">
           <h3>Import Activity</h3>
           <div className="row-actions">
@@ -175,7 +224,7 @@ function AuditTrailPage() {
           </table>
         </div>
       </div>
-      <div className="panel">
+      <div className="panel audit-events-panel">
         <div className="panel-heading">
           <h3>Recent Events</h3>
           <div className="row-actions">

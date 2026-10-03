@@ -71,6 +71,8 @@ Authorization: Bearer <token>
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/readings` | admin, accountant, meter_reader | List readings |
+| `GET` | `/readings/customer-submissions` | admin, accountant, meter_reader | List pending customer-submitted meter readings for review |
+| `POST` | `/readings/customer-submissions/:id/review` | admin, accountant, meter_reader | Approve a submitted reading into the normal billing flow, or reject it with a reason |
 | `POST` | `/readings` | admin, accountant, meter_reader | Create reading |
 | `PUT` | `/readings/:id` | admin, accountant, meter_reader | Edit reading |
 | `GET` | `/readings/context` | admin, accountant, meter_reader | Previous reading context |
@@ -96,7 +98,8 @@ Authorization: Bearer <token>
 | `GET` | `/billing/periods` | admin, accountant | List periods |
 | `POST` | `/billing/periods` | admin, accountant | Create period |
 | `GET` | `/billing/periods/:id/readiness` | admin, accountant | Period readiness |
-| `PATCH` | `/billing/periods/:id/status` | admin, accountant | Update period status |
+| `GET` | `/billing/periods/:id/revenue-assurance` | admin, accountant | Period recovery queue for unbilled client-meter consumption, held bills, and missing readings; observed units and generated value remain separate |
+| `PATCH` | `/billing/periods/:id/status` | admin, accountant | Update period status; close or lock with readiness blockers requires an audit reason and records the blocker snapshot |
 | `GET` | `/billing/settings` | admin, accountant | Get settings |
 | `PUT` | `/billing/settings` | admin, accountant | Update settings |
 | `GET` | `/billing/source-billing-requests` | admin, accountant | List source review requests |
@@ -116,6 +119,8 @@ Authorization: Bearer <token>
 | `POST` | `/payments` | admin, accountant | Create payment |
 | `PUT` | `/payments/:id` | admin, accountant | Edit payment |
 | `POST` | `/payments/:id/void` | admin, accountant | Void to suspense |
+| `GET` | `/payments/mpesa/status` | admin, accountant, business_viewer | Read M-Pesa callback readiness without exposing its shared token |
+| `GET` | `/payments/mpesa/callback-events` | admin, accountant, business_viewer | List the most recent authenticated callback outcomes; optional `status=posted|duplicate|rejected` and `limit` |
 | `GET` | `/payments/suspense` | admin, accountant, business_viewer | List suspense |
 | `POST` | `/payments/suspense/:id/reapply` | admin, accountant | Reapply suspense |
 | `POST` | `/payments/suspense/:id/discard` | admin | Discard suspense |
@@ -140,7 +145,7 @@ Customer service charges are extra customer receivables for billable services ou
 
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/dashboard` | admin, accountant, meter_reader, business_viewer | Dashboard data |
+| `GET` | `/dashboard` | admin, accountant, meter_reader, business_viewer | Dashboard data and role-aware operational action queue, including overdue accounts that lack a usable delivery channel |
 | `GET` | `/expenses` | admin, accountant, business_viewer | List expenses |
 | `POST` | `/expenses` | admin, accountant | Create expense |
 | `POST` | `/expenses/imports/preview` | admin, accountant | Preview expense import |
@@ -157,6 +162,9 @@ Customer service charges are extra customer receivables for billable services ou
 | --- | --- | --- | --- |
 | `GET` | `/reports/summary` | admin, accountant, business_viewer | Report summary |
 | `GET` | `/reports/accountant` | admin, accountant, business_viewer | Accountant reports |
+| `GET` | `/reports/cash-flow-forecast` | admin, accountant, business_viewer | Assumption-led 90-day cash planning view based on trailing billing, allocation, expense, payment-plan, and standing-order data |
+| `GET` | `/reports/budget-variance` | admin, accountant, business_viewer | Recorded monthly revenue, collection, and operating-cost targets compared with payable bills, posted receipts, and recorded expenses |
+| `PUT` | `/reports/budget-targets/:month` | admin, accountant | Create or update a monthly target. `:month` uses `YYYY-MM`; all three target amounts are zero or greater and changes are audited |
 | `GET` | `/reports/data-quality` | admin, accountant, business_viewer | Data quality checks |
 | `GET` | `/reports/backup-status` | admin | Backup manifest, retention policy, and export readiness |
 | `GET` | `/reports/backup-restore-drills` | admin | Restore drill history |
@@ -165,12 +173,16 @@ Customer service charges are extra customer receivables for billable services ou
 | `GET` | `/audit-events` | admin, accountant, business_viewer | Audit event list |
 | `GET` | `/monitoring/summary` | admin, accountant, business_viewer | Application monitoring summary and recent events |
 | `GET` | `/monitoring/events` | admin, accountant, business_viewer | Recent application monitoring events |
+| `PATCH` | `/monitoring/events/:id/resolve` | admin | Resolve a warning, error, or critical event with an audited resolution note |
 | `GET` | `/monitoring/alert-snapshot` | admin | Current monitoring alert evaluation window |
 | `POST` | `/monitoring/test-alert` | admin | Force a monitoring alert delivery test |
 | `GET` | `/monitoring/cron` | Secret protected | Scheduled monitoring alert runner |
 | `POST` | `/monitoring/client-events` | Authenticated | Record client-side page/runtime errors |
 | `GET` | `/business-settings/public` | Public | Public business profile |
 | `GET` | `/business-settings` | admin, accountant, business_viewer | Business settings |
+| `GET` | `/business-settings/integration-readiness` | admin, accountant, business_viewer | Redacted configuration readiness for provider and hosting dependencies |
+| `GET` | `/business-settings/commissioning-checks` | admin, accountant, business_viewer | Reviewed provider and hosting commissioning evidence register |
+| `POST` | `/business-settings/commissioning-checks` | admin | Record audited commissioning evidence; a passed check requires an evidence reference |
 | `PUT` | `/business-settings` | admin | Update settings |
 | `POST` | `/business-settings/logo` | admin | Upload logo |
 | `GET` | `/reminders/operational/preview` | admin, accountant | Preview operational reminders |
@@ -182,8 +194,9 @@ Customer service charges are extra customer receivables for billable services ou
 | `GET` | `/users` | admin | List users |
 | `POST` | `/users` | admin | Create user |
 | `PUT` | `/users/:id` | admin | Update user |
-| `POST` | `/users/:id/access-profiles` | admin | Create user access context |
-| `PATCH` | `/users/:id/access-profiles/:profileId` | admin | Update user access context |
+| `POST` | `/users/:id/access-profiles` | admin | Create user access context; requires an approval note |
+| `PATCH` | `/users/:id/access-profiles/:profileId` | admin | Update user access context; requires an approval note |
+| `DELETE` | `/users/:id/access-profiles/:profileId` | admin | Detach a disabled, non-default user access context; requires an approval note |
 
 ## Production
 
@@ -222,35 +235,65 @@ Customer service charges are extra customer receivables for billable services ou
 
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/communications/invoice-preview` | admin, accountant | Invoice alert preview |
-| `GET` | `/communications/templates` | admin, accountant | List templates |
+| `GET` | `/communications/invoice-preview` | admin, accountant | Invoice alert preview, including overdue balance, oldest due date, and days overdue for collection follow-up |
+| `GET` | `/communications/arrears-follow-up` | admin, accountant | Bounded, read-only arrears queue with age-band counts, highest-balance 20% exposure flags, collection totals, and contact-gap indicators |
+| `GET` | `/communications/payment-plan-follow-up` | admin, accountant | Active behind payment plans with shortfall, contact readiness, and rendered reminder values |
+| `GET` | `/communications/standing-order-follow-up` | admin, accountant | Active mandates behind their confirmed reference-matched receipts, with rendered reminder values |
+| `GET` | `/communications/disconnection-warning-follow-up` | admin, accountant | Policy-guarded review queue for accounts more than 90 days overdue; active payment plans are excluded, successful sends have a 7-day cooldown, and no service status is changed |
+| `GET` | `/communications/templates` | admin, accountant | List invoice or payment-plan templates using the `alert_type` query parameter |
 | `POST` | `/communications/templates` | admin, accountant | Create template |
 | `PUT` | `/communications/templates/:id` | admin, accountant | Update template |
 | `GET` | `/communications/campaigns` | admin, accountant | List campaigns |
+| `GET` | `/communications/delivery-exceptions` | admin, accountant | Bounded, read-only failed/skipped delivery queue; accepts `status=all|failed|skipped`, `days` (1-90), and `limit` (1-200) |
 | `GET` | `/communications/campaigns/:id` | admin, accountant | Campaign details |
 | `POST` | `/communications/invoice-alerts/:customerId/send` | admin, accountant | Send one invoice alert |
-| `POST` | `/communications/invoice-alerts/bulk-send` | admin, accountant | Send bulk alerts |
-| `GET` | `/portal/dashboard` | customer | Portal dashboard |
+| `POST` | `/communications/payment-plan-alerts/:arrangementId/send` | admin, accountant | Send one explicit payment-plan reminder when the plan is currently behind |
+| `POST` | `/communications/standing-order-alerts/:standingOrderId/send` | admin, accountant | Send one explicit standing-order reminder when the mandate is currently behind |
+| `POST` | `/communications/disconnection-warnings/:customerId/send` | admin, accountant | Send one explicit, audited formal payment warning only while the account remains eligible and outside the 7-day successful-send cooldown; requires an approval note and does not disconnect service |
+| `POST` | `/communications/invoice-alerts/bulk-send` | admin, accountant | Send bulk alerts; optional service-zone scope is recorded and must match every submitted customer |
+| `GET` | `/portal/dashboard` | customer | Portal dashboard, including the active customer payment-plan summary where applicable |
 | `GET` | `/portal/payments/:id` | customer | Portal receipt/payment |
-| `POST` | `/portal/service-requests` | customer | Create portal service request |
+| `PUT` | `/portal/delivery-preferences` | customer | Update the authenticated account's permitted delivery channels and preferred enabled channel |
+| `POST` | `/portal/service-requests` | customer | Create a portal service request. `connection` cases require a structured site brief; they do not create accounts, meters, charges, or service-status changes. |
+| `POST` | `/portal/reading-submissions` | customer | Submit a client-billing meter reading for staff review; this does not create a bill directly |
 
 ## Documents
 
 | Method | Endpoint | Roles | Purpose |
 | --- | --- | --- | --- |
-| `GET` | `/documents?entity_type=&entity_id=` | admin, accountant, meter_reader | List supporting documents |
-| `POST` | `/documents` | admin, accountant, meter_reader | Upload supporting document |
-| `GET` | `/documents/:id/download` | admin, accountant, meter_reader | Download supporting document |
-| `DELETE` | `/documents/:id` | admin, accountant, meter_reader | Soft-delete supporting document |
+| `GET` | `/documents?entity_type=&entity_id=` | admin, accountant, meter_reader, customer | List supporting documents. Customers can only access their own portal service-request and meter-reading-submission files. |
+| `POST` | `/documents` | admin, accountant, meter_reader, customer | Upload supporting document, including a meter-photo proof against a customer reading submission |
+| `GET` | `/documents/:id/download` | admin, accountant, meter_reader, customer | Download supporting document |
+| `DELETE` | `/documents/:id` | admin, accountant, meter_reader, customer | Soft-delete supporting document |
 | `GET` | `/knowledge-documents` | admin, accountant, meter_reader, business_viewer | List visible knowledge documents |
 | `POST` | `/knowledge-documents` | admin, accountant | Upload private SOP/manual document |
 | `PUT` | `/knowledge-documents/:id` | admin, accountant | Update metadata/access |
 | `GET` | `/knowledge-documents/:id/download` | admin, accountant, meter_reader, business_viewer | Download and audit access |
 | `DELETE` | `/knowledge-documents/:id` | admin, accountant | Archive private document |
 
-Documents can currently link to maintenance requests, expenses, and contractor invoices. Expense and contractor invoice documents are restricted to admin/accountant by controller-level checks. Files must be PDF, PNG, JPG, WEBP, DOCX, or XLSX and no larger than 3MB. Supporting document bytes are stored in PostgreSQL for Vercel-safe persistence.
+Documents can currently link to maintenance requests, expenses, and contractor invoices. Expense and contractor invoice documents are restricted to admin/accountant by controller-level checks. Customers can only access files they personally uploaded to their own customer-portal service requests; they cannot access staff attachments or internal records. Files must be PDF, PNG, JPG, WEBP, DOCX, or XLSX and no larger than 3MB. Supporting document bytes are stored in PostgreSQL for Vercel-safe persistence.
 
 Knowledge documents are separate from public `/docs`. Admins can see and manage all records; non-admin staff can only see active records whose `allowed_roles` includes their current access role. Restricted knowledge documents are admin-managed.
+
+## Payment Arrangements
+
+| Method | Endpoint | Roles | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/payment-arrangements` | admin, accountant, business_viewer | List payment-plan arrangements |
+| `POST` | `/payment-arrangements` | admin, accountant | Approve an arrangement for an overdue customer |
+| `PATCH` | `/payment-arrangements/:id/close` | admin, accountant | Record a completed, defaulted, or cancelled outcome |
+
+An arrangement is an auditable collections commitment. It does not alter bills, allocations, or customer balances; payments remain subject to the normal payment-posting workflow.
+
+## Standing Orders
+
+| Method | Endpoint | Roles | Purpose |
+| --- | --- | --- | --- |
+| `GET` | `/standing-orders` | admin, accountant, business_viewer | List bank mandates and their confirmed-payment standing |
+| `POST` | `/standing-orders` | admin, accountant | Register one active bank mandate for a customer |
+| `PATCH` | `/standing-orders/:id/status` | admin, accountant | Pause, reactivate, or cancel a mandate with an auditable note |
+
+Standing orders are reconciliation aids, not payment instructions. A mandate reference can preselect a customer while a bank or M-Pesa statement is reviewed, but a receipt is created only after the underlying confirmed transaction passes the usual import validation and posting controls.
 
 ## Contractor Invoices
 

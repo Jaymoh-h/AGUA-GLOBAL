@@ -10,9 +10,9 @@ const { authenticate, authorize } = require("../middleware/auth");
 const router = express.Router();
 
 router.use(authenticate);
-router.get("/", authorize("admin", "accountant", "meter_reader"), listDocuments);
-router.post("/", authorize("admin", "accountant", "meter_reader"), uploadDocument);
-router.get("/:id/download", authorize("admin", "accountant", "meter_reader"), downloadDocument);
-router.delete("/:id", authorize("admin", "accountant", "meter_reader"), deleteDocument);
+router.get("/", authorize("admin", "accountant", "meter_reader", "customer"), listDocuments);
+router.post("/", authorize("admin", "accountant", "meter_reader", "customer"), uploadDocument);
+router.get("/:id/download", authorize("admin", "accountant", "meter_reader", "customer"), downloadDocument);
+router.delete("/:id", authorize("admin", "accountant", "meter_reader", "customer"), deleteDocument);
 
 module.exports = router;

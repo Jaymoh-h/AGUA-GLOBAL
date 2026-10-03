@@ -1,11 +1,12 @@
 const fs = require("fs/promises");
 const path = require("path");
 const pool = require("../db/pool");
-const { logoStorageMode } = require("../config/env");
+const { logoStorageMode, mpesaCallbackToken, publicStatusUrl, sms, smtp } = require("../config/env");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
 const { matchesFileSignature } = require("../utils/fileSignature");
+const { getWhatsAppStatus } = require("../services/whatsapp.service");
 
 const uploadDir = path.join(__dirname, "..", "..", "public", "uploads");
 const logoMimeTypes = {
@@ -54,6 +55,99 @@ const normalizePrintScale = (value) => {
   }
   return scale;
 };
+
+const normalizedProvider = (value) => String(value || "none").toLowerCase().replace(/[\s_-]+/g, "");
+const commissioningCheckKeys = new Set([
+  "messaging_email",
+  "messaging_sms",
+  "messaging_whatsapp",
+  "mpesa_settlement",
+  "bank_feed",
+  "database_resilience",
+  "external_uptime"
+]);
+const commissioningStatuses = new Set(["planned", "passed", "partial", "failed"]);
+
+const getIntegrationReadiness = asyncHandler(async (_req, res) => {
+  const business = await getBusinessSettingsRow(pool);
+  const smsProvider = normalizedProvider(sms.provider);
+  const smsConfigured =
+    (smsProvider === "africastalking" && Boolean(sms.africasTalking.username && sms.africasTalking.apiKey)) ||
+    (smsProvider === "twilio" && Boolean(sms.twilio.accountSid && sms.twilio.authToken && (sms.twilio.from || sms.twilio.messagingServiceSid)));
+  const whatsapp = getWhatsAppStatus();
+  const paybillConfigured = Boolean(business?.paybill_number);
+  const callbackTokenConfigured = Boolean(mpesaCallbackToken);
+
+  res.json({
+    generated_at: new Date().toISOString(),
+    messaging: {
+      email: { configured: Boolean(smtp.host && smtp.user && smtp.pass), provider: smtp.host ? "SMTP" : "none" },
+      sms: { configured: smsConfigured, provider: sms.provider || "none" },
+      whatsapp: { configured: whatsapp.configured, provider: whatsapp.provider || "none" }
+    },
+    payments: {
+      mpesa: {
+        mode: callbackTokenConfigured && paybillConfigured ? "guarded_callback" : "statement_reconciliation",
+        callback_token_configured: callbackTokenConfigured,
+        paybill_configured: paybillConfigured,
+        direct_posting_ready: callbackTokenConfigured && paybillConfigured
+      },
+      bank_feed: { mode: "statement_reconciliation", direct_feed_configured: false }
+    },
+    operations: {
+      public_status_url_configured: Boolean(publicStatusUrl),
+      external_uptime_monitor: "not_observable_from_application",
+      provider_native_database_resilience: "not_observable_from_application"
+    }
+  });
+});
+
+const listIntegrationCommissioningChecks = asyncHandler(async (_req, res) => {
+  const { rows } = await pool.query(
+    `SELECT icc.*, u.name AS recorded_by_name
+     FROM integration_commissioning_checks icc
+     LEFT JOIN users u ON u.id = icc.recorded_by
+     ORDER BY icc.verification_date DESC, icc.id DESC
+     LIMIT 80`
+  );
+  res.json(rows);
+});
+
+const createIntegrationCommissioningCheck = asyncHandler(async (req, res) => {
+  const checkKey = String(req.body?.check_key || "").trim();
+  const status = String(req.body?.status || "planned").trim().toLowerCase();
+  const verificationDate = String(req.body?.verification_date || new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const evidenceReference = nullableText(req.body?.evidence_reference);
+  const findings = nullableText(req.body?.findings);
+  const followUpActions = nullableText(req.body?.follow_up_actions);
+
+  if (!commissioningCheckKeys.has(checkKey)) throw new ApiError(400, "Unsupported commissioning check.");
+  if (!commissioningStatuses.has(status)) throw new ApiError(400, "Commissioning status must be planned, passed, partial, or failed.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(verificationDate)) throw new ApiError(400, "Verification date must use YYYY-MM-DD.");
+  if (evidenceReference && evidenceReference.length > 240) throw new ApiError(400, "Evidence reference must be 240 characters or fewer.");
+  if (status === "passed" && !evidenceReference) {
+    throw new ApiError(400, "A passed commissioning check requires an evidence reference.");
+  }
+
+  const { rows } = await pool.query(
+    `INSERT INTO integration_commissioning_checks (
+       check_key, status, verification_date, evidence_reference, findings, follow_up_actions, recorded_by
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING *`,
+    [checkKey, status, verificationDate, evidenceReference, findings, followUpActions, req.user.id]
+  );
+  const created = rows[0];
+  await recordAuditEvent(pool, {
+    req,
+    action: "integration_commissioning_check.recorded",
+    entityType: "integration_commissioning_check",
+    entityId: created.id,
+    afterData: created,
+    reason: `Recorded ${checkKey} commissioning evidence`
+  });
+  res.status(201).json(created);
+});
 
 const parseLogoUpload = ({ data, mime_type }) => {
   const match = String(data || "").match(/^data:([^;]+);base64,(.+)$/);
@@ -261,6 +355,9 @@ const uploadBusinessLogo = asyncHandler(async (req, res) => {
 module.exports = {
   getPublicBusinessSettings,
   getBusinessSettings,
+  getIntegrationReadiness,
+  listIntegrationCommissioningChecks,
+  createIntegrationCommissioningCheck,
   updateBusinessSettings,
   uploadBusinessLogo
 };

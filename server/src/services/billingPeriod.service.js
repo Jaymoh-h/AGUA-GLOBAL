@@ -90,15 +90,24 @@ const nextDocumentNumber = async (client, type) => {
   const settings = settingsResult.rows[0];
   const prefixColumn = type === "receipt" ? "receipt_number_prefix" : "bill_number_prefix";
   const nextColumn = type === "receipt" ? "receipt_number_next" : "bill_number_next";
+  const numberColumn = type === "receipt" ? "receipt_number" : "bill_number";
+  const documentTable = type === "receipt" ? "payments" : "bills";
   const prefix = settings[prefixColumn] || (type === "receipt" ? "RCPT" : "BILL");
-  const nextValue = Number(settings[nextColumn] || 1);
-  const number = `${prefix}-${padSequence(nextValue, settings.number_padding)}`;
+  let nextValue = Number(settings[nextColumn] || 1);
+  let number = `${prefix}-${padSequence(nextValue, settings.number_padding)}`;
+
+  // Settings can be restored from a backup that predates imported documents. Keep the sequence ahead of retained records.
+  while ((await client.query(`SELECT 1 FROM ${documentTable} WHERE ${numberColumn} = $1 LIMIT 1`, [number])).rows[0]) {
+    nextValue += 1;
+    number = `${prefix}-${padSequence(nextValue, settings.number_padding)}`;
+  }
 
   await client.query(
     `UPDATE billing_settings
-     SET ${nextColumn} = ${nextColumn} + 1,
+     SET ${nextColumn} = $1,
          updated_at = NOW()
-     WHERE id = 1`
+     WHERE id = 1`,
+    [nextValue + 1]
   );
 
   return number;

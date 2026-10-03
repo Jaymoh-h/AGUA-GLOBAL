@@ -1,0 +1,17 @@
+{
+  "name": "AGUA Global Water Operations",
+  "short_name": "AGUA Global",
+  "description": "Water billing and field operations workspace.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f8f7",
+  "theme_color": "#0f766e",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

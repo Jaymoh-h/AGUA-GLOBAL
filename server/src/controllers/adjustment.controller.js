@@ -131,8 +131,12 @@ const createAdjustment = asyncHandler(async (req, res) => {
 
 const reviewAdjustment = asyncHandler(async (req, res) => {
   const { status, review_notes = "" } = req.body;
+  const reviewNotes = String(review_notes || "").trim();
   if (!["approved", "rejected"].includes(status)) {
     throw new ApiError(400, "Review status must be approved or rejected.");
+  }
+  if (!reviewNotes) {
+    throw new ApiError(400, "Review notes are required for manual adjustment decisions.");
   }
 
   const client = await pool.connect();
@@ -181,7 +185,7 @@ const reviewAdjustment = asyncHandler(async (req, res) => {
            updated_at = NOW()
        WHERE id = $6
        RETURNING *`,
-      [status, payment?.id || null, bill?.id || null, req.user.id, review_notes || null, before.id]
+      [status, payment?.id || null, bill?.id || null, req.user.id, reviewNotes, before.id]
     );
 
     await recordAuditEvent(client, {
@@ -195,7 +199,7 @@ const reviewAdjustment = asyncHandler(async (req, res) => {
         payment,
         bill
       },
-      reason: review_notes || before.reason
+      reason: reviewNotes
     });
 
     await client.query("COMMIT");

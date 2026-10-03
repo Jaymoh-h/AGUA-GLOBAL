@@ -170,10 +170,12 @@ const listExpenses = asyncHandler(async (_req, res) => {
 });
 
 const createExpense = asyncHandler(async (req, res) => {
+  const reviewNotes = String(req.body.review_notes || "").trim();
+  if (!reviewNotes) throw new ApiError(400, "Finance approval notes are required before recording a direct expense.");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const expense = await createExpenseRecord(client, req, req.body);
+    const expense = await createExpenseRecord(client, req, req.body, { auditReason: reviewNotes });
     await client.query("COMMIT");
     res.status(201).json(expense);
   } catch (error) {
@@ -198,6 +200,8 @@ const previewExpenseImport = asyncHandler(async (req, res) => {
 });
 
 const commitExpenseImport = asyncHandler(async (req, res) => {
+  const reviewNotes = String(req.body.review_notes || "").trim();
+  if (!reviewNotes) throw new ApiError(400, "Import approval notes are required before recording expense rows.");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -210,7 +214,7 @@ const commitExpenseImport = asyncHandler(async (req, res) => {
     const imported = [];
     for (const row of rows) {
       const expense = await createExpenseRecord(client, req, row, {
-        auditReason: `CSV expense import row ${row.rowNumber}`
+        auditReason: `${reviewNotes} | CSV expense import row ${row.rowNumber}`
       });
       imported.push({ rowNumber: row.rowNumber, expense_id: expense.id, amount: expense.amount });
     }
@@ -223,7 +227,8 @@ const commitExpenseImport = asyncHandler(async (req, res) => {
         totalRows: rows.length,
         importedRows: imported.length,
         totalAmount: imported.reduce((sum, row) => sum + Number(row.amount || 0), 0)
-      }
+      },
+      reason: reviewNotes
     });
 
     await client.query("COMMIT");

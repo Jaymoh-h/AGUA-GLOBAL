@@ -485,6 +485,130 @@ const getCustomer = asyncHandler(async (req, res) => {
   res.json(rows[0]);
 });
 
+const getCustomerOverview = asyncHandler(async (req, res) => {
+  const customerId = Number(req.params.id);
+  if (!Number.isInteger(customerId) || customerId <= 0) {
+    throw new ApiError(400, "Customer ID must be a positive whole number.");
+  }
+
+  const customerResult = await pool.query(
+    `SELECT c.*, r.name AS rate_name, r.amount AS rate_amount, z.name AS zone_name,
+      COALESCE((
+        SELECT SUM(COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount))
+        FROM bills b
+        WHERE b.customer_id = c.id AND b.status <> 'paid' AND b.bill_pay_status = 'payable'
+      ), 0) - COALESCE((
+        SELECT SUM(p.unallocated_amount)
+        FROM payments p
+        WHERE p.customer_id = c.id AND p.status = 'posted'
+      ), 0) AS balance_due
+     FROM customers c
+     JOIN rates r ON r.id = c.rate_id
+     JOIN zones z ON z.id = c.zone_id
+     WHERE c.id = $1`,
+    [customerId]
+  );
+  const customer = customerResult.rows[0];
+  if (!customer) throw new ApiError(404, "Customer not found.");
+
+  const [metersResult, readingsResult, billsResult, paymentsResult, requestsResult, documentsResult, auditResult] = await Promise.all([
+    pool.query(
+      `SELECT m.*,
+              latest.reading_value AS latest_reading_value,
+              latest.reading_date AS latest_reading_date
+       FROM meters m
+       LEFT JOIN LATERAL (
+         SELECT mr.reading_value, mr.reading_date
+         FROM meter_readings mr
+         WHERE mr.meter_id = m.id
+         ORDER BY mr.reading_date DESC, mr.created_at DESC
+         LIMIT 1
+       ) latest ON TRUE
+       WHERE m.customer_id = $1
+       ORDER BY CASE WHEN m.status = 'active' THEN 0 ELSE 1 END, m.installed_at DESC, m.id DESC`,
+      [customerId]
+    ),
+    pool.query(
+      `SELECT mr.id, mr.reading_value, mr.reading_date, mr.notes, mr.created_at,
+              m.meter_number, m.meter_role, bp.name AS billing_period_name,
+              b.id AS bill_id, b.bill_number, b.status AS bill_status, b.bill_pay_status
+       FROM meter_readings mr
+       LEFT JOIN meters m ON m.id = mr.meter_id
+       LEFT JOIN billing_periods bp ON bp.id = mr.billing_period_id
+       LEFT JOIN bills b ON b.current_reading_id = mr.id
+       WHERE mr.customer_id = $1
+       ORDER BY mr.reading_date DESC, mr.created_at DESC
+       LIMIT 12`,
+      [customerId]
+    ),
+    pool.query(
+      `SELECT b.id, b.bill_number, b.billing_month, b.due_date, b.status, b.bill_pay_status,
+              COALESCE(NULLIF(b.total_amount, 0), b.amount) AS total_amount,
+              COALESCE(NULLIF(b.balance_amount, 0), b.amount - b.paid_amount) AS balance_amount,
+              b.units_used, bp.name AS billing_period_name, sc.charge_number, sc.description AS service_charge_description
+       FROM bills b
+       LEFT JOIN billing_periods bp ON bp.id = b.billing_period_id
+       LEFT JOIN customer_service_charges sc ON sc.id = b.service_charge_id
+       WHERE b.customer_id = $1
+       ORDER BY b.billing_month DESC, b.created_at DESC
+       LIMIT 12`,
+      [customerId]
+    ),
+    pool.query(
+      `SELECT p.id, p.receipt_number, p.payment_date, p.amount, p.payment_channel, p.reference, p.status,
+              p.unallocated_amount
+       FROM payments p
+       WHERE p.customer_id = $1
+       ORDER BY p.payment_date DESC, p.created_at DESC
+       LIMIT 12`,
+      [customerId]
+    ),
+    pool.query(
+      `SELECT mr.id, mr.title, mr.category, mr.priority, mr.status, mr.source, mr.reported_at, mr.target_date,
+              mr.resolved_at, m.meter_number, assigned.name AS assigned_to_name
+       FROM maintenance_requests mr
+       LEFT JOIN meters m ON m.id = mr.meter_id
+       LEFT JOIN users assigned ON assigned.id = mr.assigned_to
+       WHERE mr.customer_id = $1
+       ORDER BY mr.reported_at DESC, mr.created_at DESC
+       LIMIT 12`,
+      [customerId]
+    ),
+    pool.query(
+      `SELECT sd.id, sd.original_name, sd.mime_type, sd.file_size, sd.description, sd.created_at,
+              mr.id AS maintenance_request_id, mr.title AS maintenance_request_title,
+              uploaded.name AS uploaded_by_name
+       FROM supporting_documents sd
+       JOIN maintenance_requests mr ON mr.id = sd.entity_id AND sd.entity_type = 'maintenance_request'
+       LEFT JOIN users uploaded ON uploaded.id = sd.uploaded_by
+       WHERE mr.customer_id = $1 AND sd.deleted_at IS NULL
+       ORDER BY sd.created_at DESC, sd.id DESC
+       LIMIT 12`,
+      [customerId]
+    ),
+    pool.query(
+      `SELECT ae.id, ae.action, ae.reason, ae.created_at, u.name AS actor_name
+       FROM audit_events ae
+       LEFT JOIN users u ON u.id = ae.actor_user_id
+       WHERE ae.entity_type = 'customer' AND ae.entity_id = $1
+       ORDER BY ae.created_at DESC, ae.id DESC
+       LIMIT 12`,
+      [customerId]
+    )
+  ]);
+
+  res.json({
+    customer,
+    meters: metersResult.rows,
+    readings: readingsResult.rows,
+    bills: billsResult.rows,
+    payments: paymentsResult.rows,
+    requests: requestsResult.rows,
+    documents: documentsResult.rows,
+    audit_events: auditResult.rows
+  });
+});
+
 const getCustomerStatement = asyncHandler(async (req, res) => {
   const { start_date, end_date } = req.query;
   const hasStart = Boolean(start_date);
@@ -692,6 +816,10 @@ const previewCustomerImport = asyncHandler(async (req, res) => {
 });
 
 const commitCustomerImport = asyncHandler(async (req, res) => {
+  const reviewNotes = String(req.body?.review_notes || "").trim();
+  if (!reviewNotes) {
+    throw new ApiError(400, "Import approval notes are required before committing customer imports.");
+  }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -756,7 +884,7 @@ const commitCustomerImport = asyncHandler(async (req, res) => {
         entityType: "customer",
         entityId: customer.id,
         afterData: customer,
-        reason: futureOverrideReason || null
+        reason: [reviewNotes, futureOverrideReason].filter(Boolean).join(" | ") || null
       });
       if (migrationBill) {
         await recordAuditEvent(client, {
@@ -765,7 +893,7 @@ const commitCustomerImport = asyncHandler(async (req, res) => {
           entityType: "bill",
           entityId: migrationBill.id,
           afterData: migrationBill,
-          reason: futureOverrideReason || null
+          reason: [reviewNotes, futureOverrideReason].filter(Boolean).join(" | ") || null
         });
       }
     }
@@ -790,6 +918,10 @@ const previewOpeningBalanceImport = asyncHandler(async (req, res) => {
 });
 
 const commitOpeningBalanceImport = asyncHandler(async (req, res) => {
+  const reviewNotes = String(req.body?.review_notes || "").trim();
+  if (!reviewNotes) {
+    throw new ApiError(400, "Import approval notes are required before committing opening balance overwrites.");
+  }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -837,7 +969,7 @@ const commitOpeningBalanceImport = asyncHandler(async (req, res) => {
         entityId: after.id,
         beforeData: before,
         afterData: after,
-        reason: futureOverrideReason || `Opening balance overwrite import row ${row.rowNumber}`
+        reason: [reviewNotes, futureOverrideReason, `Opening balance overwrite import row ${row.rowNumber}`].filter(Boolean).join(" | ")
       });
       if (migrationBill) {
         await recordAuditEvent(client, {
@@ -846,7 +978,7 @@ const commitOpeningBalanceImport = asyncHandler(async (req, res) => {
           entityType: "bill",
           entityId: migrationBill.id,
           afterData: migrationBill,
-          reason: futureOverrideReason || `Opening balance overwrite import row ${row.rowNumber}`
+          reason: [reviewNotes, futureOverrideReason, `Opening balance overwrite import row ${row.rowNumber}`].filter(Boolean).join(" | ")
         });
       }
     }
@@ -877,15 +1009,28 @@ const createCustomer = asyncHandler(async (req, res) => {
     preferred_delivery_channel = "email",
     email_delivery_enabled = true,
     sms_delivery_enabled = false,
-    whatsapp_delivery_enabled = false
+    whatsapp_delivery_enabled = false,
+    review_notes
   } = req.body;
   if (!name || !acc_number || !rate_id || !zone_id) {
     throw new ApiError(400, "Name, account number, rate, and zone/location are required.");
+  }
+  const reviewNotes = String(review_notes || "").trim();
+  if (!reviewNotes) {
+    throw new ApiError(400, "Account-setup approval notes are required before creating a customer.");
   }
 
   const openingBalance = normalizeOpeningBalance(opening_balance_amount, opening_balance_date);
   const nextEmail = normalizeEmail(email);
   const nextDeliveryChannel = normalizeDeliveryChannel(preferred_delivery_channel);
+  const enabledDeliveryChannels = {
+    email: Boolean(email_delivery_enabled),
+    sms: Boolean(sms_delivery_enabled),
+    whatsapp: Boolean(whatsapp_delivery_enabled)
+  };
+  if (Object.values(enabledDeliveryChannels).some(Boolean) && !enabledDeliveryChannels[nextDeliveryChannel]) {
+    throw new ApiError(400, "Choose an enabled channel as the preferred delivery channel.");
+  }
   const nextDepositPaidAt = deposit_paid ? deposit_paid_at || new Date().toISOString().slice(0, 10) : null;
   const futureOverrideReason = assertNoFutureDates(
     [
@@ -923,9 +1068,9 @@ const createCustomer = asyncHandler(async (req, res) => {
         openingBalance.balanceAmount,
         openingBalance.balanceDate,
         nextDeliveryChannel,
-        Boolean(email_delivery_enabled),
-        Boolean(sms_delivery_enabled),
-        Boolean(whatsapp_delivery_enabled)
+        enabledDeliveryChannels.email,
+        enabledDeliveryChannels.sms,
+        enabledDeliveryChannels.whatsapp
       ]
     );
     if (!rows[0]) {
@@ -943,7 +1088,7 @@ const createCustomer = asyncHandler(async (req, res) => {
       entityType: "customer",
       entityId: rows[0].id,
       afterData: rows[0],
-      reason: futureOverrideReason || null
+      reason: [reviewNotes, futureOverrideReason].filter(Boolean).join(" | ") || null
     });
     if (migrationBill) {
       await recordAuditEvent(client, {
@@ -952,7 +1097,7 @@ const createCustomer = asyncHandler(async (req, res) => {
         entityType: "bill",
         entityId: migrationBill.id,
         afterData: migrationBill,
-        reason: futureOverrideReason || null
+        reason: [reviewNotes, futureOverrideReason].filter(Boolean).join(" | ") || null
       });
     }
     await client.query("COMMIT");
@@ -967,6 +1112,7 @@ const createCustomer = asyncHandler(async (req, res) => {
 
 const updateCustomer = asyncHandler(async (req, res) => {
   const payload = req.body || {};
+  const reviewNotes = String(payload.review_notes || "").trim();
   const {
     name,
     phone,
@@ -983,8 +1129,10 @@ const updateCustomer = asyncHandler(async (req, res) => {
     preferred_delivery_channel,
     email_delivery_enabled,
     sms_delivery_enabled,
-    whatsapp_delivery_enabled
+    whatsapp_delivery_enabled,
+    delivery_preference_reason
   } = payload;
+  const deliveryPreferenceReason = String(delivery_preference_reason || "").trim();
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1064,6 +1212,38 @@ const updateCustomer = asyncHandler(async (req, res) => {
       await client.query("COMMIT");
       return res.json({ ...before, unchanged: true });
     }
+    const financialAccountChange = changedFields.some((field) => [
+      "rate_id",
+      "rate",
+      "deposit_amount",
+      "deposit_paid",
+      "deposit_paid_at",
+      "opening_balance_amount",
+      "opening_balance_date"
+    ].includes(field));
+    const deliveryPreferenceChange = changedFields.some((field) => [
+      "preferred_delivery_channel",
+      "email_delivery_enabled",
+      "sms_delivery_enabled",
+      "whatsapp_delivery_enabled"
+    ].includes(field));
+    if (financialAccountChange && !reviewNotes) {
+      throw new ApiError(400, "Financial account-change approval notes are required before saving customer financial changes.");
+    }
+    if (deliveryPreferenceChange && !deliveryPreferenceReason) {
+      throw new ApiError(400, "Record the customer request or operational reason before changing delivery preferences.");
+    }
+    if (deliveryPreferenceChange && deliveryPreferenceReason.length > 600) {
+      throw new ApiError(400, "Delivery-preference reason must be 600 characters or fewer.");
+    }
+    const enabledDeliveryChannels = {
+      email: nextValues.email_delivery_enabled,
+      sms: nextValues.sms_delivery_enabled,
+      whatsapp: nextValues.whatsapp_delivery_enabled
+    };
+    if (Object.values(enabledDeliveryChannels).some(Boolean) && !enabledDeliveryChannels[nextValues.preferred_delivery_channel]) {
+      throw new ApiError(400, "Choose an enabled channel as the preferred delivery channel.");
+    }
     const futureOverrideReason = assertNoFutureDates(
       [
         { value: changedFields.includes("deposit_paid_at") ? nextValues.deposit_paid_at : null, label: "Deposit paid date" },
@@ -1100,7 +1280,7 @@ const updateCustomer = asyncHandler(async (req, res) => {
       entityId: rows[0].id,
       beforeData: Object.fromEntries(changedFields.map((field) => [field, before[field]])),
       afterData: Object.fromEntries(changedFields.map((field) => [field, rows[0][field]])),
-      reason: futureOverrideReason || null
+      reason: [reviewNotes, deliveryPreferenceChange ? deliveryPreferenceReason : null, futureOverrideReason].filter(Boolean).join(" | ") || null
     });
     if (migrationBill) {
       await recordAuditEvent(client, {
@@ -1109,7 +1289,7 @@ const updateCustomer = asyncHandler(async (req, res) => {
         entityType: "bill",
         entityId: migrationBill.id,
         afterData: migrationBill,
-        reason: futureOverrideReason || null
+        reason: [reviewNotes, futureOverrideReason].filter(Boolean).join(" | ") || null
       });
     }
     await client.query("COMMIT");
@@ -1123,6 +1303,10 @@ const updateCustomer = asyncHandler(async (req, res) => {
 });
 
 const deleteCustomer = asyncHandler(async (req, res) => {
+  const reviewNotes = String(req.body?.review_notes || "").trim();
+  if (!reviewNotes) {
+    throw new ApiError(400, "Deletion approval notes are required before permanently deleting a customer.");
+  }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1137,7 +1321,8 @@ const deleteCustomer = asyncHandler(async (req, res) => {
       action: "customer.deleted",
       entityType: "customer",
       entityId: before.id,
-      beforeData: before
+      beforeData: before,
+      reason: reviewNotes
     });
     await client.query("COMMIT");
     res.status(204).send();
@@ -1155,8 +1340,15 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
     apply_deposit = true,
     deposit_remainder_action = "refund",
     transfer_customer_id,
-    notes = ""
+    notes = "",
+    review_notes
   } = req.body;
+  const reviewNotes = String(review_notes || "").trim();
+  const auditNotes = [String(notes || "").trim(), reviewNotes].filter(Boolean).join(" | ");
+
+  if (!reviewNotes) {
+    throw new ApiError(400, "Closure approval notes are required before closing a customer account.");
+  }
 
   if (!isDateOnly(settlement_date)) {
     throw new ApiError(400, "Settlement date must use YYYY-MM-DD format.");
@@ -1185,7 +1377,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
       entityType: "bill",
       entityId: closureBill.id,
       afterData: closureBill,
-      reason: notes || futureOverrideReason || "Final bill generated before account closure"
+      reason: [auditNotes, futureOverrideReason].filter(Boolean).join(" | ") || "Final bill generated before account closure"
     });
 
     const openingDebt = Math.max(await getCustomerBalanceDue(client, before.id), 0);
@@ -1207,7 +1399,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
           payment_channel: "manual_adjustment",
           external_reference: `DEPOSIT-CLOSE-${before.acc_number}`,
           received_from: before.name,
-          notes: notes || "Deposit applied to debt during account closure"
+          notes: auditNotes || "Deposit applied to debt during account closure"
         },
         { auditReason: "Deposit settlement during account closure" }
       );
@@ -1218,7 +1410,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
           amount: depositAppliedAmount,
           transaction_date: settlement_date,
           payment_id: depositSettlement.payment.id,
-          notes: notes || "Deposit applied to debt during account closure"
+          notes: auditNotes || "Deposit applied to debt during account closure"
         })
       );
     }
@@ -1238,7 +1430,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
             amount: depositRemainder,
             payment_channel: "manual_adjustment",
             reference: `DEPOSIT-REFUND-${before.acc_number}`,
-            notes: notes || "Deposit refunded during account closure"
+            notes: auditNotes || "Deposit refunded during account closure"
           },
           { auditReason: "Deposit refund during account closure" }
         );
@@ -1249,7 +1441,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
             amount: depositRemainder,
             transaction_date: settlement_date,
             expense_id: depositRefund.id,
-            notes: notes || "Deposit refunded during account closure"
+            notes: auditNotes || "Deposit refunded during account closure"
           })
         );
       } else if (deposit_remainder_action === "transfer") {
@@ -1272,7 +1464,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
             payment_channel: "manual_adjustment",
             external_reference: `DEPOSIT-TRANSFER-${before.acc_number}`,
             received_from: before.name,
-            notes: `Deposit transferred from ${before.acc_number}. ${notes}`.trim()
+            notes: `Deposit transferred from ${before.acc_number}. ${auditNotes}`.trim()
           },
           { auditReason: `Deposit transferred from closed account ${before.acc_number}` }
         );
@@ -1294,7 +1486,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
             action: "forfeited",
             amount: depositRemainder,
             transaction_date: settlement_date,
-            notes: notes || "Deposit forfeited during account closure"
+            notes: auditNotes || "Deposit forfeited during account closure"
           })
         );
       }
@@ -1314,7 +1506,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
            updated_at = NOW()
        WHERE id = $1
        RETURNING *`,
-      [before.id, req.user.id, closureBill.id, notes || null, depositAvailable]
+       [before.id, req.user.id, closureBill.id, auditNotes || null, depositAvailable]
     );
     const after = updatedResult.rows[0];
 
@@ -1334,7 +1526,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
         deposit_transfer: depositTransfer?.payment || null,
         deposit_transactions: depositTransactions
       },
-      reason: notes || futureOverrideReason || "Account closed"
+      reason: [auditNotes, futureOverrideReason].filter(Boolean).join(" | ") || "Account closed"
     });
 
     await client.query("COMMIT");
@@ -1359,6 +1551,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
 module.exports = {
   listCustomers,
   getCustomer,
+  getCustomerOverview,
   getCustomerStatement,
   previewCustomerImport,
   commitCustomerImport,

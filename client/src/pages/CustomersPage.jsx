@@ -1,17 +1,40 @@
-import { Download, FileText, Plus, Printer, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import AuditPanel from "../components/AuditPanel";
-import { EmptyTableRow } from "../components/EmptyState";
-import TableControls, { useTableControls } from "../components/TableControls";
+import CustomerAccountClosurePanel from "../components/CustomerAccountClosurePanel";
+import Customer360Panel from "../components/Customer360Panel";
+import CustomerImportWorkspaces from "../components/CustomerImportWorkspaces";
+import CustomerManagementWorkspace from "../components/CustomerManagementWorkspace";
+import CustomerServiceChargesPanel from "../components/CustomerServiceChargesPanel";
+import CustomerStatementWorkspace from "../components/CustomerStatementWorkspace";
+import FocusNotice from "../components/FocusNotice";
+import ReviewDialog from "../components/ReviewDialog";
+import { useTableControls } from "../components/TableControls";
 import { useToastMessage } from "../components/ToastProvider";
-import { api, assetUrl } from "../services/api";
+import WorkspaceState from "../components/WorkspaceState";
+import { api } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
 import { namedExport, withPrintTitle } from "../utils/exportNames";
+import useScopedDraft from "../utils/useScopedDraft";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const moneyAbs = (value) => `KES ${Math.abs(Number(value || 0)).toLocaleString()}`;
 const accountPositionLabel = (value) => (Number(value || 0) < 0 ? "Customer credit" : "Amount due");
 const sameValue = (left, right) => String(left ?? "") === String(right ?? "");
+const createCustomerFilters = () => ({ status: "", zone: "", delivery: "all" });
+
+const deliveryStateFor = (customer) => {
+  const enabledChannels = [
+    ["email", customer.email_delivery_enabled !== false, customer.email],
+    ["sms", Boolean(customer.sms_delivery_enabled), customer.phone],
+    ["whatsapp", Boolean(customer.whatsapp_delivery_enabled), customer.phone]
+  ];
+  const enabled = enabledChannels.filter(([, isEnabled]) => isEnabled);
+  if (!enabled.length) return { key: "opted_out", label: "Opted out" };
+  const preferred = customer.preferred_delivery_channel || "email";
+  const preferredChannel = enabledChannels.find(([channel]) => channel === preferred);
+  if (preferredChannel?.[1] && String(preferredChannel[2] || "").trim()) return { key: "ready", label: "Ready" };
+  if (enabled.some(([, , contact]) => String(contact || "").trim())) return { key: "ready", label: "Ready" };
+  return { key: "needs_contact", label: "Needs contact" };
+};
 
 const blank = {
   name: "",
@@ -71,28 +94,54 @@ const serviceChargeTypes = [
   ["other", "Other"]
 ];
 
-function CustomersPage({ user }) {
+const financialAccountFields = new Set([
+  "rate_id",
+  "deposit_amount",
+  "deposit_paid",
+  "deposit_paid_at",
+  "opening_balance_amount",
+  "opening_balance_date"
+]);
+
+function CustomersPage({ user, navigationIntent, onClearNavigationIntent, onNavigate }) {
   const [customers, setCustomers] = useState([]);
   const [rates, setRates] = useState([]);
   const [zones, setZones] = useState([]);
   const [form, setForm] = useState(blank);
+  const [deliveryPreferenceReason, setDeliveryPreferenceReason] = useState("");
   const [editingId, setEditingId] = useState(null);
+  const [entryOpen, setEntryOpen] = useState(false);
+  const [customerReview, setCustomerReview] = useState(null);
+  const [customerReviewBusy, setCustomerReviewBusy] = useState(false);
+  const [customerDeleteReview, setCustomerDeleteReview] = useState(null);
+  const [customerDeleteReviewBusy, setCustomerDeleteReviewBusy] = useState(false);
+  const [importReview, setImportReview] = useState(null);
+  const [importReviewBusy, setImportReviewBusy] = useState(false);
   const [business, setBusiness] = useState(null);
   const [statementCustomer, setStatementCustomer] = useState(null);
   const [statementStart, setStatementStart] = useState("");
   const [statementEnd, setStatementEnd] = useState("");
   const [statement, setStatement] = useState(null);
+  const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [csvText, setCsvText] = useState("");
   const [importPreview, setImportPreview] = useState(null);
   const [openingCsvText, setOpeningCsvText] = useState("");
   const [openingImportPreview, setOpeningImportPreview] = useState(null);
-  const [statusFilter, setStatusFilter] = useState("");
-  const [zoneFilter, setZoneFilter] = useState("");
+  const [customerFilters, setCustomerFilters] = useScopedDraft(user, "customer-register-filters", createCustomerFilters, { storage: "local" });
+  const statusFilter = customerFilters.status || "";
+  const zoneFilter = customerFilters.zone || "";
+  const deliveryFilter = customerFilters.delivery || "all";
+  const setCustomerFilter = (field, value) => setCustomerFilters((current) => ({ ...current, [field]: value }));
+  const setStatusFilter = (value) => setCustomerFilter("status", value);
+  const setZoneFilter = (value) => setCustomerFilter("zone", value);
+  const setDeliveryFilter = (value) => setCustomerFilter("delivery", value);
   const [closingCustomer, setClosingCustomer] = useState(null);
   const [serviceChargeCustomer, setServiceChargeCustomer] = useState(null);
   const [serviceCharges, setServiceCharges] = useState([]);
   const [serviceChargeForm, setServiceChargeForm] = useState(serviceChargeBlank);
   const [loadingServiceCharges, setLoadingServiceCharges] = useState(false);
+  const [serviceChargeReview, setServiceChargeReview] = useState(null);
+  const [serviceChargeReviewBusy, setServiceChargeReviewBusy] = useState(false);
   const [closureForm, setClosureForm] = useState({
     settlement_date: new Date().toISOString().slice(0, 10),
     apply_deposit: true,
@@ -100,30 +149,86 @@ function CustomersPage({ user }) {
     transfer_customer_id: "",
     notes: ""
   });
+  const [closureReview, setClosureReview] = useState(null);
+  const [closureReviewBusy, setClosureReviewBusy] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [initialError, setInitialError] = useState("");
   const [, setMessage] = useToastMessage();
   const canWrite = ["admin", "accountant"].includes(user.role);
 
-  const load = async () => {
-    const [customerRows, rateRows, zoneRows, businessSettings] = await Promise.all([
-      api.customers.list(),
-      api.rates.list(),
-      api.zones.list(),
-      api.businessSettings.get().catch(() => null)
-    ]);
-    setCustomers(customerRows);
-    setRates(rateRows);
-    setZones(zoneRows);
-    setBusiness(businessSettings);
+  const load = async ({ showState = false } = {}) => {
+    if (showState) {
+      setInitialLoading(true);
+      setInitialError("");
+    }
+    try {
+      const [customerRows, rateRows, zoneRows, businessSettings] = await Promise.all([
+        api.customers.list(),
+        api.rates.list(),
+        api.zones.list(),
+        api.businessSettings.get().catch(() => null)
+      ]);
+      setCustomers(customerRows);
+      setRates(rateRows);
+      setZones(zoneRows);
+      setBusiness(businessSettings);
+    } catch (err) {
+      if (showState) setInitialError(err.message || "Customer records and setup data could not be loaded.");
+      throw err;
+    } finally {
+      if (showState) setInitialLoading(false);
+    }
   };
 
   useEffect(() => {
-    load().catch((err) => setMessage(err.message));
+    load({ showState: true }).catch(() => {});
   }, []);
 
-  const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  useEffect(() => {
+    if (navigationIntent?.page !== "customers" || navigationIntent.focus !== "customer_360" || !navigationIntent.customer_id) return;
+    const customer = customers.find((row) => Number(row.id) === Number(navigationIntent.customer_id))
+      || navigationIntent.customer_snapshot;
+    if (customer) {
+      setSelectedCustomer((current) => (
+        Number(current?.id) === Number(customer.id) ? current : customer
+      ));
+    }
+  }, [customers, navigationIntent]);
 
-  const submit = async (event) => {
+  const setField = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  const setDeliveryChannel = (channel, enabled) => {
+    const field = `${channel}_delivery_enabled`;
+    setForm((current) => {
+      const next = { ...current, [field]: enabled };
+      if (!enabled && current.preferred_delivery_channel === channel) {
+        const fallback = ["email", "sms", "whatsapp"].find((option) => option !== channel && Boolean(next[`${option}_delivery_enabled`]));
+        if (fallback) next.preferred_delivery_channel = fallback;
+      }
+      return next;
+    });
+  };
+
+  const saveCustomer = async (payload, reviewNotes = "") => {
+    try {
+      const reviewedPayload = reviewNotes ? { ...payload, review_notes: reviewNotes } : payload;
+      if (editingId) {
+        await api.customers.update(editingId, reviewedPayload);
+      } else {
+        await api.customers.create(reviewedPayload);
+      }
+      setForm(blank);
+      setDeliveryPreferenceReason("");
+      setEditingId(null);
+      setEntryOpen(false);
+      await load();
+      setMessage("Customer saved.");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  };
+
+  const submit = (event) => {
     event.preventDefault();
     setMessage("");
     const duplicate = customers.find(
@@ -145,7 +250,7 @@ function CustomersPage({ user }) {
       opening_balance_date: Number(form.opening_balance_amount || 0) !== 0 ? form.opening_balance_date : null
     };
     const existingCustomer = editingId ? customers.find((customer) => Number(customer.id) === Number(editingId)) : null;
-    const payload = existingCustomer
+    let payload = existingCustomer
       ? Object.fromEntries(
           Object.entries(normalizedPayload).filter(([field, value]) => {
             if (field === "opening_balance_date") {
@@ -164,27 +269,49 @@ function CustomersPage({ user }) {
           })
         )
       : normalizedPayload;
-    try {
-      if (editingId) {
-        if (!Object.keys(payload).length) {
-          setMessage("No customer changes detected.");
-          return;
-        }
-        await api.customers.update(editingId, payload);
-      } else {
-        await api.customers.create(payload);
+    if (editingId && !Object.keys(payload).length) {
+      setMessage("No customer changes detected.");
+      return;
+    }
+
+    const deliveryPreferenceChanged = editingId && [
+      "preferred_delivery_channel",
+      "email_delivery_enabled",
+      "sms_delivery_enabled",
+      "whatsapp_delivery_enabled"
+    ].some((field) => Object.hasOwn(payload, field));
+    if (deliveryPreferenceChanged) {
+      const reason = deliveryPreferenceReason.trim();
+      if (!reason) {
+        setMessage("Record the customer request or operational reason before changing delivery preferences.");
+        return;
       }
-      setForm(blank);
-      setEditingId(null);
-      await load();
-      setMessage("Customer saved.");
-    } catch (err) {
-      setMessage(err.message);
+      payload = { ...payload, delivery_preference_reason: reason };
+    }
+
+    const needsReview = !editingId || Object.keys(payload).some((field) => financialAccountFields.has(field));
+    if (needsReview) {
+      setCustomerReview({ mode: editingId ? "update" : "create", existingCustomer, payload });
+      return;
+    }
+    saveCustomer(payload);
+  };
+
+  const confirmCustomerReview = async (reviewNotes) => {
+    if (!customerReview) return;
+    setCustomerReviewBusy(true);
+    try {
+      await saveCustomer(customerReview.payload, reviewNotes);
+      setCustomerReview(null);
+    } finally {
+      setCustomerReviewBusy(false);
     }
   };
 
   const edit = (customer) => {
     setEditingId(customer.id);
+    setEntryOpen(true);
+    setDeliveryPreferenceReason("");
     setForm({
       name: customer.name || "",
       phone: customer.phone || "",
@@ -203,9 +330,32 @@ function CustomersPage({ user }) {
     });
   };
 
-  const remove = async (id) => {
-    await api.customers.remove(id);
-    await load();
+  const remove = (customer) => {
+    setCustomerDeleteReview(customer);
+  };
+
+  const setEntryPanelOpen = (open) => {
+    setEntryOpen(open);
+    if (!open) {
+      setForm(blank);
+      setDeliveryPreferenceReason("");
+      setEditingId(null);
+    }
+  };
+
+  const confirmCustomerDeletion = async (reviewNotes) => {
+    if (!customerDeleteReview) return;
+    setCustomerDeleteReviewBusy(true);
+    try {
+      await api.customers.remove(customerDeleteReview.id, { review_notes: reviewNotes });
+      await load();
+      setCustomerDeleteReview(null);
+      setMessage("Customer deleted.");
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setCustomerDeleteReviewBusy(false);
+    }
   };
 
   const openStatement = (customer) => {
@@ -265,11 +415,16 @@ function CustomersPage({ user }) {
     setImportPreview(null);
   };
 
-  const commitImport = async () => {
+  const commitImport = () => {
+    if (!importReady) return;
+    setImportReview({ kind: "customers", preview: importPreview });
+  };
+
+  const executeCustomerImport = async (reviewNotes) => {
     setMessage("");
     setImporting(true);
     try {
-      const result = await api.customers.commitImport(csvText);
+      const result = await api.customers.commitImport(csvText, reviewNotes);
       setCsvText("");
       setImportPreview(null);
       await load();
@@ -284,18 +439,31 @@ function CustomersPage({ user }) {
   const importReady = importPreview?.summary?.valid > 0 && importPreview?.summary?.invalid === 0;
   const openingImportReady =
     openingImportPreview?.summary?.valid > 0 && openingImportPreview?.summary?.invalid === 0;
-  const filteredCustomers = customers.filter((customer) => {
+  const filteredCustomers = customers.map((customer) => ({ ...customer, delivery_state: deliveryStateFor(customer) })).filter((customer) => {
     const statusMatch = !statusFilter || customer.status === statusFilter;
     const zoneMatch = !zoneFilter || Number(customer.zone_id) === Number(zoneFilter);
-    return statusMatch && zoneMatch;
+    const deliveryMatch = deliveryFilter === "all" || customer.delivery_state.key === deliveryFilter;
+    return statusMatch && zoneMatch && deliveryMatch;
   });
   const customerTable = useTableControls(filteredCustomers, {
-    searchFields: ["name", "acc_number", "phone", "email", "zone_name", "location", "rate_name", "status"]
+    storageKey: `customer-register:${user?.id || "anonymous"}:${user?.access_profile_id || "legacy"}`,
+    searchFields: ["name", "acc_number", "phone", "email", "zone_name", "location", "rate_name", "status", "preferred_delivery_channel"]
   });
+
+  if (initialLoading) {
+    return <WorkspaceState title="Preparing customer accounts" detail="Retrieving customer records, tariffs, zones, and account controls." />;
+  }
+  if (initialError) {
+    return <WorkspaceState state="error" title="Customer accounts could not load" detail={initialError} onRetry={() => load({ showState: true }).catch(() => {})} />;
+  }
 
   const exportCustomers = () => {
     downloadCsvRows(
-      namedExport("customer-register", "csv", [statusFilter || "all-statuses", zoneFilter ? zones.find((zone) => Number(zone.id) === Number(zoneFilter))?.name : "all-zones"]),
+      namedExport("customer-register", "csv", [
+        statusFilter || "all-statuses",
+        zoneFilter ? zones.find((zone) => Number(zone.id) === Number(zoneFilter))?.name : "all-zones",
+        deliveryFilter
+      ]),
       [
         { header: "Account", value: (row) => row.acc_number },
         { header: "Name", value: (row) => row.name },
@@ -304,6 +472,7 @@ function CustomersPage({ user }) {
         { header: "Zone", value: (row) => row.zone_name || row.location },
         { header: "Rate", value: (row) => row.rate_name },
         { header: "Preferred Delivery", value: (row) => row.preferred_delivery_channel },
+        { header: "Delivery State", value: (row) => row.delivery_state?.label || "-" },
         { header: "Email Delivery", value: (row) => (row.email_delivery_enabled ? "yes" : "no") },
         { header: "SMS Delivery", value: (row) => (row.sms_delivery_enabled ? "yes" : "no") },
         { header: "WhatsApp Delivery", value: (row) => (row.whatsapp_delivery_enabled ? "yes" : "no") },
@@ -320,12 +489,19 @@ function CustomersPage({ user }) {
   const setClosureField = (field, value) =>
     setClosureForm((current) => ({ ...current, [field]: value }));
 
-  const closeAccount = async () => {
+  const closeAccount = () => {
     if (!closingCustomer) return;
+    setClosureReview({ ...closureForm });
+  };
+
+  const confirmAccountClosure = async (reviewNotes) => {
+    if (!closingCustomer || !closureReview) return;
     setMessage("");
+    setClosureReviewBusy(true);
     try {
-      await api.customers.closeAccount(closingCustomer.id, closureForm);
+      await api.customers.closeAccount(closingCustomer.id, { ...closureReview, review_notes: reviewNotes });
       setClosingCustomer(null);
+      setClosureReview(null);
       setClosureForm({
         settlement_date: new Date().toISOString().slice(0, 10),
         apply_deposit: true,
@@ -337,6 +513,8 @@ function CustomersPage({ user }) {
       setMessage("Customer account closed. Payments can still be accepted if debt remains.");
     } catch (err) {
       setMessage(err.message);
+    } finally {
+      setClosureReviewBusy(false);
     }
   };
 
@@ -367,17 +545,24 @@ function CustomersPage({ user }) {
   const setServiceChargeField = (field, value) =>
     setServiceChargeForm((current) => ({ ...current, [field]: value }));
 
-  const submitServiceCharge = async (event) => {
+  const submitServiceCharge = (event) => {
     event.preventDefault();
     if (!serviceChargeCustomer) return;
-    setMessage("");
-    try {
-      await api.customerServiceCharges.create({
+    setServiceChargeReview({
+      action: "post",
+      payload: {
         ...serviceChargeForm,
         customer_id: serviceChargeCustomer.id,
         amount: Number(serviceChargeForm.amount || 0),
         due_date: serviceChargeForm.due_date || serviceChargeForm.charge_date
-      });
+      }
+    });
+  };
+
+  const postServiceCharge = async (payload, reviewNotes) => {
+    setMessage("");
+    try {
+      await api.customerServiceCharges.create({ ...payload, review_notes: reviewNotes });
       setServiceChargeForm({
         ...serviceChargeBlank,
         charge_date: new Date().toISOString().slice(0, 10)
@@ -390,19 +575,33 @@ function CustomersPage({ user }) {
   };
 
   const waiveServiceCharge = async (charge) => {
-    const reason = window.prompt("Reason for waiving this service charge:");
-    if (!String(reason || "").trim()) return;
-    await api.customerServiceCharges.waive(charge.id, reason.trim());
-    await Promise.all([load(), loadServiceCharges(serviceChargeCustomer)]);
-    setMessage("Service charge waived.");
+    setServiceChargeReview({ action: "waive", charge });
   };
 
   const cancelServiceCharge = async (charge) => {
-    const reason = window.prompt("Reason for cancelling this service charge:");
-    if (!String(reason || "").trim()) return;
-    await api.customerServiceCharges.cancel(charge.id, reason.trim());
-    await Promise.all([load(), loadServiceCharges(serviceChargeCustomer)]);
-    setMessage("Service charge cancelled.");
+    setServiceChargeReview({ action: "cancel", charge });
+  };
+
+  const confirmServiceChargeReview = async (reason) => {
+    if (!serviceChargeReview) return;
+    setMessage("");
+    setServiceChargeReviewBusy(true);
+    try {
+      const { action, charge } = serviceChargeReview;
+      if (action === "post") {
+        await postServiceCharge(serviceChargeReview.payload, reason);
+        setServiceChargeReview(null);
+        return;
+      }
+      await api.customerServiceCharges[action](charge.id, reason);
+      await Promise.all([load(), loadServiceCharges(serviceChargeCustomer)]);
+      setServiceChargeReview(null);
+      setMessage(action === "waive" ? "Service charge waived." : "Service charge cancelled.");
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setServiceChargeReviewBusy(false);
+    }
   };
 
   const previewOpeningBalanceImport = async () => {
@@ -426,11 +625,16 @@ function CustomersPage({ user }) {
     setOpeningImportPreview(null);
   };
 
-  const commitOpeningBalanceImport = async () => {
+  const commitOpeningBalanceImport = () => {
+    if (!openingImportReady) return;
+    setImportReview({ kind: "opening_balances", preview: openingImportPreview });
+  };
+
+  const executeOpeningBalanceImport = async (reviewNotes) => {
     setMessage("");
     setImporting(true);
     try {
-      const result = await api.customers.commitOpeningBalanceImport(openingCsvText);
+      const result = await api.customers.commitOpeningBalanceImport(openingCsvText, reviewNotes);
       setOpeningCsvText("");
       setOpeningImportPreview(null);
       await load();
@@ -442,6 +646,21 @@ function CustomersPage({ user }) {
     }
   };
 
+  const confirmImportReview = async (reviewNotes) => {
+    if (!importReview) return;
+    setImportReviewBusy(true);
+    try {
+      if (importReview.kind === "customers") {
+        await executeCustomerImport(reviewNotes);
+      } else {
+        await executeOpeningBalanceImport(reviewNotes);
+      }
+      setImportReview(null);
+    } finally {
+      setImportReviewBusy(false);
+    }
+  };
+
   return (
     <section className="page-stack">
       <header className="page-header">
@@ -450,809 +669,305 @@ function CustomersPage({ user }) {
           <h2>Customers</h2>
         </div>
       </header>
+      {navigationIntent?.page === "customers" && navigationIntent.focus === "customer_360" ? (
+        <FocusNotice title="Customer account review" detail="Showing the selected customer account and its financial and service history." onClear={onClearNavigationIntent} />
+      ) : null}
 
-      <section className="workspace-grid">
-        {canWrite ? (
-          <form className="panel form-grid" onSubmit={submit}>
-            <div className="panel-heading">
-              <h3>{editingId ? "Edit Customer" : "Add Customer"}</h3>
+      {canWrite && selectedCustomer ? (
+        <Customer360Panel
+          customer={selectedCustomer}
+          initialTab={navigationIntent?.page === "customers" && navigationIntent.focus === "customer_360" ? navigationIntent.customer_360_tab : undefined}
+          onClose={() => setSelectedCustomer(null)}
+          onEdit={(customer) => {
+            edit(customer);
+            setSelectedCustomer(null);
+          }}
+          onNavigate={onNavigate}
+          onStatement={(customer) => {
+            openStatement(customer);
+            setSelectedCustomer(null);
+          }}
+          onServiceCharges={(customer) => {
+            openServiceCharges(customer);
+            setSelectedCustomer(null);
+          }}
+          onCloseAccount={(customer) => {
+            setClosingCustomer(customer);
+            setSelectedCustomer(null);
+          }}
+        />
+      ) : null}
+
+      {!selectedCustomer ? <CustomerManagementWorkspace
+        accountPositionLabel={accountPositionLabel}
+        busy={customerReviewBusy || Boolean(customerReview)}
+        canWrite={canWrite}
+        customerTable={customerTable}
+        deliveryFilter={deliveryFilter}
+        deliveryPreferenceReason={deliveryPreferenceReason}
+        editingId={editingId}
+        entryOpen={entryOpen}
+        form={form}
+        money={money}
+        moneyAbs={moneyAbs}
+        onCloseAccount={setClosingCustomer}
+        onEdit={edit}
+        onEntryOpenChange={setEntryPanelOpen}
+        onExport={exportCustomers}
+        onFieldChange={setField}
+        onDeliveryFilterChange={setDeliveryFilter}
+        onDeliveryPreferenceReasonChange={setDeliveryPreferenceReason}
+        onDeliveryChannelChange={setDeliveryChannel}
+        onOpenServiceCharges={openServiceCharges}
+        onOpenStatement={openStatement}
+        onRemove={remove}
+        onSelectCustomer={setSelectedCustomer}
+        onStatusChange={setStatusFilter}
+        onSubmit={submit}
+        onZoneChange={setZoneFilter}
+        rates={rates}
+        statusFilter={statusFilter}
+        userRole={user.role}
+        zoneFilter={zoneFilter}
+        zones={zones}
+      /> : null}
+
+      <CustomerImportWorkspaces
+        canWrite={canWrite}
+        customerCsvText={csvText}
+        customerImportReady={importReady}
+        customerPreview={importPreview}
+        importing={importing || importReviewBusy || Boolean(importReview)}
+        onCommitCustomerImport={commitImport}
+        onCommitOpeningImport={commitOpeningBalanceImport}
+        onCustomerFile={handleCsvFile}
+        onCustomerTemplate={() => downloadCsvTemplate("customer-import-template.csv", customerImportHeaders)}
+        onCustomerTextChange={(value) => { setCsvText(value); setImportPreview(null); }}
+        onOpeningFile={handleOpeningCsvFile}
+        onOpeningTemplate={() => downloadCsvTemplate("opening-balances-overwrite-template.csv", openingBalanceImportHeaders)}
+        onOpeningTextChange={(value) => { setOpeningCsvText(value); setOpeningImportPreview(null); }}
+        onPreviewCustomerImport={previewImport}
+        onPreviewOpeningImport={previewOpeningBalanceImport}
+        openingCsvText={openingCsvText}
+        openingImportReady={openingImportReady}
+        openingPreview={openingImportPreview}
+        show={!selectedCustomer}
+      />
+
+      <CustomerAccountClosurePanel
+        busy={closureReviewBusy || Boolean(closureReview)}
+        canWrite={canWrite}
+        customer={closingCustomer}
+        customers={customers}
+        form={closureForm}
+        onCancel={() => setClosingCustomer(null)}
+        onCloseAccount={closeAccount}
+        onFieldChange={setClosureField}
+      />
+
+      <CustomerServiceChargesPanel
+        canWrite={canWrite}
+        busy={serviceChargeReviewBusy || Boolean(serviceChargeReview)}
+        charges={serviceCharges}
+        customer={serviceChargeCustomer}
+        form={serviceChargeForm}
+        loading={loadingServiceCharges}
+        money={money}
+        onCancel={cancelServiceCharge}
+        onClose={() => setServiceChargeCustomer(null)}
+        onFieldChange={setServiceChargeField}
+        onSubmit={submitServiceCharge}
+        onWaive={waiveServiceCharge}
+        serviceChargeTypes={serviceChargeTypes}
+        userRole={user.role}
+      />
+
+      <CustomerStatementWorkspace
+        accountPositionLabel={accountPositionLabel}
+        business={business}
+        canWrite={canWrite}
+        money={money}
+        moneyAbs={moneyAbs}
+        onEndChange={setStatementEnd}
+        onGenerate={generateStatement}
+        onPrint={printStatement}
+        onStartChange={setStatementStart}
+        statement={statement}
+        statementCustomer={statementCustomer}
+        statementEnd={statementEnd}
+        statementStart={statementStart}
+      />
+      <ReviewDialog
+        open={Boolean(importReview)}
+        eyebrow={importReview?.kind === "customers" ? "Customer import review" : "Opening balance overwrite review"}
+        title={importReview?.kind === "customers" ? "Commit customer import" : "Commit opening balance overwrite"}
+        description={
+          importReview?.kind === "customers"
+            ? "This creates the reviewed customer accounts and any required migration bills. It does not post payments or send customer notifications."
+            : "This replaces the reviewed opening balances and updates their migration bills. It does not post payments, reverse allocations, or send customer notifications."
+        }
+        confirmLabel={importReview?.kind === "customers" ? "Commit customer import" : "Commit opening balance overwrite"}
+        cancelLabel="Return to preview"
+        reasonLabel="Import approval note"
+        reasonPlaceholder="Record the source, validation basis, and authority for this batch"
+        busy={importReviewBusy}
+        busyLabel="Committing import..."
+        onCancel={() => !importReviewBusy && setImportReview(null)}
+        onConfirm={confirmImportReview}
+      >
+        {importReview ? (() => {
+          const rows = importReview.preview?.rows || [];
+          const openingTotal = rows.reduce((sum, row) => sum + Number(row.opening_balance_amount || 0), 0);
+          const depositTotal = rows.reduce((sum, row) => sum + Number(row.deposit_amount || 0), 0);
+          return (
+            <div className="reading-context">
+              <div><span>Valid rows</span><strong>{importReview.preview?.summary?.valid || 0}</strong></div>
+              <div><span>Invalid rows</span><strong>{importReview.preview?.summary?.invalid || 0}</strong></div>
+              <div><span>Opening balance total</span><strong>{money(openingTotal)}</strong></div>
+              {importReview.kind === "customers" ? <div><span>Deposit total</span><strong>{money(depositTotal)}</strong></div> : null}
+              <div><span>Billing consequence</span><strong>{openingTotal ? "Migration bills will be created or updated for non-zero balances" : "No migration bills from this batch"}</strong></div>
+              <div><span>Payments and notifications</span><strong>None posted or sent by this action</strong></div>
             </div>
-            <label>
-              Name
-              <input value={form.name} onChange={(event) => setField("name", event.target.value)} required />
-            </label>
-            <label>
-              Phone
-              <input value={form.phone} onChange={(event) => setField("phone", event.target.value)} />
-            </label>
-            <label>
-              Email
-              <input value={form.email} onChange={(event) => setField("email", event.target.value)} type="email" />
-            </label>
-            <label>
-              Zone/location
-              <select value={form.zone_id} onChange={(event) => setField("zone_id", event.target.value)} required>
-                <option value="">Select zone/location</option>
-                {zones
-                  .filter((zone) => zone.is_active || Number(zone.id) === Number(form.zone_id))
-                  .map((zone) => (
-                    <option key={zone.id} value={zone.id}>
-                      {zone.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <label>
-              Account number
-              <input value={form.acc_number} onChange={(event) => setField("acc_number", event.target.value)} required />
-            </label>
-            <label>
-              Rate
-              <select value={form.rate_id} onChange={(event) => setField("rate_id", event.target.value)} required>
-                <option value="">Select rate</option>
-                {rates
-                  .filter((rate) => rate.is_active || Number(rate.id) === Number(form.rate_id))
-                  .map((rate) => (
-                    <option key={rate.id} value={rate.id}>
-                      {rate.name} - {Number(rate.amount).toLocaleString()}
-                    </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Deposit amount
-              <input
-                value={form.deposit_amount}
-                onChange={(event) => setField("deposit_amount", event.target.value)}
-                type="number"
-                min="0"
-              />
-            </label>
-            <label className="checkbox-row">
-              <input
-                checked={Boolean(form.deposit_paid)}
-                onChange={(event) => setField("deposit_paid", event.target.checked)}
-                type="checkbox"
-              />
-              Deposit paid
-            </label>
-            <label>
-              Opening balance
-              <input
-                value={form.opening_balance_amount}
-                onChange={(event) => setField("opening_balance_amount", event.target.value)}
-                type="number"
-                step="0.01"
-              />
-            </label>
-            <label>
-              Opening balance date
-              <input
-                value={form.opening_balance_date}
-                onChange={(event) => setField("opening_balance_date", event.target.value)}
-                type="date"
-                required={Number(form.opening_balance_amount || 0) !== 0}
-              />
-            </label>
-            <label>
-              Preferred delivery
-              <select
-                value={form.preferred_delivery_channel}
-                onChange={(event) => setField("preferred_delivery_channel", event.target.value)}
-              >
-                <option value="email">Email</option>
-                <option value="sms">SMS</option>
-                <option value="whatsapp">WhatsApp</option>
-              </select>
-            </label>
-            <label className="checkbox-row">
-              <input
-                checked={Boolean(form.email_delivery_enabled)}
-                onChange={(event) => setField("email_delivery_enabled", event.target.checked)}
-                type="checkbox"
-              />
-              Email invoices
-            </label>
-            <label className="checkbox-row">
-              <input
-                checked={Boolean(form.sms_delivery_enabled)}
-                onChange={(event) => setField("sms_delivery_enabled", event.target.checked)}
-                type="checkbox"
-              />
-              SMS invoices
-            </label>
-            <label className="checkbox-row">
-              <input
-                checked={Boolean(form.whatsapp_delivery_enabled)}
-                onChange={(event) => setField("whatsapp_delivery_enabled", event.target.checked)}
-                type="checkbox"
-              />
-              WhatsApp invoices
-            </label>
-            {editingId ? <AuditPanel entityType="customer" entityId={editingId} title="Customer Audit" /> : null}
-            <button className="primary-button" type="submit">
-              {editingId ? <Save size={17} /> : <Plus size={17} />}
-              {editingId ? "Save changes" : "Add customer"}
-            </button>
-          </form>
+          );
+        })() : null}
+      </ReviewDialog>
+      <ReviewDialog
+        open={Boolean(customerDeleteReview)}
+        eyebrow="Permanent deletion review"
+        title="Delete customer account"
+        description="This permanently deletes the customer record only where no linked records prevent it. Prefer account closure when bills, payments, readings, deposits, or service history must be preserved. This does not reverse, transfer, or delete linked financial records."
+        confirmLabel="Delete customer account"
+        cancelLabel="Keep customer"
+        reasonLabel="Deletion approval note"
+        reasonPlaceholder="Record why permanent deletion is approved instead of account closure"
+        busy={customerDeleteReviewBusy}
+        busyLabel="Deleting customer..."
+        danger
+        onCancel={() => !customerDeleteReviewBusy && setCustomerDeleteReview(null)}
+        onConfirm={confirmCustomerDeletion}
+      >
+        {customerDeleteReview ? (
+          <div className="reading-context">
+            <div><span>Customer</span><strong>{customerDeleteReview.name} | {customerDeleteReview.acc_number}</strong></div>
+            <div><span>Current status</span><strong>{customerDeleteReview.status || "active"}</strong></div>
+            <div><span>Current balance</span><strong>{money(customerDeleteReview.balance_due)}</strong></div>
+            <div><span>Alternative</span><strong>Account closure preserves history and settles deposits</strong></div>
+            <div><span>Deletion consequence</span><strong>Permanent customer-record deletion only when allowed by linked data</strong></div>
+          </div>
         ) : null}
-
-        <div className="panel wide-panel">
-          <div className="panel-heading">
-            <h3>Customer List</h3>
-            <button type="button" onClick={exportCustomers}>
-              <Download size={16} />
-              Export
-            </button>
-          </div>
-          <div className="table-toolbar">
-            <label>
-              Status
-              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-                <option value="">All statuses</option>
-                <option value="active">Active</option>
-                <option value="inactive">Inactive</option>
-              </select>
-            </label>
-            <label>
-              Zone
-              <select value={zoneFilter} onChange={(event) => setZoneFilter(event.target.value)}>
-                <option value="">All zones</option>
-                {zones.map((zone) => (
-                  <option key={zone.id} value={zone.id}>
-                    {zone.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <TableControls table={customerTable} label="customers" placeholder="Search customers" />
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Account</th>
-                  <th>Location</th>
-                  <th>Rate</th>
-                  <th>Deposit</th>
-                  <th>Opening</th>
-                  <th>Balance</th>
-                  {canWrite ? <th>Actions</th> : null}
-                </tr>
-              </thead>
-              <tbody>
-                {customerTable.visibleRows.length ? (
-                  customerTable.visibleRows.map((customer) => (
-                    <tr key={customer.id}>
-                    <td>
-                      <strong>{customer.name}</strong>
-                      <small>{[customer.phone, customer.email].filter(Boolean).join(" | ")}</small>
-                    </td>
-                    <td>{customer.acc_number}</td>
-                    <td>{customer.zone_name || customer.location}</td>
-                    <td>
-                      <strong>{customer.rate_name}</strong>
-                      <small>
-                        {Number(customer.rate).toLocaleString()} | {customer.preferred_delivery_channel || "email"}
-                      </small>
-                    </td>
-                    <td>
-                      <strong>{customer.deposit_paid ? "Paid" : "Not paid"}</strong>
-                      <small>{Number(customer.deposit_amount || 0).toLocaleString()}</small>
-                    </td>
-                    <td>
-                      <strong>{money(customer.opening_balance_amount)}</strong>
-                      <small>{customer.opening_balance_date ? new Date(customer.opening_balance_date).toLocaleDateString() : "-"}</small>
-                    </td>
-                    <td>
-                      <strong>{moneyAbs(customer.balance_due)}</strong>
-                      <small>{accountPositionLabel(customer.balance_due)}</small>
-                    </td>
-                    {canWrite ? (
-                      <td className="row-actions">
-                        <button type="button" onClick={() => edit(customer)}>Edit</button>
-                        <button type="button" onClick={() => openStatement(customer)} title="Generate customer statement">
-                          <FileText size={15} />
-                          Statement
-                        </button>
-                        <button type="button" onClick={() => openServiceCharges(customer)} title="Manage customer service charges">
-                          Service Charges
-                        </button>
-                        {user.role === "admin" ? (
-                          <button className="danger-button" type="button" onClick={() => remove(customer.id)} title="Delete customer">
-                            <Trash2 size={15} />
-                          </button>
-                        ) : null}
-                        {customer.status !== "inactive" ? (
-                          <button type="button" onClick={() => setClosingCustomer(customer)}>
-                            Close
-                          </button>
-                        ) : null}
-                      </td>
-                    ) : null}
-                    </tr>
-                  ))
-                ) : (
-                  <EmptyTableRow colSpan={canWrite ? 8 : 7} title="No customers found" detail="Add customers or adjust the filters." />
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      {canWrite ? (
-        <section className="panel full-span form-grid">
-          <div className="panel-heading">
-            <div>
-              <h3>Bulk Customer Import</h3>
-              <p className="muted">CSV columns: name, acc_number, rate_id or rate_name, zone_id or zone_name.</p>
+      </ReviewDialog>
+      <ReviewDialog
+        open={Boolean(customerReview)}
+        eyebrow={customerReview?.mode === "create" ? "Account setup review" : "Financial account-change review"}
+        title={customerReview?.mode === "create" ? "Create customer account" : "Save customer financial changes"}
+        description={
+          customerReview?.mode === "create"
+            ? "This creates the customer account with the selected tariff, deposit, and opening balance. A non-zero opening balance creates one payable migration bill. It does not post a payment or send a notification."
+            : "This updates the customer tariff, deposit, or opening balance. An opening-balance change updates its migration bill. It does not post a payment or send a notification."
+        }
+        confirmLabel={customerReview?.mode === "create" ? "Create customer account" : "Save financial changes"}
+        cancelLabel="Keep editing"
+        reasonLabel={customerReview?.mode === "create" ? "Account-setup approval note" : "Financial account-change approval note"}
+        reasonPlaceholder="Record the approved account setup or financial change and authority"
+        busy={customerReviewBusy}
+        busyLabel={customerReview?.mode === "create" ? "Creating customer..." : "Saving customer..."}
+        onCancel={() => !customerReviewBusy && setCustomerReview(null)}
+        onConfirm={confirmCustomerReview}
+      >
+        {customerReview ? (() => {
+          const customer = { ...(customerReview.existingCustomer || {}), ...customerReview.payload };
+          const rate = rates.find((row) => Number(row.id) === Number(customer.rate_id));
+          const zone = zones.find((row) => Number(row.id) === Number(customer.zone_id));
+          const openingBalance = Number(customer.opening_balance_amount || 0);
+          return (
+            <div className="reading-context">
+              <div><span>Customer</span><strong>{customer.name} | {customer.acc_number}</strong></div>
+              <div><span>Zone/location</span><strong>{zone?.name || customer.location || "Not set"}</strong></div>
+              <div><span>Tariff</span><strong>{rate ? `${rate.name} | ${money(rate.amount)}` : "Unchanged"}</strong></div>
+              <div><span>Deposit</span><strong>{money(customer.deposit_amount)} | {customer.deposit_paid ? "Marked paid" : "Not marked paid"}</strong></div>
+              <div><span>Opening balance</span><strong>{money(openingBalance)}{openingBalance ? ` | ${customer.opening_balance_date}` : " | No migration bill"}</strong></div>
+              <div><span>Billing consequence</span><strong>{openingBalance ? "One payable migration bill" : "No migration bill"}</strong></div>
+              <div><span>Notifications</span><strong>None sent by this action</strong></div>
             </div>
-            <button
-              type="button"
-              onClick={() => downloadCsvTemplate("customer-import-template.csv", customerImportHeaders)}
-            >
-              <Download size={16} />
-              Template
-            </button>
+          );
+        })() : null}
+      </ReviewDialog>
+      <ReviewDialog
+        open={Boolean(closureReview)}
+        eyebrow="Account closure review"
+        title="Close customer account"
+        description="This marks the account inactive, creates a zero-value closure bill, and applies only the deposit settlement selected below. It does not initiate a bank, cash, or M-Pesa transfer."
+        confirmLabel="Close customer account"
+        cancelLabel="Keep editing"
+        reasonLabel="Closure approval note"
+        reasonPlaceholder="Record the approved closure, settlement basis, and authority"
+        busy={closureReviewBusy}
+        busyLabel="Closing account..."
+        danger
+        onCancel={() => !closureReviewBusy && setClosureReview(null)}
+        onConfirm={confirmAccountClosure}
+      >
+        {closureReview && closingCustomer ? (() => {
+          const balanceDue = Math.max(Number(closingCustomer.balance_due || 0), 0);
+          const depositAvailable = closureReview.apply_deposit && closingCustomer.deposit_paid
+            ? Math.max(Number(closingCustomer.deposit_amount || 0), 0)
+            : 0;
+          const depositApplied = Math.min(depositAvailable, balanceDue);
+          const depositRemainder = Math.max(depositAvailable - depositApplied, 0);
+          const transferCustomer = customers.find((candidate) => Number(candidate.id) === Number(closureReview.transfer_customer_id));
+          const remainderLabel = !depositRemainder
+            ? "No deposit remainder"
+            : closureReview.deposit_remainder_action === "refund"
+              ? "Manual-adjustment refund expense"
+              : closureReview.deposit_remainder_action === "transfer"
+                ? `Manual-adjustment transfer to ${transferCustomer ? `${transferCustomer.name} | ${transferCustomer.acc_number}` : "selected customer"}`
+                : "Forfeit remaining deposit";
+          return (
+            <div className="reading-context">
+              <div><span>Customer</span><strong>{closingCustomer.name} | {closingCustomer.acc_number}</strong></div>
+              <div><span>Settlement date</span><strong>{closureReview.settlement_date}</strong></div>
+              <div><span>Current amount due</span><strong>{money(balanceDue)}</strong></div>
+              <div><span>Paid deposit available</span><strong>{money(depositAvailable)}</strong></div>
+              <div><span>Deposit applied to bills</span><strong>{money(depositApplied)}</strong></div>
+              <div><span>Deposit remainder</span><strong>{money(depositRemainder)} | {remainderLabel}</strong></div>
+              <div><span>Service status</span><strong>Inactive after confirmation</strong></div>
+              <div><span>Final billing record</span><strong>One zero-value closure bill</strong></div>
+            </div>
+          );
+        })() : null}
+      </ReviewDialog>
+      <ReviewDialog
+        open={Boolean(serviceChargeReview)}
+        eyebrow={serviceChargeReview?.action === "post" ? "Customer charge review" : "Customer charge"}
+        title={serviceChargeReview?.action === "post" ? "Post customer service charge" : serviceChargeReview?.action === "waive" ? "Waive service charge" : "Cancel service charge"}
+        description={
+          serviceChargeReview
+            ? serviceChargeReview.action === "post"
+              ? `This adds a payable customer charge and creates one linked bill. It does not record a payment, collect funds, or send a bill notification.`
+              : `${serviceChargeReview.charge.description || "Service charge"} for ${money(serviceChargeReview.charge.amount)}. This change will remain in the customer audit history.`
+            : ""
+        }
+        confirmLabel={serviceChargeReview?.action === "post" ? "Post payable charge" : serviceChargeReview?.action === "waive" ? "Waive charge" : "Cancel charge"}
+        cancelLabel={serviceChargeReview?.action === "post" ? "Keep editing" : "Cancel"}
+        reasonLabel={serviceChargeReview?.action === "post" ? "Finance approval note" : "Reason"}
+        reasonPlaceholder={serviceChargeReview?.action === "post" ? "State the approved service, authority, or reason for adding this customer charge" : "Explain why this customer charge is being changed"}
+        busy={serviceChargeReviewBusy}
+        danger={serviceChargeReview?.action === "cancel"}
+        onCancel={() => setServiceChargeReview(null)}
+        onConfirm={confirmServiceChargeReview}
+      >
+        {serviceChargeReview?.action === "post" ? (
+          <div className="reading-context">
+            <div><span>Customer</span><strong>{serviceChargeCustomer?.name} | {serviceChargeCustomer?.acc_number}</strong></div>
+            <div><span>Charge type</span><strong>{serviceChargeTypes.find(([value]) => value === serviceChargeReview.payload.charge_type)?.[1] || serviceChargeReview.payload.charge_type}</strong></div>
+            <div><span>Charge amount</span><strong>{money(serviceChargeReview.payload.amount)}</strong></div>
+            <div><span>Charge date</span><strong>{serviceChargeReview.payload.charge_date}</strong></div>
+            <div><span>Customer due date</span><strong>{serviceChargeReview.payload.due_date}</strong></div>
+            <div><span>Linked bill</span><strong>One new payable bill</strong></div>
+            <div><span>Description</span><strong>{serviceChargeReview.payload.description}</strong></div>
           </div>
-          <label>
-            CSV file
-            <input type="file" accept=".csv,text/csv" onChange={handleCsvFile} />
-          </label>
-          <textarea
-            value={csvText}
-            onChange={(event) => {
-              setCsvText(event.target.value);
-              setImportPreview(null);
-            }}
-            rows="6"
-            placeholder="name,acc_number,phone,email,rate_name,zone_name,deposit_amount,deposit_paid,opening_balance_amount,opening_balance_date"
-          />
-          <div className="row-actions">
-            <button className="primary-button" type="button" onClick={previewImport} disabled={importing || !csvText.trim()}>
-              Preview import
-            </button>
-            <button type="button" onClick={commitImport} disabled={importing || !importReady}>
-              Commit import
-            </button>
-          </div>
-
-          {importPreview ? (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Row</th>
-                    <th>Account</th>
-                    <th>Name</th>
-                    <th>Email</th>
-                    <th>Rate</th>
-                    <th>Zone</th>
-                    <th>Deposit</th>
-                    <th>Opening</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {importPreview.rows.map((row) => (
-                    <tr key={row.rowNumber}>
-                      <td>{row.rowNumber}</td>
-                      <td>{row.acc_number || "-"}</td>
-                      <td>{row.name || "-"}</td>
-                      <td>{row.email || "-"}</td>
-                      <td>{row.rate_name || "-"}</td>
-                      <td>{row.zone_name || "-"}</td>
-                      <td>
-                        <strong>{Number(row.deposit_amount || 0).toLocaleString()}</strong>
-                        <small>{row.deposit_paid ? "Paid" : "Not paid"}</small>
-                      </td>
-                      <td>
-                        <strong>{Number(row.opening_balance_amount || 0).toLocaleString()}</strong>
-                        <small>{row.opening_balance_date || "-"}</small>
-                      </td>
-                      <td>
-                        <span className={`status status-${row.status_label}`}>{row.status_label}</span>
-                        {[...row.errors, ...row.warnings].map((item) => (
-                          <small key={item}>{item}</small>
-                        ))}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-        </section>
-      ) : null}
-
-      {canWrite && closingCustomer ? (
-        <section className="panel full-span form-grid">
-          <div className="panel-heading">
-            <div>
-              <h3>Close Account</h3>
-              <p className="muted">
-                {closingCustomer.acc_number} - {closingCustomer.name}
-              </p>
-            </div>
-            <button type="button" onClick={() => setClosingCustomer(null)}>
-              Cancel
-            </button>
-          </div>
-          <label>
-            Settlement date
-            <input
-              value={closureForm.settlement_date}
-              onChange={(event) => setClosureField("settlement_date", event.target.value)}
-              type="date"
-            />
-          </label>
-          <label className="checkbox-row">
-            <input
-              checked={Boolean(closureForm.apply_deposit)}
-              onChange={(event) => setClosureField("apply_deposit", event.target.checked)}
-              type="checkbox"
-            />
-            Apply paid deposit to outstanding bills first
-          </label>
-          {closureForm.apply_deposit ? (
-            <>
-              <label>
-                Remaining deposit
-                <select
-                  value={closureForm.deposit_remainder_action}
-                  onChange={(event) => setClosureField("deposit_remainder_action", event.target.value)}
-                >
-                  <option value="refund">Refund as expense</option>
-                  <option value="transfer">Transfer to another customer</option>
-                  <option value="forfeit">Forfeit</option>
-                </select>
-              </label>
-              {closureForm.deposit_remainder_action === "transfer" ? (
-                <label>
-                  Transfer to
-                  <select
-                    value={closureForm.transfer_customer_id}
-                    onChange={(event) => setClosureField("transfer_customer_id", event.target.value)}
-                  >
-                    <option value="">Select customer</option>
-                    {customers
-                      .filter((customer) => Number(customer.id) !== Number(closingCustomer.id))
-                      .map((customer) => (
-                        <option key={customer.id} value={customer.id}>
-                          {customer.acc_number} - {customer.name}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-              ) : null}
-            </>
-          ) : null}
-          <label>
-            Notes
-            <textarea
-              value={closureForm.notes}
-              onChange={(event) => setClosureField("notes", event.target.value)}
-              rows="3"
-              placeholder="Reason for account closure"
-            />
-          </label>
-          <button className="primary-button" type="button" onClick={closeAccount}>
-            Close account
-          </button>
-        </section>
-      ) : null}
-
-      {canWrite && serviceChargeCustomer ? (
-        <section className="panel full-span form-grid">
-          <div className="panel-heading">
-            <div>
-              <h3>Customer Service Charges</h3>
-              <p className="muted">
-                {serviceChargeCustomer.acc_number} - {serviceChargeCustomer.name}
-              </p>
-            </div>
-            <button type="button" onClick={() => setServiceChargeCustomer(null)}>
-              Close
-            </button>
-          </div>
-
-          <form className="form-grid nested-form" onSubmit={submitServiceCharge}>
-            <label>
-              Charge type
-              <select
-                value={serviceChargeForm.charge_type}
-                onChange={(event) => setServiceChargeField("charge_type", event.target.value)}
-              >
-                {serviceChargeTypes.map(([value, labelText]) => (
-                  <option key={value} value={value}>
-                    {labelText}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Amount
-              <input
-                value={serviceChargeForm.amount}
-                onChange={(event) => setServiceChargeField("amount", event.target.value)}
-                type="number"
-                min="0"
-                step="0.01"
-                required
-              />
-            </label>
-            <label>
-              Charge date
-              <input
-                value={serviceChargeForm.charge_date}
-                onChange={(event) => setServiceChargeField("charge_date", event.target.value)}
-                type="date"
-                required
-              />
-            </label>
-            <label>
-              Due date
-              <input
-                value={serviceChargeForm.due_date}
-                onChange={(event) => setServiceChargeField("due_date", event.target.value)}
-                type="date"
-              />
-            </label>
-            <label className="full-span">
-              Description
-              <input
-                value={serviceChargeForm.description}
-                onChange={(event) => setServiceChargeField("description", event.target.value)}
-                placeholder="Meter replacement fee, reconnection fee, inspection visit..."
-                required
-              />
-            </label>
-            <label className="full-span">
-              Notes
-              <textarea
-                value={serviceChargeForm.notes}
-                onChange={(event) => setServiceChargeField("notes", event.target.value)}
-                rows="2"
-                placeholder="Optional internal note"
-              />
-            </label>
-            <button className="primary-button" type="submit">
-              <Plus size={17} />
-              Post charge
-            </button>
-          </form>
-
-          <div className="table-wrap full-span">
-            <table>
-              <thead>
-                <tr>
-                  <th>Charge</th>
-                  <th>Type</th>
-                  <th>Date</th>
-                  <th>Amount</th>
-                  <th>Paid</th>
-                  <th>Balance</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {serviceCharges.length ? (
-                  serviceCharges.map((charge) => (
-                    <tr key={charge.id}>
-                      <td>
-                        <strong>{charge.charge_number || `Charge ${charge.id}`}</strong>
-                        <small>{charge.description}</small>
-                        {charge.bill_number ? <small>Bill {charge.bill_number}</small> : null}
-                      </td>
-                      <td>{serviceChargeTypes.find(([value]) => value === charge.charge_type)?.[1] || charge.charge_type}</td>
-                      <td>
-                        {new Date(charge.charge_date).toLocaleDateString()}
-                        <small>{charge.due_date ? `Due ${new Date(charge.due_date).toLocaleDateString()}` : "No due date"}</small>
-                      </td>
-                      <td>{money(charge.amount)}</td>
-                      <td>{money(charge.paid_amount)}</td>
-                      <td>{money(charge.balance_amount)}</td>
-                      <td>
-                        <span className={`status status-${charge.display_status || charge.status}`}>
-                          {String(charge.display_status || charge.status).replace("_", " ")}
-                        </span>
-                      </td>
-                      <td className="row-actions">
-                        {charge.status === "payable" && Number(charge.paid_amount || 0) === 0 ? (
-                          <>
-                            <button type="button" onClick={() => waiveServiceCharge(charge)}>
-                              Waive
-                            </button>
-                            {user.role === "admin" ? (
-                              <button className="danger-button" type="button" onClick={() => cancelServiceCharge(charge)}>
-                                Cancel
-                              </button>
-                            ) : null}
-                          </>
-                        ) : (
-                          <span className="muted">Locked</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <EmptyTableRow
-                    colSpan={8}
-                    title={loadingServiceCharges ? "Loading service charges" : "No service charges"}
-                    detail="Customer service charges will appear here after they are posted."
-                  />
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      ) : null}
-
-      {canWrite ? (
-        <section className="panel full-span form-grid">
-          <div className="panel-heading">
-            <div>
-              <h3>Opening Balance Overwrite</h3>
-              <p className="muted">
-                Use this to correct existing imported customers before payment import. Match rows by account number.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => downloadCsvTemplate("opening-balances-overwrite-template.csv", openingBalanceImportHeaders)}
-            >
-              <Download size={16} />
-              Template
-            </button>
-          </div>
-          <label>
-            CSV file
-            <input type="file" accept=".csv,text/csv" onChange={handleOpeningCsvFile} />
-          </label>
-          <textarea
-            value={openingCsvText}
-            onChange={(event) => {
-              setOpeningCsvText(event.target.value);
-              setOpeningImportPreview(null);
-            }}
-            rows="5"
-            placeholder="acc_number,opening_balance_amount,opening_balance_date"
-          />
-          <div className="row-actions">
-            <button
-              className="primary-button"
-              type="button"
-              onClick={previewOpeningBalanceImport}
-              disabled={importing || !openingCsvText.trim()}
-            >
-              Preview overwrite
-            </button>
-            <button type="button" onClick={commitOpeningBalanceImport} disabled={importing || !openingImportReady}>
-              Commit overwrite
-            </button>
-          </div>
-
-          {openingImportPreview ? (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Row</th>
-                    <th>Account</th>
-                    <th>Name</th>
-                    <th>Previous</th>
-                    <th>Corrected</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {openingImportPreview.rows.map((row) => (
-                    <tr key={row.rowNumber}>
-                      <td>{row.rowNumber}</td>
-                      <td>{row.acc_number || "-"}</td>
-                      <td>{row.name || "-"}</td>
-                      <td>
-                        <strong>{Number(row.previous_opening_balance_amount || 0).toLocaleString()}</strong>
-                        <small>{row.previous_opening_balance_date || "-"}</small>
-                      </td>
-                      <td>
-                        <strong>{Number(row.opening_balance_amount || 0).toLocaleString()}</strong>
-                        <small>{row.opening_balance_date || "-"}</small>
-                      </td>
-                      <td>
-                        <span className={`status status-${row.status_label}`}>{row.status_label}</span>
-                        {[...row.errors, ...row.warnings].map((item) => (
-                          <small key={item}>{item}</small>
-                        ))}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-        </section>
-      ) : null}
-
-      {canWrite && statementCustomer ? (
-        <section className="panel full-span">
-          <div className="panel-heading">
-            <div>
-              <h3>Customer Statement</h3>
-              <p className="muted">
-                {statementCustomer.acc_number} - {statementCustomer.name}
-              </p>
-            </div>
-            <div className="row-actions">
-              <button type="button" onClick={() => generateStatement("lifetime")}>
-                Lifetime
-              </button>
-              <button type="button" onClick={printStatement} disabled={!statement}>
-                <Printer size={15} />
-                Print
-              </button>
-            </div>
-          </div>
-
-          <div className="filter-bar statement-filter">
-            <label>
-              Start date
-              <input value={statementStart} onChange={(event) => setStatementStart(event.target.value)} type="date" />
-            </label>
-            <label>
-              End date
-              <input value={statementEnd} onChange={(event) => setStatementEnd(event.target.value)} type="date" />
-            </label>
-            <button className="primary-button" type="button" onClick={() => generateStatement("period")}>
-              Generate
-            </button>
-          </div>
-
-          {statement ? (
-            <div className="statement-preview">
-              <div className="stat-grid">
-                <div className="stat-card">
-                  <span>Opening balance</span>
-                  <strong>{money(statement.opening_balance)}</strong>
-                </div>
-                <div className="stat-card">
-                  <span>Billed</span>
-                  <strong>{money(statement.totals?.debit)}</strong>
-                </div>
-                <div className="stat-card">
-                  <span>Paid</span>
-                  <strong>{money(statement.totals?.credit)}</strong>
-                </div>
-                <div className="stat-card">
-                  <span>{accountPositionLabel(statement.totals?.closing_balance)}</span>
-                  <strong>{moneyAbs(statement.totals?.closing_balance)}</strong>
-                </div>
-              </div>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Reference</th>
-                      <th>Description</th>
-                      <th>Debit</th>
-                      <th>Credit</th>
-                      <th>Balance</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {statement.transactions.length ? (
-                      statement.transactions.map((row) => (
-                        <tr key={`${row.transaction_type}-${row.id}-${row.transaction_date}`}>
-                          <td>{new Date(row.transaction_date).toLocaleDateString()}</td>
-                          <td>{row.reference}</td>
-                          <td>{row.description}</td>
-                          <td>{money(row.debit)}</td>
-                          <td>{money(row.credit)}</td>
-                          <td>{money(row.running_balance)}</td>
-                        </tr>
-                      ))
-                    ) : (
-                      <EmptyTableRow colSpan={6} title="No statement activity" detail="No bill or payment activity in this period." />
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : null}
-        </section>
-      ) : null}
-
-      {statement ? (
-        <section className="panel print-surface report-print active-print-surface customer-statement-print">
-          <div className="report-print-header">
-            {business?.logo_url ? (
-              <img className="receipt-logo" src={assetUrl(business.logo_url)} alt={business.name || "Business logo"} />
-            ) : (
-              <span className="receipt-logo-mark">AG</span>
-            )}
-            <div>
-              <h3>{business?.business_name || "Water Billing"}</h3>
-              <p>Customer Statement</p>
-              <p>{business?.phone || ""}</p>
-            </div>
-            <div className="report-print-meta">
-              <span>Period</span>
-              <strong>
-                {statement.period.lifetime
-                  ? "Lifetime"
-                  : `${statement.period.start_date || "Start"} to ${statement.period.end_date || "End"}`}
-              </strong>
-              <small>Printed {new Date().toLocaleDateString()}</small>
-            </div>
-          </div>
-
-          <div className="receipt-info-grid">
-            <div>
-              <span>Customer</span>
-              <strong>{statement.customer.name}</strong>
-            </div>
-            <div>
-              <span>Account</span>
-              <strong>{statement.customer.acc_number}</strong>
-            </div>
-            <div>
-              <span>Zone</span>
-              <strong>{statement.customer.zone_name}</strong>
-            </div>
-            <div>
-              <span>{accountPositionLabel(statement.totals.closing_balance)}</span>
-              <strong>{moneyAbs(statement.totals.closing_balance)}</strong>
-            </div>
-          </div>
-
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Reference</th>
-                  <th>Description</th>
-                  <th>Debit</th>
-                  <th>Credit</th>
-                  <th>Balance</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>-</td>
-                  <td>Opening</td>
-                  <td>Opening balance</td>
-                  <td>-</td>
-                  <td>-</td>
-                  <td>{money(statement.opening_balance)}</td>
-                </tr>
-                {statement.transactions.map((row) => (
-                  <tr key={`print-${row.transaction_type}-${row.id}-${row.transaction_date}`}>
-                    <td>{new Date(row.transaction_date).toLocaleDateString()}</td>
-                    <td>{row.reference}</td>
-                    <td>{row.description}</td>
-                    <td>{money(row.debit)}</td>
-                    <td>{money(row.credit)}</td>
-                    <td>{money(row.running_balance)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="receipt-total">
-            <span>Totals</span>
-            <strong>
-              Billed {money(statement.totals.debit)} | Paid {money(statement.totals.credit)} |{" "}
-              {accountPositionLabel(statement.totals.closing_balance)} {moneyAbs(statement.totals.closing_balance)}
-            </strong>
-          </div>
-        </section>
-      ) : null}
+        ) : null}
+      </ReviewDialog>
     </section>
   );
 }

@@ -1,12 +1,15 @@
 import { CheckCircle2, Mail, MessageSquare, Printer, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import AuditPanel from "../components/AuditPanel";
+import DocumentPrintHeader from "../components/DocumentPrintHeader";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
+import ReviewDialog from "../components/ReviewDialog";
 import StatusBadge from "../components/StatusBadge";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { useToastMessage } from "../components/ToastProvider";
-import { api, assetUrl } from "../services/api";
+import WorkspaceState from "../components/WorkspaceState";
+import { api } from "../services/api";
 import { downloadCsvRows } from "../utils/csvTemplate";
 import { namedExport, withPrintTitle } from "../utils/exportNames";
 
@@ -27,16 +30,38 @@ const nonZeroChargeRows = (bill) =>
 
 function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [bills, setBills] = useState([]);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [initialError, setInitialError] = useState("");
   const [status, setStatus] = useState("");
   const [selectedBill, setSelectedBill] = useState(null);
   const [businessSettings, setBusinessSettings] = useState(null);
+  const [paidReviewBill, setPaidReviewBill] = useState(null);
+  const [markPaidBusyId, setMarkPaidBusyId] = useState(null);
   const [, setMessage] = useToastMessage();
   const canManage = ["admin", "accountant"].includes(user.role);
+  const initialFetch = useRef(true);
 
-  const load = () => api.bills.list(status).then(setBills);
+  const load = async ({ showInitialState = false } = {}) => {
+    if (showInitialState) {
+      setInitialLoading(true);
+      setInitialError("");
+    }
+    try {
+      setBills(await api.bills.list(status));
+    } catch (err) {
+      if (showInitialState) setInitialError(err.message || "Bill records could not be loaded.");
+      throw err;
+    } finally {
+      if (showInitialState) setInitialLoading(false);
+    }
+  };
 
   useEffect(() => {
-    load().catch((err) => setMessage(err.message));
+    const showInitialState = initialFetch.current;
+    initialFetch.current = false;
+    load({ showInitialState }).catch((err) => {
+      if (!showInitialState) setMessage(err.message);
+    });
   }, [status]);
 
   useEffect(() => {
@@ -45,15 +70,31 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
     }
   }, [navigationIntent]);
 
-  const markPaid = async (id) => {
+  const persistPaidStatus = async (bill, correctionReason = "") => {
+    if (markPaidBusyId) return;
+    setMessage("");
+    setMarkPaidBusyId(bill.id);
+    try {
+      await api.bills.markStatus(bill.id, "paid", correctionReason || "");
+      await load();
+      setPaidReviewBill(null);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setMarkPaidBusyId(null);
+    }
+  };
+
+  const markPaid = (id) => {
+    if (markPaidBusyId) return;
     const bill = bills.find((row) => row.id === id);
+    if (!bill) return;
     const restrictedPeriod = ["closed", "locked"].includes(bill?.billing_period_status);
-    const correctionReason = restrictedPeriod
-      ? window.prompt(`Reason required to update a ${bill.billing_period_status} period bill:`)
-      : "";
-    if (restrictedPeriod && !correctionReason) return;
-    await api.bills.markStatus(id, "paid", correctionReason || "");
-    await load();
+    if (restrictedPeriod) {
+      setPaidReviewBill(bill);
+      return;
+    }
+    persistPaidStatus(bill);
   };
 
   const openBillPrint = async (id) => {
@@ -69,6 +110,12 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
       setMessage(err.message);
     }
   };
+
+  useEffect(() => {
+    if (navigationIntent?.page !== "bills" || navigationIntent.focus !== "bill_detail" || !navigationIntent.bill_id) return;
+    if (Number(selectedBill?.id) === Number(navigationIntent.bill_id)) return;
+    openBillPrint(navigationIntent.bill_id);
+  }, [navigationIntent, selectedBill]);
 
   const printBill = () => {
     if (!selectedBill) return;
@@ -135,13 +182,45 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
   const selectedTariff = selectedBill?.tariff_snapshot || {};
   const selectedTariffBlocks = Array.isArray(selectedTariff.blocks) ? selectedTariff.blocks : [];
   const selectedPenalties = selectedBill?.penalty_applications || [];
+  const isServiceChargeBill = selectedBill?.bill_origin === "service_charge";
+  const billSummary = useMemo(() => {
+    const held = bills.filter((bill) => bill.bill_pay_status === "held");
+    const overdue = bills.filter(
+      (bill) => bill.bill_pay_status === "payable" && bill.status !== "paid" && bill.due_date?.slice(0, 10) < today
+    );
+    const payable = bills.filter((bill) => bill.bill_pay_status === "payable");
+    return {
+      issued: bills.reduce((sum, bill) => sum + Number(bill.total_amount || bill.amount || 0), 0),
+      outstanding: bills.reduce((sum, bill) => sum + billBalance(bill), 0),
+      payable: payable.length,
+      overdue: overdue.length,
+      overdueAmount: overdue.reduce((sum, bill) => sum + billBalance(bill), 0),
+      held: held.length
+    };
+  }, [bills, today]);
+
+  if (initialLoading) {
+    return <WorkspaceState detail="Retrieving issued bills, balances, and payment status." title="Preparing revenue register" />;
+  }
+
+  if (initialError) {
+    return (
+      <WorkspaceState
+        detail={initialError}
+        onRetry={() => load({ showInitialState: true }).catch(() => {})}
+        state="error"
+        title="Revenue register could not load"
+      />
+    );
+  }
 
   return (
-    <section className="page-stack">
-      <header className="page-header">
+    <section className="page-stack bill-control-page">
+      <header className="page-header bill-control-header">
         <div>
           <p className="eyebrow">Billing</p>
-          <h2>Bills</h2>
+          <h2>Revenue register</h2>
+          <p>Review issued bills, focus overdue balances, and keep delivery and payment status close to the receivable.</p>
         </div>
         <select value={status} onChange={(event) => setStatus(event.target.value)}>
           <option value="">All statuses</option>
@@ -165,7 +244,38 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
           onClear={onClearNavigationIntent}
         />
       ) : null}
-      <div className="panel">
+      {focusKey === "bill_detail" ? (
+        <FocusNotice
+          title="Bill review"
+          detail="Showing the selected bill and its delivery history."
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
+
+      <section className="bill-control-metrics" aria-label="Bill overview">
+        <div>
+          <span>Issued value</span>
+          <strong>{money(billSummary.issued)}</strong>
+          <small>{bills.length} bill{bills.length === 1 ? "" : "s"} in view</small>
+        </div>
+        <div>
+          <span>Outstanding</span>
+          <strong>{money(billSummary.outstanding)}</strong>
+          <small>{billSummary.payable} payable bill{billSummary.payable === 1 ? "" : "s"}</small>
+        </div>
+        <div className={billSummary.overdue ? "needs-attention" : ""}>
+          <span>Overdue exposure</span>
+          <strong>{money(billSummary.overdueAmount)}</strong>
+          <small>{billSummary.overdue} bill{billSummary.overdue === 1 ? "" : "s"} need follow-up</small>
+        </div>
+        <div className={billSummary.held ? "needs-attention" : ""}>
+          <span>Held bills</span>
+          <strong>{billSummary.held}</strong>
+          <small>{billSummary.held ? "Resolve before collection" : "No blocked receivables"}</small>
+        </div>
+      </section>
+
+      <div className="panel bill-register-panel">
         <div className="panel-heading">
           <h3>Bill Register</h3>
           <button type="button" onClick={exportBills}>
@@ -174,7 +284,7 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
         </div>
         <TableControls table={billTable} label="bills" placeholder="Search bills" />
         <div className="table-wrap">
-          <table>
+          <table className="mobile-record-table bill-record-table">
             <thead>
               <tr>
                 <th>Customer</th>
@@ -193,27 +303,27 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
               {billTable.visibleRows.length ? (
                 billTable.visibleRows.map((bill) => (
                   <tr key={bill.id}>
-                    <td>
+                    <td className="mobile-record-primary" data-label="Customer">
                       <strong>{bill.customer_name}</strong>
                       <small>{bill.acc_number}</small>
                     </td>
-                    <td>
+                    <td data-label="Period">
                       <strong>{bill.billing_period_name || bill.billing_month?.slice(0, 10)}</strong>
                       <small>
                         {bill.bill_number || "-"}
                         {bill.billing_period_status ? ` | ${bill.billing_period_status}` : ""}
                       </small>
                     </td>
-                    <td>{bill.due_date?.slice(0, 10) || "-"}</td>
-                    <td>{Number(bill.units_used).toLocaleString()}</td>
-                    <td>{Number(bill.rate).toLocaleString()}</td>
-                    <td>{money(bill.total_amount || bill.amount)}</td>
-                    <td>{money(bill.paid_amount)}</td>
-                    <td>{money(billBalance(bill))}</td>
-                    <td>
+                    <td data-label="Due">{bill.due_date?.slice(0, 10) || "-"}</td>
+                    <td data-label="Units">{Number(bill.units_used).toLocaleString()}</td>
+                    <td data-label="Rate">{Number(bill.rate).toLocaleString()}</td>
+                    <td data-label="Amount">{money(bill.total_amount || bill.amount)}</td>
+                    <td data-label="Paid">{money(bill.paid_amount)}</td>
+                    <td data-label="Balance">{money(billBalance(bill))}</td>
+                    <td data-label="Status">
                       <StatusBadge status={bill.status} />
                     </td>
-                    <td className="row-actions">
+                    <td className="row-actions mobile-record-actions" data-label="Actions">
                       <button type="button" onClick={() => openBillPrint(bill.id)}>
                         <Printer size={15} />
                         Print
@@ -231,9 +341,9 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
                         </button>
                       ) : null}
                       {canManage && bill.status !== "paid" ? (
-                        <button type="button" onClick={() => markPaid(bill.id)}>
+                        <button type="button" onClick={() => markPaid(bill.id)} disabled={Boolean(markPaidBusyId)}>
                           <CheckCircle2 size={15} />
-                          Mark paid
+                          {markPaidBusyId === bill.id ? "Updating..." : "Mark paid"}
                         </button>
                       ) : null}
                     </td>
@@ -248,7 +358,7 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
       </div>
 
       {selectedBill ? (
-        <div className="panel print-surface receipt-print">
+        <div className="panel print-surface receipt-print bill-print">
           <div className="receipt-actions screen-only">
             <button type="button" onClick={printBill}>
               <Printer size={17} />
@@ -272,24 +382,16 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
             </button>
           </div>
 
-          <div className="receipt-header">
-            {businessSettings?.logo_url ? (
-              <img className="receipt-logo" src={assetUrl(businessSettings.logo_url)} alt="Business logo" />
-            ) : (
-              <div className="receipt-logo-mark">{businessSettings?.business_name?.slice(0, 2) || "AG"}</div>
-            )}
-            <div>
-              <h3>{businessSettings?.business_name || "Water Billing"}</h3>
-              {businessSettings?.legal_name ? <p>{businessSettings.legal_name}</p> : null}
-              {businessSettings?.physical_address ? <p>{businessSettings.physical_address}</p> : null}
-              <p>{[businessSettings?.phone, businessSettings?.email].filter(Boolean).join(" | ")}</p>
-              {businessSettings?.tax_pin ? <p>PIN: {businessSettings.tax_pin}</p> : null}
-            </div>
-          </div>
+          <DocumentPrintHeader
+            businessSettings={businessSettings}
+            dateLabel={`Due ${date(selectedBill.due_date)}`}
+            documentLabel={isServiceChargeBill ? "Service charge invoice" : "Customer bill"}
+            documentNumber={selectedBill.bill_number || `Bill ${selectedBill.id}`}
+          />
 
           <div className="receipt-title">
             <div>
-              <span>Bill</span>
+              <span>{isServiceChargeBill ? "Service charge invoice" : "Bill"}</span>
               <strong>{selectedBill.bill_number || `Bill ${selectedBill.id}`}</strong>
             </div>
             <div>
@@ -298,26 +400,70 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
             </div>
           </div>
 
-          <div className="receipt-info-grid">
-            <div>
-              <span>Customer</span>
-              <strong>{selectedBill.customer_name}</strong>
-              <small>{selectedBill.acc_number}</small>
+          {isServiceChargeBill ? (
+            <div className="receipt-info-grid">
+              <div>
+                <span>Customer</span>
+                <strong>{selectedBill.customer_name}</strong>
+                <small>{selectedBill.acc_number}</small>
+              </div>
+              <div>
+                <span>Charge Type</span>
+                <strong>{label(selectedBill.charge_type || "service_charge")}</strong>
+                <small>{selectedBill.charge_number || "-"}</small>
+              </div>
+              <div>
+                <span>Charge Date</span>
+                <strong>{date(selectedBill.billing_month)}</strong>
+              </div>
+              <div>
+                <span>Status</span>
+                <strong>{label(selectedBill.status)}</strong>
+              </div>
             </div>
-            <div>
-              <span>Phone</span>
-              <strong>{selectedBill.phone || "-"}</strong>
+          ) : (
+            <div className="receipt-info-grid">
+              <div>
+                <span>Customer</span>
+                <strong>{selectedBill.customer_name}</strong>
+                <small>{selectedBill.acc_number}</small>
+              </div>
+              <div>
+                <span>Phone</span>
+                <strong>{selectedBill.phone || "-"}</strong>
+              </div>
+              <div>
+                <span>Billing Period</span>
+                <strong>{selectedBill.billing_period_name || date(selectedBill.billing_month)}</strong>
+              </div>
+              <div>
+                <span>Status</span>
+                <strong>{label(selectedBill.status)}</strong>
+              </div>
             </div>
-            <div>
-              <span>Billing Period</span>
-              <strong>{selectedBill.billing_period_name || date(selectedBill.billing_month)}</strong>
-            </div>
-            <div>
-              <span>Status</span>
-              <strong>{label(selectedBill.status)}</strong>
-            </div>
-          </div>
+          )}
 
+          {isServiceChargeBill ? (
+            <div className="table-wrap bill-service-charge-detail">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Charge Type</th>
+                    <th>Description</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>{label(selectedBill.charge_type || "service_charge")}</td>
+                    <td>{selectedBill.service_charge_description || selectedBill.payability_reason || "Customer service charge"}</td>
+                    <td>{money(selectedBill.total_amount || selectedBill.amount)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <>
           <table className="receipt-table">
             <thead>
               <tr>
@@ -416,6 +562,8 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
               </tbody>
             </table>
           </div>
+            </>
+          )}
 
           {selectedPenalties.length ? (
             <div className="table-wrap">
@@ -464,7 +612,7 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
             {businessSettings?.paybill_number ? <p>Paybill: {businessSettings.paybill_number}</p> : null}
             {businessSettings?.till_number ? <p>Till: {businessSettings.till_number}</p> : null}
             {businessSettings?.receipt_footer_note ? <p>{businessSettings.receipt_footer_note}</p> : null}
-            <small>{businessSettings?.business_name || "Water Billing"} customer bill</small>
+            <small>{businessSettings?.business_name || "Water Billing"} {isServiceChargeBill ? "customer service charge invoice" : "customer bill"}</small>
           </div>
           <div className="screen-only">
             <div className="panel-heading compact-heading">
@@ -505,6 +653,27 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
           </div>
         </div>
       ) : null}
+
+      <ReviewDialog
+        open={Boolean(paidReviewBill)}
+        eyebrow="Restricted period correction"
+        title="Mark restricted-period bill as paid"
+        description={
+          paidReviewBill
+            ? `${paidReviewBill.bill_number || `Bill ${paidReviewBill.id}`} for ${paidReviewBill.customer_name} belongs to a ${paidReviewBill.billing_period_status} billing period. Marking it paid requires an audit reason.`
+            : ""
+        }
+        confirmLabel="Mark bill paid"
+        cancelLabel="Keep current status"
+        reasonLabel="Correction reason"
+        reasonPlaceholder="Explain why this restricted-period bill must be marked paid"
+        reasonRequired
+        busy={markPaidBusyId === paidReviewBill?.id}
+        busyLabel="Marking paid..."
+        danger
+        onCancel={() => !markPaidBusyId && setPaidReviewBill(null)}
+        onConfirm={(reason) => persistPaidStatus(paidReviewBill, reason)}
+      />
     </section>
   );
 }

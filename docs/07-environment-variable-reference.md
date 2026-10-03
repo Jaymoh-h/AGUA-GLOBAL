@@ -64,9 +64,11 @@ CLIENT_ORIGIN=https://www.example.com,https://status.example.com,https://docs.ex
 | `SMTP_HOST` | Yes | `smtp.example.com` | SMTP server |
 | `SMTP_PORT` | Yes | `587` | SMTP port |
 | `SMTP_SECURE` | No | `false` | Use TLS immediately |
+| `SMTP_REQUIRE_TLS` | No | `true` | Require STARTTLS when `SMTP_SECURE` is false; only disable for a trusted local development relay |
 | `SMTP_USER` | Yes | `billing@example.com` | SMTP username |
 | `SMTP_PASS` | Yes | `<secret>` | SMTP password |
 | `SMTP_FROM` | Yes | `billing@example.com` | Sender address |
+| `SMTP_ALLOWED_RECIPIENT_DOMAINS` | No | `example.com` | Comma-separated commissioning allowlist for recipient domains; leave blank for normal customer delivery |
 
 ## SMS Variables
 

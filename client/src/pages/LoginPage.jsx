@@ -12,6 +12,14 @@ const passwordIsStrong = (password) => {
   return password.length >= 8 && categories >= 3;
 };
 
+const loginErrorMessage = (error) => {
+  const message = String(error?.message || "").trim();
+  if (/failed to fetch|networkerror|load failed/i.test(message)) {
+    return "We cannot reach the sign-in service. Check your connection and try again.";
+  }
+  return message || "We could not sign you in. Check your details and try again.";
+};
+
 function LoginPage({ appName, onLogin, sessionMessage = "", variant = "page" }) {
   const resetToken = new URLSearchParams(window.location.search).get("reset_token") || "";
   const [mode, setMode] = useState(resetToken ? "reset" : "login");
@@ -41,7 +49,7 @@ function LoginPage({ appName, onLogin, sessionMessage = "", variant = "page" }) 
       }
       onLogin(data);
     } catch (err) {
-      setError(err.message);
+      setError(loginErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -55,7 +63,7 @@ function LoginPage({ appName, onLogin, sessionMessage = "", variant = "page" }) 
       const data = await api.selectContext(contextSelection.context_selection_token, profileId);
       onLogin(data);
     } catch (err) {
-      setError(err.message);
+      setError(loginErrorMessage(err));
       setContextSelection(null);
     } finally {
       setLoading(false);
@@ -73,7 +81,7 @@ function LoginPage({ appName, onLogin, sessionMessage = "", variant = "page" }) 
       setNotice(result.message);
       setMode("login");
     } catch (err) {
-      setError(err.message);
+      setError(loginErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -99,23 +107,31 @@ function LoginPage({ appName, onLogin, sessionMessage = "", variant = "page" }) 
       window.history.replaceState({}, "", window.location.pathname);
       onLogin(data);
     } catch (err) {
-      setError(err.message);
+      setError(loginErrorMessage(err));
     } finally {
       setLoading(false);
     }
   };
 
   const panel = (
-    <section className={`login-panel ${variant === "modal" ? "login-panel-modal" : ""}`} aria-label="Login form">
-        <div className="login-brand">
-          <span className="brand-mark">
-            <Droplets size={24} />
-          </span>
-          <div>
-            <h1>{appName}</h1>
-            <p>Water billing and customer management</p>
+    <section className={`login-panel ${variant === "modal" ? "login-panel-modal" : ""} ${variant === "access" ? "login-panel-access" : ""}`} aria-label="Login form">
+        {variant === "access" ? (
+          <div className="login-access-heading">
+            <p>Secure workspace</p>
+            <h2>Sign in to continue</h2>
+            <span>Use your assigned account to access {appName}.</span>
           </div>
-        </div>
+        ) : (
+          <div className="login-brand">
+            <span className="brand-mark">
+              <Droplets size={24} />
+            </span>
+            <div>
+              <h1>{appName}</h1>
+              <p>Water billing and customer management</p>
+            </div>
+          </div>
+        )}
 
         {notice ? <p className="form-note">{notice}</p> : null}
 
@@ -252,7 +268,7 @@ function LoginPage({ appName, onLogin, sessionMessage = "", variant = "page" }) 
     </section>
   );
 
-  if (variant === "modal") {
+  if (variant === "modal" || variant === "access") {
     return panel;
   }
 

@@ -1,7 +1,9 @@
 import { ChevronLeft, ChevronRight, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-const pageSizeOptions = [10, 25, 50, 1000000];
+// Keep rendered register rows bounded. Full filtered datasets remain available through each register's export action.
+const pageSizeOptions = [10, 25, 50, 100];
+const tablePreferencePrefix = "agua:table-preferences:";
 
 const searchableText = (value) => {
   if (value === null || value === undefined) return "";
@@ -16,10 +18,49 @@ const readPath = (row, path) =>
     .split(".")
     .reduce((value, key) => (value && value[key] !== undefined ? value[key] : ""), row);
 
-export const useTableControls = (rows, { pageSize: initialPageSize = 10, searchFields = [] } = {}) => {
-  const [query, setQuery] = useState("");
-  const [pageSize, setPageSize] = useState(initialPageSize);
+const readTablePreferences = (storageKey, initialPageSize) => {
+  const defaults = { query: "", pageSize: initialPageSize };
+  if (!storageKey || typeof window === "undefined") return defaults;
+
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(`${tablePreferencePrefix}${storageKey}`) || "{}");
+    const pageSize = pageSizeOptions.includes(Number(saved.pageSize)) ? Number(saved.pageSize) : initialPageSize;
+    return { query: typeof saved.query === "string" ? saved.query : "", pageSize };
+  } catch (_error) {
+    return defaults;
+  }
+};
+
+const writeTablePreferences = (storageKey, preferences) => {
+  if (!storageKey || typeof window === "undefined") return;
+
+  try {
+    window.localStorage.setItem(`${tablePreferencePrefix}${storageKey}`, JSON.stringify(preferences));
+  } catch (_error) {
+    // Table preferences are optional and should not interrupt the register.
+  }
+};
+
+export const useTableControls = (rows, { pageSize: initialPageSize = 10, searchFields = [], storageKey = "" } = {}) => {
+  const [preferences, setPreferences] = useState(() => readTablePreferences(storageKey, initialPageSize));
+  const { query, pageSize } = preferences;
   const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    setPreferences(readTablePreferences(storageKey, initialPageSize));
+    setPage(1);
+  }, [initialPageSize, storageKey]);
+
+  const setQuery = (value) => {
+    const next = { ...preferences, query: value };
+    setPreferences(next);
+    writeTablePreferences(storageKey, next);
+  };
+  const setPageSize = (value) => {
+    const next = { ...preferences, pageSize: Number(value) };
+    setPreferences(next);
+    writeTablePreferences(storageKey, next);
+  };
 
   const filteredRows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -48,7 +89,7 @@ export const useTableControls = (rows, { pageSize: initialPageSize = 10, searchF
     query,
     setQuery,
     pageSize,
-    setPageSize: (value) => setPageSize(Number(value)),
+    setPageSize,
     page: currentPage,
     setPage,
     pageCount,
@@ -84,7 +125,7 @@ function TableControls({ table, label = "rows", placeholder = "Search table" }) 
         <select value={table.pageSize} onChange={(event) => table.setPageSize(event.target.value)} aria-label="Rows per page">
           {pageSizeOptions.map((option) => (
             <option key={option} value={option}>
-              {option > 1000 ? "All rows" : `${option} rows`}
+            {`${option} rows`}
             </option>
           ))}
         </select>

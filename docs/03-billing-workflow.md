@@ -59,7 +59,29 @@ Supported period behavior:
 - Review billing period readiness.
 - Update period status.
 - Restrict corrections in closed or locked periods.
-- Require audit reasons for corrections where applicable.
+- Require audit reasons for restricted-period corrections and for any close or lock override with unresolved readiness blockers.
+
+## Guided Billing Cycle Control Surface
+
+The Billing Cycle control surface brings the period-end work into one ordered operational flow. It is a control surface, not a replacement for the existing billing, reading, source-billing, bill, and invoice-delivery rules. Each step exposes the current state and routes the operator to the appropriate review work before the next irreversible action.
+
+The intended flow is:
+
+1. **Choose an open period.** Select the active billing period and confirm its dates, due date, status, and readiness summary before beginning work. Closed and locked periods remain visible for review but cannot be used to start a new billing run.
+2. **Capture readings.** Record or import client-meter readings for the selected period. The operator can see missing-reading work, prior readings, validation failures, and the resulting bill count before committing a batch. The cycle shows a 95% reading-completion recommendation to pace bill preparation; it is guidance only and does not weaken the stricter close blockers.
+3. **Resolve exceptions.** Clear reading exceptions such as missing, stale, duplicate, or decreasing readings. Review source-billing requests separately: a source-side reading remains a review item, an approved request creates a held bill, and promotion to a payable bill remains an explicit authorised decision.
+4. **Issue and review bills.** Generate or review bills for valid readings, then inspect bill totals, usage, tariff results, and any held, voided, partial, or failed items before treating the period as ready.
+5. **Inspect invoice delivery exceptions.** Review invoices that were not delivered, are pending retry, or have no usable delivery destination. Resolve the customer contact or delivery issue, then retry or record the appropriate follow-up; delivery exceptions must remain visible rather than being treated as successful delivery.
+6. **Confirm readiness.** Use the readiness summary to identify unresolved readings, source-billing decisions, bill issues, and invoice delivery exceptions. Blocking conditions cannot be bypassed by a direct status request: a close or lock override requires a clear audit reason and saves the reviewed blocker snapshot.
+7. **Close, then lock.** Close only when the period is operationally complete and the remaining exceptions have been deliberately handled. A reasoned override is an exception decision, not a resolution of the underlying work. Apply the existing audit-reasoned correction process for any permitted post-close work. Lock only after final review, because locking applies the stricter correction restrictions already enforced by the system.
+
+### Operator Guardrails
+
+- Work from one selected period at a time; do not mix readings, bills, or exceptions from different periods in the same review decision.
+- Treat readiness counts as a queue for investigation. Where an exceptional close or lock is necessary, record why it is appropriate; the audit event retains the exact blocking evidence visible at that decision.
+- Do not promote a held source-billing bill merely to remove it from an exception list; promotion determines whether it becomes collectible customer debt.
+- Do not close or lock a period to hide unresolved delivery or billing work. Record and route exceptions through their existing correction, review, or follow-up process.
+- Closure and locking preserve the existing safeguards: restricted corrections, required audit reasons where applicable, and stricter controls after lock.
 
 ## Penalties
 

@@ -5,7 +5,8 @@ const { recordAuditEvent } = require("../services/audit.service");
 const { createExpenseRecord } = require("./expense.controller");
 const { assertNotFutureDate } = require("../services/dateGuard.service");
 
-const categories = ["leak", "meter_fault", "no_water", "low_pressure", "water_quality", "connection", "billing_support", "other"];
+const categories = ["leak", "meter_fault", "no_water", "low_pressure", "water_quality", "connection", "billing_support", "billing_dispute", "payment_plan", "other"];
+const fieldCategories = new Set(categories.filter((category) => !["billing_support", "billing_dispute", "payment_plan"].includes(category)));
 const priorities = ["low", "normal", "high", "urgent"];
 const statuses = ["open", "in_progress", "resolved", "cancelled"];
 const sources = ["internal", "field", "customer_portal", "phone", "walk_in", "other"];
@@ -45,6 +46,7 @@ const selectMaintenanceRequestSql = `
   SELECT mr.*,
     c.name AS customer_name,
     c.acc_number,
+    c.location AS customer_location,
     z.name AS zone_name,
     m.meter_number,
     assigned.name AS assigned_to_name,
@@ -280,8 +282,73 @@ const updateMaintenanceRequest = asyncHandler(async (req, res) => {
   }
 });
 
+const dispatchMaintenanceRequests = asyncHandler(async (req, res) => {
+  if (!Array.isArray(req.body.request_ids) || !req.body.request_ids.length || req.body.request_ids.length > 50) {
+    throw new ApiError(400, "Select between 1 and 50 field requests.");
+  }
+  const requestIds = req.body.request_ids.map((value) => nullableId(value));
+  if (requestIds.some((id) => !id)) throw new ApiError(400, "Each selected request must be valid.");
+  if (new Set(requestIds).size !== requestIds.length) {
+    throw new ApiError(400, "Select each field request only once.");
+  }
+
+  const assignedTo = nullableId(req.body.assigned_to);
+  const targetDate = dateOnlyOrNull(req.body.target_date);
+  if (!assignedTo || !targetDate) throw new ApiError(400, "A field owner and target date are required.");
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const assignee = await client.query(
+      "SELECT id FROM users WHERE id = $1 AND is_active = TRUE AND role IN ('admin', 'accountant', 'meter_reader')",
+      [assignedTo]
+    );
+    if (!assignee.rows[0]) throw new ApiError(400, "Selected field owner is not active.");
+
+    const requests = [];
+    for (const id of requestIds) {
+      const request = await getMaintenanceRequest(client, id, { lock: true });
+      if (!request) throw new ApiError(404, "A selected maintenance request was not found.");
+      if (!["open", "in_progress"].includes(request.status) || !fieldCategories.has(request.category)) {
+        throw new ApiError(400, "Only active field requests can be scheduled together.");
+      }
+      requests.push(request);
+    }
+
+    const updated = [];
+    for (const request of requests) {
+      const { rows } = await client.query(
+        `UPDATE maintenance_requests
+         SET assigned_to = $1, target_date = $2, updated_at = NOW()
+         WHERE id = $3
+         RETURNING id`,
+        [assignedTo, targetDate, request.id]
+      );
+      const after = await getMaintenanceRequest(client, rows[0].id);
+      await recordAuditEvent(client, {
+        req,
+        action: "maintenance_request.batch_dispatched",
+        entityType: "maintenance_request",
+        entityId: after.id,
+        beforeData: request,
+        afterData: after
+      });
+      updated.push(after);
+    }
+
+    await client.query("COMMIT");
+    res.json({ count: updated.length, requests: updated });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+
 const resolveMaintenanceRequest = asyncHandler(async (req, res) => {
   const resolutionNotes = String(req.body.resolution_notes || "").trim();
+  const customerResolutionSummary = String(req.body.customer_resolution_summary || "").trim();
   if (!resolutionNotes) throw new ApiError(400, "Resolution notes are required.");
 
   const client = await pool.connect();
@@ -291,17 +358,24 @@ const resolveMaintenanceRequest = asyncHandler(async (req, res) => {
     if (!before) throw new ApiError(404, "Maintenance request not found.");
     if (before.status === "resolved") throw new ApiError(400, "Maintenance request is already resolved.");
     if (before.status === "cancelled") throw new ApiError(400, "Cancelled maintenance requests cannot be resolved.");
+    if (before.category === "billing_dispute" && !customerResolutionSummary) {
+      throw new ApiError(400, "A customer-facing resolution summary is required for a billing dispute.");
+    }
+    if (customerResolutionSummary.length > 2000) {
+      throw new ApiError(400, "Customer-facing resolution summary must be 2000 characters or fewer.");
+    }
 
     const { rows } = await client.query(
       `UPDATE maintenance_requests
        SET status = 'resolved',
            resolution_notes = $1,
+           customer_resolution_summary = $2,
            resolved_at = NOW(),
-           resolved_by = $2,
+           resolved_by = $3,
            updated_at = NOW()
-       WHERE id = $3
+       WHERE id = $4
        RETURNING *`,
-      [resolutionNotes, req.user.id, req.params.id]
+      [resolutionNotes, before.category === "billing_dispute" ? customerResolutionSummary : null, req.user.id, req.params.id]
     );
 
     const resolved = await getMaintenanceRequest(client, rows[0].id);
@@ -325,6 +399,8 @@ const resolveMaintenanceRequest = asyncHandler(async (req, res) => {
 });
 
 const createMaintenanceExpense = asyncHandler(async (req, res) => {
+  const reviewNotes = String(req.body.review_notes || "").trim();
+  if (!reviewNotes) throw new ApiError(400, "Finance approval notes are required before recording a maintenance expense.");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -341,7 +417,7 @@ const createMaintenanceExpense = asyncHandler(async (req, res) => {
         category: req.body.category || `Maintenance - ${request.category}`,
         description: req.body.description || `${request.request_number || "Maintenance"}: ${request.title}`
       },
-      { auditReason: `Maintenance expense for ${request.request_number || `request ${request.id}`}` }
+      { auditReason: `${reviewNotes} | Maintenance expense for ${request.request_number || `request ${request.id}`}` }
     );
 
     await recordAuditEvent(client, {
@@ -351,7 +427,7 @@ const createMaintenanceExpense = asyncHandler(async (req, res) => {
       entityId: request.id,
       beforeData: request,
       afterData: { request_id: request.id, expense },
-      reason: req.body.notes || req.body.description || null
+      reason: reviewNotes
     });
 
     const updatedRequest = await getMaintenanceRequest(client, request.id);
@@ -368,6 +444,7 @@ const createMaintenanceExpense = asyncHandler(async (req, res) => {
 module.exports = {
   createMaintenanceExpense,
   createMaintenanceRequest,
+  dispatchMaintenanceRequests,
   listMaintenanceAssignees,
   listMaintenanceRequests,
   resolveMaintenanceRequest,

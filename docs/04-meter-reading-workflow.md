@@ -27,6 +27,8 @@ Before entry, the app exposes:
 - Rate and zone context.
 - Billing period context.
 
+The single-reading form also accepts a meter-number lookup for accounts that are still eligible in the selected period. An exact typed, handheld-scanner, or compatible device-camera scan selects its customer and active meter; accounts with multiple active billing meters still require the operator to select the intended meter explicitly. Camera scanning stays optional and falls back to the typed lookup when browser support or camera access is unavailable.
+
 This prevents blind data entry and helps catch abnormal consumption early.
 
 ## Reading Validation
@@ -67,6 +69,47 @@ Related endpoints:
 
 - `POST /api/readings/imports/preview`
 - `POST /api/readings/imports/commit`
+
+## Batch Reading Sheet
+
+The Batch Reading Sheet removes the spreadsheet round trip for routine month-end entry while retaining the same import controls.
+
+1. Load active customers who are still missing a reading for the selected month.
+2. Filter by account, customer, zone, or meter.
+3. Enter current readings and optional notes directly in the table.
+4. Use `Enter`, `Arrow Down`, or `Arrow Up` to move between reading inputs; `Tab` follows the normal form order.
+5. Review calculated usage and correct readings below the previous value.
+6. Preview the entered rows. The server revalidates customer, meter, period, duplicate, and reading-sequence rules.
+7. Confirm the validated batch to create readings and applicable bills in one transaction.
+
+Blank rows are not submitted. Accounts with multiple active client-billing meters are excluded from inline entry and must use the single-reading form so the operator selects the intended meter explicitly. The sheet is saved on the current device for the active user and workspace, including across browser restarts. When offline, entered readings remain saved locally; reconnect before previewing or importing because server validation and bill creation are never queued automatically.
+
+## Reading Anomaly Review
+
+The Meter Readings workspace includes a read-only anomaly queue for client-billing meters. For each reading in the selected month, it compares interval usage with the average of the three preceding intervals and queues the reading when the variance is greater than 50 percent.
+
+- New or replaced meters remain outside the queue until they have three earlier intervals.
+- Source and shared monitoring meters remain in their dedicated review workflows.
+- Opening **Review reading** only loads the existing correction form; it does not change a reading, bill, or billing period.
+- Any correction continues through the existing audited reading update workflow.
+
+Related endpoint:
+
+- `GET /api/readings/anomalies?period_start=YYYY-MM-DD`
+
+## Estimated Reading Candidates
+
+Operators can load a suggested reading into the normal reading review form. The value is never posted automatically: verify it in the field, adjust it where needed, and submit through the standard billing-safe reading flow.
+
+For missing client-meter readings, the workspace can suggest a verification value using the average of the three most recent completed usage intervals. This is an operational follow-up list, not an automatic estimation process: it never creates a reading, bill, audit event, or billing period.
+
+- Candidates require an active client-billing meter, an active customer, exactly three earlier usage intervals, and no reading for that meter in the selected month.
+- The suggested value is the latest cumulative reading plus the three-interval average usage.
+- Operators must verify the field value and use the normal reading workflow for any approved entry.
+
+Related endpoint:
+
+- `GET /api/readings/estimation-candidates?period_start=YYYY-MM-DD`
 
 ## Source Billing Workflow
 

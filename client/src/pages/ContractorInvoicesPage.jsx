@@ -1,11 +1,14 @@
-import { Banknote, CheckCircle2, FileText, Pencil, Plus, Save, Send, X, XCircle } from "lucide-react";
+import { Banknote, CheckCircle2, FileText, MoreHorizontal, Pencil, Plus, Save, Send, X, XCircle } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
+import EntryPanel from "../components/EntryPanel";
 import { EmptyTableRow } from "../components/EmptyState";
 import FocusNotice from "../components/FocusNotice";
+import ReviewDialog from "../components/ReviewDialog";
 import StatusBadge from "../components/StatusBadge";
 import SupportingDocumentsPanel from "../components/SupportingDocumentsPanel";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { useToastMessage } from "../components/ToastProvider";
+import WorkspaceState from "../components/WorkspaceState";
 import { api } from "../services/api";
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -52,31 +55,49 @@ const blankPostDraft = {
 const openStatuses = ["draft", "submitted", "approved"];
 const focusKeys = ["approved_supplier_invoices", "overdue_supplier_invoices"];
 
-function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
+function ContractorInvoicesPage({ user, navigationIntent, onClearNavigationIntent }) {
   const [contractors, setContractors] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [contractorForm, setContractorForm] = useState(blankContractor);
   const [invoiceForm, setInvoiceForm] = useState(blankInvoice);
   const [editingContractorId, setEditingContractorId] = useState(null);
   const [editingInvoiceId, setEditingInvoiceId] = useState(null);
+  const [contractorEntryOpen, setContractorEntryOpen] = useState(false);
+  const [invoiceEntryOpen, setInvoiceEntryOpen] = useState(false);
   const [invoiceFilters, setInvoiceFilters] = useState({ status: "all", contractor_id: "", due: "all" });
   const [, setMessage] = useToastMessage();
   const [saving, setSaving] = useState(false);
   const [activeDocumentInvoiceId, setActiveDocumentInvoiceId] = useState(null);
   const [activePostInvoiceId, setActivePostInvoiceId] = useState(null);
   const [postDrafts, setPostDrafts] = useState({});
+  const [invoiceReview, setInvoiceReview] = useState(null);
+  const [invoiceReviewBusy, setInvoiceReviewBusy] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [initialError, setInitialError] = useState("");
+  const canManage = ["admin", "accountant"].includes(user?.role);
 
-  const load = async () => {
-    const [nextContractors, nextInvoices] = await Promise.all([
-      api.contractorInvoices.contractors(),
-      api.contractorInvoices.invoices()
-    ]);
-    setContractors(nextContractors);
-    setInvoices(nextInvoices);
+  const load = async ({ showState = false } = {}) => {
+    if (showState) {
+      setInitialLoading(true);
+      setInitialError("");
+    }
+    try {
+      const [nextContractors, nextInvoices] = await Promise.all([
+        api.contractorInvoices.contractors(),
+        api.contractorInvoices.invoices()
+      ]);
+      setContractors(nextContractors);
+      setInvoices(nextInvoices);
+    } catch (err) {
+      if (showState) setInitialError(err.message || "Supplier invoices and contractor records could not be loaded.");
+      throw err;
+    } finally {
+      if (showState) setInitialLoading(false);
+    }
   };
 
   useEffect(() => {
-    load().catch((err) => setMessage(err.message));
+    load({ showState: true }).catch(() => {});
   }, []);
 
   const totals = useMemo(
@@ -149,11 +170,13 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
   const resetContractorForm = () => {
     setContractorForm(blankContractor);
     setEditingContractorId(null);
+    setContractorEntryOpen(false);
   };
 
   const resetInvoiceForm = () => {
     setInvoiceForm(blankInvoice);
     setEditingInvoiceId(null);
+    setInvoiceEntryOpen(false);
   };
 
   const saveContractor = async (event) => {
@@ -183,6 +206,7 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
 
   const editContractor = (contractor) => {
     setEditingContractorId(contractor.id);
+    setContractorEntryOpen(true);
     setContractorForm({
       name: contractor.name || "",
       phone: contractor.phone || "",
@@ -248,6 +272,7 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
     setActiveDocumentInvoiceId(null);
     setActivePostInvoiceId(null);
     setEditingInvoiceId(invoice.id);
+    setInvoiceEntryOpen(true);
     setInvoiceForm({
       contractor_id: String(invoice.contractor_id || ""),
       invoice_number: invoice.invoice_number || "",
@@ -263,17 +288,61 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
     });
   };
 
-  const updateStatus = async (invoice, status) => {
+  const updateStatus = async (invoice, status, reason = "") => {
     setMessage("");
     setSaving(true);
     try {
-      await api.contractorInvoices.updateStatus(invoice.id, { status });
+      await api.contractorInvoices.updateStatus(invoice.id, { status, reason });
       await load();
       setMessage(`Invoice ${label(status)}.`);
     } catch (err) {
       setMessage(err.message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const requestInvoiceReview = (invoice, status) => {
+    setInvoiceReview({ kind: "status", invoice, status });
+  };
+
+  const requestExpenseReview = (invoice) => {
+    const draft = postDrafts[invoice.id] || blankPostDraft;
+    setInvoiceReview({ kind: "expense", invoice, draft });
+  };
+
+  const closeInvoiceReview = () => {
+    if (!invoiceReviewBusy) setInvoiceReview(null);
+  };
+
+  const confirmInvoiceReview = async (reviewNotes) => {
+    if (!invoiceReview) return;
+    const { invoice } = invoiceReview;
+    setMessage("");
+    setInvoiceReviewBusy(true);
+    setSaving(true);
+    try {
+      if (invoiceReview.kind === "status") {
+        await api.contractorInvoices.updateStatus(invoice.id, {
+          status: invoiceReview.status,
+          reason: reviewNotes
+        });
+        setMessage(`Invoice ${label(invoiceReview.status)}.`);
+      } else {
+        await api.contractorInvoices.postExpense(invoice.id, {
+          ...invoiceReview.draft,
+          review_notes: reviewNotes
+        });
+        setActivePostInvoiceId(null);
+        setMessage("Invoice posted to expenses.");
+      }
+      await load();
+      setInvoiceReview(null);
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setSaving(false);
+      setInvoiceReviewBusy(false);
     }
   };
 
@@ -301,33 +370,33 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
     }));
   };
 
-  const postToExpense = async (event, invoice) => {
+  const postToExpense = (event, invoice) => {
     event.preventDefault();
-    const draft = postDrafts[invoice.id] || blankPostDraft;
-    setMessage("");
-    setSaving(true);
-    try {
-      await api.contractorInvoices.postExpense(invoice.id, draft);
-      setActivePostInvoiceId(null);
-      await load();
-      setMessage("Invoice posted to expenses.");
-    } catch (err) {
-      setMessage(err.message);
-    } finally {
-      setSaving(false);
-    }
+    requestExpenseReview(invoice);
   };
 
+  if (initialLoading) {
+    return <WorkspaceState title="Preparing supplier payables" detail="Retrieving contractor records, supplier invoices, and approved-cost controls." />;
+  }
+  if (initialError) {
+    return <WorkspaceState state="error" title="Supplier payables could not load" detail={initialError} onRetry={() => load({ showState: true }).catch(() => {})} />;
+  }
+
   return (
-    <section className="page-stack">
-      <header className="page-header">
+    <section className="page-stack contractor-control-page">
+      <header className="page-header contractor-control-header">
         <div>
           <p className="eyebrow">Accounts</p>
-          <h2>Contractor Invoices</h2>
+          <h2>Supplier payables</h2>
+          <p>Keep supplier commitments visible, approve the right invoices, and post verified costs into the ledger.</p>
+        </div>
+        <div className="contractor-control-context">
+          <span>Open exposure</span>
+          <strong>{money(totals.openAmount)}</strong>
         </div>
       </header>
 
-      <div className="stat-grid">
+      <div className="stat-grid contractor-control-metrics">
         <div className="stat-card">
           <span>Open invoices</span>
           <strong>{totals.open}</strong>
@@ -360,14 +429,20 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
         </div>
       </div>
 
-      <section className={hasSupplierFocus ? "page-stack" : "workspace-grid"}>
-        {!hasSupplierFocus ? (
-        <div className="page-stack">
-          <form className="panel form-grid" onSubmit={saveContractor}>
-            <div className="panel-heading">
-              <h3>{editingContractorId ? "Edit Contractor" : "Contractor"}</h3>
-              {editingContractorId ? <Pencil size={18} /> : <Plus size={18} />}
-            </div>
+      <section className={hasSupplierFocus || !canManage ? "page-stack" : "workspace-grid entry-led-workspace contractor-entry-workspace"}>
+        {!hasSupplierFocus && canManage ? (
+        <>
+          <EntryPanel
+            actionLabel="Add contractor"
+            className="contractor-entry-panel"
+            disabled={saving || invoiceReviewBusy}
+            icon={<Pencil size={17} />}
+            onOpenChange={(open) => (open ? setContractorEntryOpen(true) : resetContractorForm())}
+            open={contractorEntryOpen}
+            summary={editingContractorId ? "Update supplier identity and payment terms" : "Register a supplier or contractor"}
+            title={editingContractorId ? "Edit contractor" : "Contractor entry"}
+          >
+          <form className="form-grid" onSubmit={saveContractor}>
             <label>
               Name
               <input value={contractorForm.name} onChange={(event) => setContractorField("name", event.target.value)} required />
@@ -417,12 +492,19 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
               ) : null}
             </div>
           </form>
+          </EntryPanel>
 
-          <form className="panel form-grid" onSubmit={saveInvoice}>
-            <div className="panel-heading">
-              <h3>{editingInvoiceId ? "Edit Invoice" : "Capture Invoice"}</h3>
-              {editingInvoiceId ? <Pencil size={18} /> : <FileText size={18} />}
-            </div>
+          <EntryPanel
+            actionLabel="Capture invoice"
+            className="contractor-invoice-entry-panel"
+            disabled={saving || invoiceReviewBusy}
+            icon={<FileText size={17} />}
+            onOpenChange={(open) => (open ? setInvoiceEntryOpen(true) : resetInvoiceForm())}
+            open={invoiceEntryOpen}
+            summary={editingInvoiceId ? "Update supplier invoice details" : "Capture a supplier liability for review"}
+            title={editingInvoiceId ? "Edit supplier invoice" : "Supplier invoice entry"}
+          >
+          <form className="form-grid" onSubmit={saveInvoice}>
             <label>
               Contractor
               <select value={invoiceForm.contractor_id} onChange={(event) => setInvoiceField("contractor_id", event.target.value)} required>
@@ -492,12 +574,12 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
               ) : null}
             </div>
           </form>
-
-        </div>
+          </EntryPanel>
+        </>
         ) : null}
 
         <div className="page-stack">
-        <div className="panel wide-panel">
+        <div className="panel wide-panel register-panel contractor-invoice-register-panel">
           <div className="panel-heading">
             <h3>Invoice Register</h3>
           </div>
@@ -555,7 +637,7 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
                   <th>Amount</th>
                   <th>Status</th>
                   <th>Expense</th>
-                  <th>Actions</th>
+                  {canManage ? <th>Actions</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -565,11 +647,11 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
                     return (
                       <Fragment key={invoice.id}>
                         <tr>
-                          <td>
+                          {canManage ? <td>
                             <strong>{invoice.invoice_number}</strong>
                             <small>{invoice.description}</small>
                             <small>{invoice.document_count ? `${invoice.document_count} document(s)` : "No documents"}</small>
-                          </td>
+                          </td> : null}
                           <td>
                             {invoice.contractor_name}
                             <small>{invoice.contractor_tax_pin || "-"}</small>
@@ -591,54 +673,76 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
                           </td>
                           <td>
                             <div className="row-actions">
-                              <button
-                                className="icon-button"
-                                type="button"
-                                onClick={() => {
-                                  setActivePostInvoiceId(null);
-                                  setActiveDocumentInvoiceId((current) => (current === invoice.id ? null : invoice.id));
-                                }}
-                                title="Supporting documents"
-                                disabled={saving}
-                              >
-                                <FileText size={16} />
-                              </button>
                               {!["posted_to_expense", "paid"].includes(invoice.status) ? (
-                                <button className="icon-button" type="button" onClick={() => editInvoice(invoice)} title="Edit invoice" disabled={saving || hasSupplierFocus}>
-                                  <Pencil size={16} />
-                                </button>
+                                <>
+                                  {invoice.status === "draft" ? (
+                                    <button type="button" onClick={() => updateStatus(invoice, "submitted")} disabled={saving}>
+                                      <Send size={16} />
+                                      Submit
+                                    </button>
+                                  ) : null}
+                                  {["submitted", "rejected"].includes(invoice.status) ? (
+                                    <button type="button" onClick={() => requestInvoiceReview(invoice, "approved")} disabled={saving}>
+                                      <CheckCircle2 size={16} />
+                                      Approve
+                                    </button>
+                                  ) : null}
+                                  {invoice.status === "approved" ? (
+                                    <button type="button" onClick={() => openPostForm(invoice)} disabled={saving}>
+                                      <Banknote size={16} />
+                                      Post expense
+                                    </button>
+                                  ) : null}
+                                </>
                               ) : null}
-                              {invoice.status === "draft" ? (
-                                <button className="icon-button" type="button" onClick={() => updateStatus(invoice, "submitted")} title="Submit invoice" disabled={saving}>
-                                  <Send size={16} />
-                                </button>
-                              ) : null}
-                              {["draft", "submitted", "rejected"].includes(invoice.status) ? (
-                                <button className="icon-button" type="button" onClick={() => updateStatus(invoice, "approved")} title="Approve invoice" disabled={saving}>
-                                  <CheckCircle2 size={16} />
-                                </button>
-                              ) : null}
-                              {["draft", "submitted"].includes(invoice.status) ? (
-                                <button className="icon-button" type="button" onClick={() => updateStatus(invoice, "rejected")} title="Reject invoice" disabled={saving}>
-                                  <XCircle size={16} />
-                                </button>
-                              ) : null}
-                              {invoice.status === "approved" ? (
-                                <button className="icon-button" type="button" onClick={() => openPostForm(invoice)} title="Post to expenses" disabled={saving}>
-                                  <Banknote size={16} />
-                                </button>
-                              ) : null}
+                              <details className="table-row-more">
+                                <summary aria-label={`More actions for ${invoice.invoice_number}`} title="More invoice actions">
+                                  <MoreHorizontal size={18} />
+                                </summary>
+                                <div className="table-row-more-menu">
+                                  <button
+                                    aria-label="Supporting documents"
+                                    type="button"
+                                    onClick={() => {
+                                      setActivePostInvoiceId(null);
+                                      setActiveDocumentInvoiceId((current) => (current === invoice.id ? null : invoice.id));
+                                    }}
+                                    disabled={saving}
+                                  >
+                                    <FileText size={16} />
+                                    Supporting documents
+                                  </button>
+                                  {! ["posted_to_expense", "paid"].includes(invoice.status) ? (
+                                    <button aria-label="Edit invoice" type="button" onClick={() => editInvoice(invoice)} disabled={saving || hasSupplierFocus}>
+                                      <Pencil size={16} />
+                                      Edit invoice
+                                    </button>
+                                  ) : null}
+                                  {["draft", "submitted"].includes(invoice.status) ? (
+                                    <button aria-label="Reject invoice" type="button" onClick={() => requestInvoiceReview(invoice, "rejected")} disabled={saving}>
+                                      <XCircle size={16} />
+                                      Reject invoice
+                                    </button>
+                                  ) : null}
+                                  {invoice.status === "draft" ? (
+                                    <button aria-label="Approve without submitting" type="button" onClick={() => requestInvoiceReview(invoice, "approved")} disabled={saving}>
+                                      <CheckCircle2 size={16} />
+                                      Approve without submitting
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </details>
                             </div>
                           </td>
                         </tr>
-                        {activeDocumentInvoiceId === invoice.id ? (
+                        {canManage && activeDocumentInvoiceId === invoice.id ? (
                           <tr>
                             <td colSpan="7">
                               <SupportingDocumentsPanel entityType="contractor_invoice" entityId={invoice.id} />
                             </td>
                           </tr>
                         ) : null}
-                        {activePostInvoiceId === invoice.id ? (
+                        {canManage && activePostInvoiceId === invoice.id ? (
                           <tr>
                             <td colSpan="7">
                               <form className="maintenance-expense-form" onSubmit={(event) => postToExpense(event, invoice)}>
@@ -680,7 +784,7 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
                     );
                   })
                 ) : (
-                  <EmptyTableRow colSpan={7} title="No contractor invoices found" detail="Capture invoices from contractors or suppliers." />
+                  <EmptyTableRow colSpan={canManage ? 7 : 6} title="No contractor invoices found" detail="Capture invoices from contractors or suppliers." />
                 )}
               </tbody>
             </table>
@@ -688,7 +792,7 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
         </div>
 
         {!hasSupplierFocus ? (
-          <div className="panel wide-panel">
+          <div className="panel wide-panel register-panel contractor-register-panel">
             <div className="panel-heading">
               <h3>Contractor Register</h3>
             </div>
@@ -698,17 +802,17 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
                   <tr>
                     <th>Name</th>
                     <th>Status</th>
-                    <th>Actions</th>
+                    {canManage ? <th>Actions</th> : null}
                   </tr>
                 </thead>
                 <tbody>
                   {contractors.length ? (
                     contractors.map((contractor) => (
                       <tr key={contractor.id}>
-                        <td>
+                        {canManage ? <td>
                           <strong>{contractor.name}</strong>
                           <small>{contractor.open_invoice_count || 0} open invoices</small>
-                        </td>
+                        </td> : null}
                         <td>
                           <StatusBadge status={contractor.status} />
                         </td>
@@ -725,7 +829,7 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
                       </tr>
                     ))
                   ) : (
-                    <EmptyTableRow colSpan={3} title="No contractors found" detail="Save contractors before capturing supplier invoices." />
+                    <EmptyTableRow colSpan={canManage ? 3 : 2} title="No contractors found" detail="Save contractors before capturing supplier invoices." />
                   )}
                 </tbody>
               </table>
@@ -733,6 +837,47 @@ function ContractorInvoicesPage({ navigationIntent, onClearNavigationIntent }) {
           </div>
         ) : null}
         </div>
+      <ReviewDialog
+        open={Boolean(invoiceReview)}
+        eyebrow="Supplier invoice review"
+        title={
+          invoiceReview?.kind === "expense"
+            ? "Post approved invoice to expenses"
+            : invoiceReview?.status === "approved"
+              ? "Approve supplier invoice"
+              : "Reject supplier invoice"
+        }
+        description={
+          invoiceReview?.kind === "expense"
+            ? "This creates one linked operating expense and marks the approved supplier invoice as posted. It does not record a supplier payment."
+            : invoiceReview?.status === "approved"
+              ? "Approval makes this supplier invoice eligible for a separate, reviewed expense posting. It does not create an expense or payment yet."
+              : "Rejection leaves this supplier invoice unposted and prevents it from being posted to expenses until it is approved."
+        }
+        confirmLabel={invoiceReview?.kind === "expense" ? "Post expense" : invoiceReview?.status === "approved" ? "Approve invoice" : "Reject invoice"}
+        cancelLabel={invoiceReview?.kind === "expense" ? "Keep approved" : "Keep unchanged"}
+        reasonLabel={invoiceReview?.kind === "expense" ? "Posting approval note" : invoiceReview?.status === "approved" ? "Approval note" : "Rejection note"}
+        reasonPlaceholder="State the evidence or decision basis for the audit trail"
+        busy={invoiceReviewBusy}
+        busyLabel={invoiceReview?.kind === "expense" ? "Posting expense..." : "Saving review..."}
+        danger={invoiceReview?.status === "rejected"}
+        onCancel={closeInvoiceReview}
+        onConfirm={confirmInvoiceReview}
+      >
+        {invoiceReview ? (
+          <div className="reading-context">
+            <div><span>Supplier</span><strong>{invoiceReview.invoice.contractor_name}</strong></div>
+            <div><span>Invoice</span><strong>{invoiceReview.invoice.invoice_number}</strong></div>
+            <div><span>Amount</span><strong>{money(invoiceReview.invoice.total_amount)}</strong></div>
+            <div><span>Due date</span><strong>{date(invoiceReview.invoice.due_date)}</strong></div>
+            {invoiceReview.kind === "expense" ? <>
+              <div><span>Expense date</span><strong>{date(invoiceReview.draft.expense_date)}</strong></div>
+              <div><span>Channel</span><strong>{label(invoiceReview.draft.payment_channel)}</strong></div>
+              <div><span>Receipt number</span><strong>{invoiceReview.draft.receipt_number || "Not recorded"}</strong></div>
+            </> : null}
+          </div>
+        ) : null}
+      </ReviewDialog>
       </section>
     </section>
   );

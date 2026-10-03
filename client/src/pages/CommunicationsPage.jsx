@@ -1,12 +1,20 @@
 import { Eye, Mail, MessageSquare, Send, Smartphone } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyTableRow } from "../components/EmptyState";
+import CampaignRecoveryWorkspace from "../components/CampaignRecoveryWorkspace";
 import FocusNotice from "../components/FocusNotice";
+import ReviewDialog from "../components/ReviewDialog";
 import StatusBadge from "../components/StatusBadge";
 import StatCard from "../components/StatCard";
 import TableControls, { useTableControls } from "../components/TableControls";
 import { useToastMessage } from "../components/ToastProvider";
+import WorkspaceState from "../components/WorkspaceState";
+import PaymentPlanFollowUpPanel from "../components/PaymentPlanFollowUpPanel";
+import StandingOrderFollowUpPanel from "../components/StandingOrderFollowUpPanel";
+import DisconnectionWarningPanel from "../components/DisconnectionWarningPanel";
+import DeliveryExceptionPanel from "../components/DeliveryExceptionPanel";
 import { api } from "../services/api";
+import useScopedDraft from "../utils/useScopedDraft";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
 const date = (value) => (value ? String(value).slice(0, 10) : "-");
@@ -17,6 +25,13 @@ const mediumOptions = [
   { value: "sms", label: "SMS", icon: MessageSquare },
   { value: "whatsapp", label: "WhatsApp", icon: Smartphone }
 ];
+
+const createCommunicationFilters = () => ({
+  medium: "email",
+  readiness: "all",
+  zoneFilter: "",
+  recipientOutcome: "all"
+});
 
 const contactLabel = (row, medium) => {
   const contact = row.contacts?.[medium];
@@ -46,11 +61,102 @@ const parseTemplateVariables = (value) =>
 
 const formatTemplateVariables = (value) => (Array.isArray(value) ? value.join(", ") : String(value || ""));
 
-function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
+const campaignRecipientTarget = (recipient) => {
+  if (campaignDeliveryCause(recipient) === "Delivery opted out" && recipient.customer_id) {
+    return { label: "Open account", target: { page: "customers", focus: "customer_360", customer_id: recipient.customer_id, label: "Customer delivery preference" } };
+  }
+  if (recipient.bill_id) {
+    return { label: "Open bill", target: { page: "bills", focus: "bill_detail", bill_id: recipient.bill_id, label: "Campaign bill" } };
+  }
+  if (recipient.customer_id) {
+    return { label: "Open account", target: { page: "customers", focus: "customer_360", customer_id: recipient.customer_id, label: "Customer 360" } };
+  }
+  return null;
+};
+
+const campaignDeliveryCause = (recipient) => {
+  const detail = String(recipient.delivery_error_message || recipient.error_message || "").toLowerCase();
+  if (/not configured|provider is not configured|missing provider/.test(detail)) return "Provider setup";
+  if (/delivery is disabled|delivery disabled|opted out/.test(detail)) return "Delivery opted out";
+  if (/missing|does not have|invalid (email|phone|recipient)|recipient.*invalid/.test(detail)) return "Recipient details";
+  if (recipient.status === "failed") return "Provider failure";
+  return "Review required";
+};
+
+const campaignRetryPolicy = (recipient) => {
+  const cause = campaignDeliveryCause(recipient);
+  if (cause === "Delivery opted out") return "No retry until preference changes";
+  if (cause === "Recipient details") return "Correct contact, then resend manually";
+  if (cause === "Provider setup") return "Restore provider, then resend manually";
+  if (cause === "Provider failure") return "Review provider result before one manual retry";
+  return "Review before manual resend";
+};
+
+const overdueFollowUpTemplate = [
+  "{{business_name}}",
+  "Dear {{customer_name}} ({{acc_number}}),",
+  "Your overdue balance is {{overdue_balance}} and has been outstanding since {{oldest_due_date}} ({{days_overdue}} days).",
+  "Your total account balance is {{total_outstanding}}.",
+  "{{payment_information}}",
+  "For enquiries contact customer care on {{business_phone}}."
+].join("\n");
+
+const collectionMessageLibrary = [
+  {
+    id: "bill_due",
+    name: "Bill due reminder",
+    description: "A concise first reminder for the current bill.",
+    body: [
+      "{{business_name}}",
+      "Dear {{customer_name}} ({{acc_number}}),",
+      "Your {{invoice_period}} water bill of {{amount}} is due on {{due_date}}.",
+      "Your current account balance is {{total_outstanding}}.",
+      "{{payment_information}}",
+      "For assistance contact {{business_phone}}."
+    ].join("\n")
+  },
+  {
+    id: "first_overdue",
+    name: "First overdue reminder",
+    description: "For a newly overdue balance before escalation.",
+    body: overdueFollowUpTemplate
+  },
+  {
+    id: "seven_day_follow_up",
+    name: "7-day overdue follow-up",
+    description: "A firmer follow-up after the first overdue reminder.",
+    body: [
+      "{{business_name}}",
+      "Dear {{customer_name}} ({{acc_number}}),",
+      "Your overdue balance is {{overdue_balance}} and has been outstanding for {{days_overdue}} days since {{oldest_due_date}}.",
+      "Please make payment or contact us to discuss your account.",
+      "{{payment_information}}",
+      "Customer care: {{business_phone}}."
+    ].join("\n")
+  },
+  {
+    id: "thirty_day_notice",
+    name: "30+ day account action notice",
+    description: "A manual, policy-reviewed notice for long-overdue accounts.",
+    body: [
+      "{{business_name}}",
+      "Dear {{customer_name}} ({{acc_number}}),",
+      "Your account has an overdue balance of {{overdue_balance}} outstanding for {{days_overdue}} days.",
+      "Please pay or contact our customer care team promptly to resolve the account. Further service action may be considered in line with the applicable service terms.",
+      "{{payment_information}}",
+      "Customer care: {{business_phone}}."
+    ].join("\n")
+  }
+];
+
+function CommunicationsPage({ user, navigationIntent, onClearNavigationIntent, onNavigate }) {
   const [payload, setPayload] = useState({ default_template: "", rows: [] });
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [initialError, setInitialError] = useState("");
   const [template, setTemplate] = useState("");
   const [templates, setTemplates] = useState([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [libraryTemplateId, setLibraryTemplateId] = useState("");
   const [templateName, setTemplateName] = useState("");
   const [templateDefault, setTemplateDefault] = useState(false);
   const [whatsAppTemplateName, setWhatsAppTemplateName] = useState("");
@@ -58,15 +164,32 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
   const [whatsAppTemplateVariables, setWhatsAppTemplateVariables] = useState("");
   const [, setTemplateMessage] = useToastMessage();
   const [campaignName, setCampaignName] = useState("");
-  const [medium, setMedium] = useState("email");
-  const [readiness, setReadiness] = useState("all");
+  const [communicationFilters, setCommunicationFilters] = useScopedDraft(
+    user,
+    "communications-filters",
+    createCommunicationFilters,
+    { storage: "local" }
+  );
+  const medium = communicationFilters.medium || "email";
+  const readiness = communicationFilters.readiness || "all";
+  const zoneFilter = communicationFilters.zoneFilter || "";
+  const recipientOutcome = communicationFilters.recipientOutcome || "all";
+  const setCommunicationFilter = (field, value) =>
+    setCommunicationFilters((current) => ({ ...current, [field]: value }));
+  const setMedium = (value) => setCommunicationFilter("medium", value);
+  const setReadiness = (value) => setCommunicationFilter("readiness", value);
+  const setZoneFilter = (value) => setCommunicationFilter("zoneFilter", value);
+  const setRecipientOutcome = (value) => setCommunicationFilter("recipientOutcome", value);
   const [, setMessage] = useToastMessage();
   const [sendingId, setSendingId] = useState(null);
+  const [singleReview, setSingleReview] = useState(null);
   const [bulkSending, setBulkSending] = useState(false);
+  const [bulkReview, setBulkReview] = useState(null);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [campaigns, setCampaigns] = useState([]);
   const [selectedCampaign, setSelectedCampaign] = useState(null);
   const [, setCampaignMessage] = useToastMessage();
+  const tableStorageScope = `${user?.id || "anonymous"}:${user?.access_profile_id || "legacy"}`;
 
   const load = ({ preserveMessage = false } = {}) =>
     api.communications
@@ -78,8 +201,23 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
       })
       .catch((err) => setMessage(err.message));
 
+  const loadInitialWorkspace = async () => {
+    setInitialLoading(true);
+    setInitialError("");
+    try {
+      const data = await api.communications.invoicePreview();
+      setPayload(data);
+      setTemplate((current) => current || data.default_template || "");
+      setMessage("");
+    } catch (err) {
+      setInitialError(err.message || "Customer delivery readiness could not be loaded.");
+    } finally {
+      setInitialLoading(false);
+    }
+  };
+
   useEffect(() => {
-    load();
+    loadInitialWorkspace();
     loadCampaigns();
   }, []);
 
@@ -95,6 +233,14 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
         setTemplateMessage("");
         setSelectedTemplateId((current) => {
           if (current && rows.some((row) => String(row.id) === String(current))) return current;
+          if (focusKey === "overdue_follow_up") {
+            setTemplateName("");
+            setTemplateDefault(false);
+            setWhatsAppTemplateName("");
+            setWhatsAppTemplateLanguage("en_US");
+            setWhatsAppTemplateVariables("");
+            return "";
+          }
           const defaultTemplate = rows.find((row) => row.is_default);
           if (defaultTemplate) {
             setTemplate(defaultTemplate.body);
@@ -134,15 +280,22 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
 
   const rows = useMemo(() => {
     return renderedRows.filter((row) => {
+      if (zoneFilter && row.zone_name !== zoneFilter) return false;
       const contact = row.contacts?.[medium];
       if (readiness === "ready") return row.bill_id && contact?.ready;
       if (readiness === "missing_contact") return !contact?.value;
       if (readiness === "disabled") return contact?.value && !contact?.enabled;
       if (readiness === "no_invoice") return !row.bill_id;
       if (readiness === "outstanding") return Number(row.total_outstanding || 0) > 0;
+      if (readiness === "overdue") return Number(row.overdue_balance || 0) > 0;
       return true;
     });
-  }, [medium, readiness, renderedRows]);
+  }, [medium, readiness, renderedRows, zoneFilter]);
+
+  const zones = useMemo(
+    () => [...new Set(renderedRows.map((row) => row.zone_name).filter(Boolean))].sort((left, right) => left.localeCompare(right)),
+    [renderedRows]
+  );
 
   const stats = useMemo(() => {
     const source = renderedRows;
@@ -150,11 +303,14 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
       customers: source.length,
       ready: source.filter((row) => row.bill_id && row.contacts?.[medium]?.ready).length,
       missing: source.filter((row) => !row.contacts?.[medium]?.value).length,
-      outstanding: source.reduce((sum, row) => sum + Number(row.total_outstanding || 0), 0)
+      outstanding: source.reduce((sum, row) => sum + Number(row.total_outstanding || 0), 0),
+      overdueCustomers: source.filter((row) => Number(row.overdue_balance || 0) > 0).length,
+      overdueBalance: source.reduce((sum, row) => sum + Number(row.overdue_balance || 0), 0)
     };
   }, [medium, renderedRows]);
 
   const table = useTableControls(rows, {
+    storageKey: `communications-invoice-preview:${tableStorageScope}`,
     searchFields: [
       "message",
       "customer_name",
@@ -167,6 +323,10 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
     ]
   });
   const focusKey = navigationIntent?.page === "communications" ? navigationIntent.focus : "";
+  const focusedCustomerId = focusKey === "overdue_follow_up" ? Number(navigationIntent?.customer_id) : null;
+  const focusedCustomer = focusedCustomerId
+    ? renderedRows.find((row) => Number(row.customer_id) === focusedCustomerId)
+    : null;
   const hasCommunicationFocus = ["document_delivery", "campaign_attention"].includes(focusKey);
   const focusedCampaigns = ["document_delivery", "campaign_attention"].includes(focusKey)
     ? campaigns.filter((campaign) =>
@@ -177,16 +337,42 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
     : campaigns;
   const campaignTable = useTableControls(focusedCampaigns, {
     pageSize: 10,
+    storageKey: `communications-campaigns:${tableStorageScope}`,
     searchFields: ["campaign_name", "medium", "status", "created_by_name", "alert_type"]
   });
-  const recipientTable = useTableControls(selectedCampaign?.recipients || [], {
+  const campaignRecipients = useMemo(() => {
+    const recipients = selectedCampaign?.recipients || [];
+    if (recipientOutcome === "all") return recipients;
+    if (recipientOutcome === "attention") return recipients.filter((recipient) => ["failed", "skipped"].includes(recipient.status));
+    if (recipientOutcome === "sent") return recipients.filter((recipient) => recipient.status === "sent");
+    return recipients.filter((recipient) => recipient.status === recipientOutcome);
+  }, [recipientOutcome, selectedCampaign?.recipients]);
+  const campaignRecipientCounts = useMemo(() => {
+    const recipients = selectedCampaign?.recipients || [];
+    const countFor = (status) => recipients.filter((recipient) => recipient.status === status).length;
+    return {
+      all: recipients.length,
+      attention: recipients.filter((recipient) => ["failed", "skipped"].includes(recipient.status)).length,
+      sent: countFor("sent"),
+      skipped: countFor("skipped"),
+      failed: countFor("failed")
+    };
+  }, [selectedCampaign?.recipients]);
+  const recipientTable = useTableControls(campaignRecipients, {
     pageSize: 10,
+    storageKey: `communications-campaign-recipients:${tableStorageScope}`,
     searchFields: ["customer_name", "acc_number", "recipient", "status", "error_message", "bill_number"]
   });
 
   const MediumIcon = mediumOptions.find((option) => option.value === medium)?.icon || Mail;
   const activeTemplate = template || payload.default_template || "";
-  const resolvedCampaignName = campaignName.trim() || `${summarizeTemplate(activeTemplate)} - ${medium.toUpperCase()}`;
+  const resolvedCampaignName = campaignName.trim() || `${summarizeTemplate(activeTemplate)} - ${medium.toUpperCase()}${zoneFilter ? ` - ${zoneFilter}` : ""}`;
+  const campaignAttentionCount = campaigns.filter(
+    (campaign) =>
+      ["running", "completed_with_errors", "failed"].includes(campaign.status) ||
+      Number(campaign.failed_count || 0) > 0 ||
+      Number(campaign.skipped_count || 0) > 0
+  ).length;
   const activeWhatsAppTemplate =
     medium === "whatsapp" && whatsAppTemplateName.trim()
       ? {
@@ -209,6 +395,22 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
       return next.size === current.size ? current : next;
     });
   }, [renderedRows]);
+
+  useEffect(() => {
+    if (focusKey !== "overdue_follow_up") return;
+    setReadiness("overdue");
+    setTemplate(overdueFollowUpTemplate);
+  }, [focusKey]);
+
+  useEffect(() => {
+    if (!focusedCustomer) return;
+    const focusedMedium = ["email", "sms", "whatsapp"].find((option) => focusedCustomer.contacts?.[option]?.ready) || "email";
+    setMedium(focusedMedium);
+    table.setQuery(focusedCustomer.acc_number || focusedCustomer.customer_name || "");
+    setSelectedIds((current) =>
+      current.size === 1 && current.has(focusedCustomer.customer_id) ? current : new Set([focusedCustomer.customer_id])
+    );
+  }, [focusedCustomer?.customer_id]);
 
   const toggleSelected = (customerId) => {
     setSelectedIds((current) => {
@@ -236,8 +438,14 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
 
   const clearSelected = () => setSelectedIds(new Set());
 
+  const changeZoneFilter = (value) => {
+    setZoneFilter(value);
+    clearSelected();
+  };
+
   const selectTemplate = (id) => {
     setSelectedTemplateId(id);
+    setLibraryTemplateId("");
     const selected = templates.find((row) => String(row.id) === String(id));
     if (!selected) {
       setTemplateName("");
@@ -253,6 +461,19 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
     setWhatsAppTemplateName(selected.whatsapp_template_name || "");
     setWhatsAppTemplateLanguage(selected.whatsapp_template_language || "en_US");
     setWhatsAppTemplateVariables(formatTemplateVariables(selected.whatsapp_template_variables));
+  };
+
+  const selectLibraryTemplate = (id) => {
+    setLibraryTemplateId(id);
+    const selected = collectionMessageLibrary.find((item) => item.id === id);
+    if (!selected) return;
+    setSelectedTemplateId("");
+    setTemplateName(selected.name);
+    setTemplateDefault(false);
+    setCampaignName("");
+    setWhatsAppTemplateName("");
+    setWhatsAppTemplateVariables("");
+    setTemplate(selected.body);
   };
 
   const saveTemplate = async ({ update = false } = {}) => {
@@ -281,20 +502,42 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
     }
   };
 
-  const sendAlert = async (row) => {
+  const requestSingleReview = (row) => {
     setMessage("");
     if (medium === "whatsapp" && !whatsAppProviderReady) {
       setMessage("WhatsApp provider is not configured yet.");
       return;
     }
-    setSendingId(row.customer_id);
+    const contact = row.contacts?.[medium];
+    if (!row.bill_id || !contact?.ready) {
+      setMessage("This customer is not ready for the selected delivery channel.");
+      return;
+    }
+    setSingleReview({
+      customer_id: row.customer_id,
+      customer_name: row.customer_name,
+      acc_number: row.acc_number,
+      bill_number: row.bill_number,
+      recipient: contact.value,
+      medium,
+      template: activeTemplate,
+      whatsapp_template: activeWhatsAppTemplate,
+      message: row.message
+    });
+  };
+
+  const sendSingleAlert = async () => {
+    if (!singleReview) return;
+    setMessage("");
+    setSendingId(singleReview.customer_id);
     try {
-      const result = await api.communications.sendInvoiceAlert(row.customer_id, {
-        medium,
-        template: activeTemplate,
-        whatsapp_template: activeWhatsAppTemplate
+      const result = await api.communications.sendInvoiceAlert(singleReview.customer_id, {
+        medium: singleReview.medium,
+        template: singleReview.template,
+        whatsapp_template: singleReview.whatsapp_template
       });
       setMessage(result.message || "Invoice alert send request completed.");
+      setSingleReview(null);
       await load({ preserveMessage: true });
     } catch (err) {
       setMessage(err.message);
@@ -303,7 +546,7 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
     }
   };
 
-  const sendBulkAlerts = async () => {
+  const requestBulkReview = () => {
     setMessage("");
     if (medium === "whatsapp" && !whatsAppProviderReady) {
       setMessage("WhatsApp provider is not configured yet.");
@@ -313,14 +556,27 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
       setMessage("Select at least one ready customer to send.");
       return;
     }
+    setBulkReview({
+      medium,
+      template: activeTemplate,
+      whatsapp_template: activeWhatsAppTemplate,
+      campaign_name: resolvedCampaignName,
+      zone_name: zoneFilter || null,
+      customer_ids: selectedReadyRows.map((row) => row.customer_id)
+    });
+  };
+
+  const sendBulkAlerts = async () => {
+    if (!bulkReview) return;
+    setMessage("");
     setBulkSending(true);
     try {
       const result = await api.communications.bulkSendInvoiceAlerts({
-        medium,
-        template: activeTemplate,
-        whatsapp_template: activeWhatsAppTemplate,
-        campaign_name: resolvedCampaignName,
-        customer_ids: selectedReadyRows.map((row) => row.customer_id)
+        medium: bulkReview.medium,
+        template: bulkReview.template,
+        whatsapp_template: bulkReview.whatsapp_template,
+        campaign_name: bulkReview.campaign_name,
+        customer_ids: bulkReview.customer_ids
       });
       setMessage(result.message || "Bulk invoice alert send request completed.");
       clearSelected();
@@ -330,33 +586,82 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
       setMessage(err.message);
     } finally {
       setBulkSending(false);
+      setBulkReview(null);
     }
   };
 
   const viewCampaign = async (id) => {
     setCampaignMessage("");
     try {
-      setSelectedCampaign(await api.communications.campaign(id));
+      const campaign = await api.communications.campaign(id);
+      setSelectedCampaign(campaign);
+      setRecipientOutcome(Number(campaign.campaign?.failed_count || 0) || Number(campaign.campaign?.skipped_count || 0) ? "attention" : "all");
     } catch (err) {
       setCampaignMessage(err.message);
     }
   };
 
+  if (focusKey === "payment_plan_follow_up") {
+    return <PaymentPlanFollowUpPanel customerId={navigationIntent?.customer_id} onClearNavigationIntent={onClearNavigationIntent} />;
+  }
+  if (focusKey === "standing_order_follow_up") {
+    return <StandingOrderFollowUpPanel customerId={navigationIntent?.customer_id} onClearNavigationIntent={onClearNavigationIntent} />;
+  }
+  if (focusKey === "disconnection_warning") {
+    return <DisconnectionWarningPanel customerId={navigationIntent?.customer_id} onClearNavigationIntent={onClearNavigationIntent} />;
+  }
+  if (focusKey === "document_delivery") {
+    return <DeliveryExceptionPanel user={user} onClearNavigationIntent={onClearNavigationIntent} onNavigate={onNavigate} />;
+  }
+
+  if (initialLoading) {
+    return (
+      <WorkspaceState
+        detail="Retrieving delivery readiness and invoice-alert recipients."
+        title="Preparing customer communications"
+      />
+    );
+  }
+
+  if (initialError) {
+    return (
+      <WorkspaceState
+        detail={initialError}
+        onRetry={loadInitialWorkspace}
+        state="error"
+        title="Customer communications could not load"
+      />
+    );
+  }
+
   return (
-    <section className="page-stack communications-page">
-      <header className="page-header">
+    <section className="page-stack communications-page communications-workbench">
+      <header className="page-header communications-workbench-header">
         <div>
           <p className="eyebrow">Customer alerts</p>
-          <h2>Communications</h2>
+          <h2>Customer communications</h2>
+          <p>Resolve delivery gaps, focus overdue accounts, and send only messages that are ready to reach customers.</p>
         </div>
-        <button type="button" onClick={load}>
-          Refresh
-        </button>
+        <div className="page-header-actions">
+          <button type="button" onClick={() => onNavigate?.({ page: "communications", focus: "disconnection_warning" })}>
+            Review formal warnings
+          </button>
+          <button type="button" onClick={load}>
+            Refresh
+          </button>
+        </div>
       </header>
 
-      {["document_delivery", "campaign_attention"].includes(focusKey) ? (
+      {focusKey === "overdue_follow_up" ? (
         <FocusNotice
-          title={focusKey === "document_delivery" ? "Delivery exceptions" : "Campaigns needing review"}
+          title="Overdue follow-up"
+          detail={focusedCustomer ? `Prepared ${focusedCustomer.customer_name} (${focusedCustomer.acc_number}) for an overdue reminder. Sending remains an explicit action in this workspace.` : "Showing accounts with overdue balances and a draft reminder. Sending remains an explicit action in this workspace."}
+          onClear={onClearNavigationIntent}
+        />
+      ) : null}
+      {focusKey === "campaign_attention" ? (
+        <FocusNotice
+          title="Campaigns needing review"
           detail="Showing campaigns that are running, failed, or have skipped/failed recipients."
           onClear={onClearNavigationIntent}
         />
@@ -369,16 +674,32 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
       ) : null}
 
       {!hasCommunicationFocus ? (
-      <div className="stat-grid">
-        <StatCard label="Customers" value={stats.customers} />
-        <StatCard label={`${medium.toUpperCase()} ready`} value={stats.ready} />
-        <StatCard label="Missing contact" value={stats.missing} />
-        <StatCard label="Outstanding" value={money(stats.outstanding)} />
-      </div>
+      <section className="communications-metrics" aria-label="Communication readiness">
+        <div>
+          <span>Ready to deliver</span>
+          <strong>{stats.ready}</strong>
+          <small>{medium.toUpperCase()} contacts with payable invoices</small>
+        </div>
+        <div className={stats.missing ? "needs-attention" : ""}>
+          <span>Contact gaps</span>
+          <strong>{stats.missing}</strong>
+          <small>Customers need a usable delivery contact</small>
+        </div>
+        <div className={stats.overdueCustomers ? "needs-attention" : ""}>
+          <span>Overdue follow-up</span>
+          <strong>{stats.overdueCustomers}</strong>
+          <small>{money(stats.overdueBalance)} at risk</small>
+        </div>
+        <div className={campaignAttentionCount ? "needs-attention" : ""}>
+          <span>Campaign exceptions</span>
+          <strong>{campaignAttentionCount}</strong>
+          <small>{campaignAttentionCount ? "Review failed or skipped deliveries" : "No active delivery exceptions"}</small>
+        </div>
+      </section>
       ) : null}
 
       {!hasCommunicationFocus ? (
-      <div className="panel">
+      <div className="panel communications-setup-panel">
         <div className="panel-heading">
           <h3>Invoice Alert Setup</h3>
           <MediumIcon size={18} />
@@ -403,6 +724,7 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
               <option value="disabled">Delivery disabled</option>
               <option value="no_invoice">No payable invoice</option>
               <option value="outstanding">Has outstanding balance</option>
+              <option value="overdue">Overdue follow-up</option>
             </select>
           </label>
           <label>
@@ -420,6 +742,18 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
           <label>
             Template name
             <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} maxLength={160} />
+          </label>
+          <label>
+            Collection message library
+            <select value={libraryTemplateId} onChange={(event) => selectLibraryTemplate(event.target.value)}>
+              <option value="">Choose a reviewed message</option>
+              {collectionMessageLibrary.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            {libraryTemplateId ? <small>{collectionMessageLibrary.find((item) => item.id === libraryTemplateId)?.description}</small> : null}
           </label>
           <label>
             Campaign name
@@ -467,7 +801,7 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
           ) : null}
           <label className="template-preview-field">
             Invoice alert template
-            <textarea value={activeTemplate} onChange={(event) => setTemplate(event.target.value)} />
+            <textarea value={activeTemplate} onChange={(event) => { setLibraryTemplateId(""); setTemplate(event.target.value); }} />
           </label>
           <div className="template-actions">
             <label className="checkbox-row">
@@ -480,8 +814,11 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
             <button type="button" onClick={() => saveTemplate({ update: true })} disabled={!selectedTemplateId}>
               Update selected
             </button>
-            <button type="button" onClick={() => setTemplate(payload.default_template || "")}>
+            <button type="button" onClick={() => { setLibraryTemplateId(""); setTemplate(payload.default_template || ""); }}>
               Reset template
+            </button>
+            <button type="button" onClick={() => selectLibraryTemplate("first_overdue")}>
+              Use overdue wording
             </button>
           </div>
         </div>
@@ -489,33 +826,40 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
       ) : null}
 
       {!hasCommunicationFocus ? (
-      <div className="panel">
+      <div className="panel communications-delivery-panel">
         <div className="panel-heading">
           <h3>Invoice Alert Preview</h3>
           <span className="muted">{table.total} customers</span>
         </div>
         <div className="bulk-action-bar">
+          <label className="communications-zone-filter">
+            <span>Service zone</span>
+            <select value={zoneFilter} onChange={(event) => changeZoneFilter(event.target.value)} disabled={bulkSending || Boolean(bulkReview)}>
+              <option value="">All service zones</option>
+              {zones.map((zone) => <option key={zone} value={zone}>{zone}</option>)}
+            </select>
+          </label>
           <div>
             <strong>{selectedReadyRows.length}</strong>
             <span> ready selected</span>
             <small>{selectedIds.size} total selected</small>
           </div>
-          <button type="button" onClick={selectReadyVisible} disabled={!visibleReadyRows.length || bulkSending}>
+          <button type="button" onClick={selectReadyVisible} disabled={!visibleReadyRows.length || bulkSending || Boolean(bulkReview)}>
             Select visible ready
           </button>
-          <button type="button" onClick={selectAllReady} disabled={!readyRows.length || bulkSending}>
-            Select all ready
+          <button type="button" onClick={selectAllReady} disabled={!readyRows.length || bulkSending || Boolean(bulkReview)}>
+            {zoneFilter ? "Select zone ready" : "Select all ready"}
           </button>
-          <button type="button" onClick={clearSelected} disabled={!selectedIds.size || bulkSending}>
+          <button type="button" onClick={clearSelected} disabled={!selectedIds.size || bulkSending || Boolean(bulkReview)}>
             Clear
           </button>
           <button
             type="button"
-            onClick={sendBulkAlerts}
-            disabled={!selectedReadyRows.length || bulkSending || (medium === "whatsapp" && !whatsAppProviderReady)}
+            onClick={requestBulkReview}
+            disabled={!selectedReadyRows.length || bulkSending || Boolean(bulkReview) || (medium === "whatsapp" && !whatsAppProviderReady)}
           >
             <Send size={14} />
-            {bulkSending ? "Sending selected" : "Send selected"}
+            {bulkSending ? "Sending selected" : "Review selected"}
           </button>
         </div>
         <TableControls table={table} label="customers" placeholder="Search messages, contacts, or accounts" />
@@ -545,7 +889,7 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
                           type="checkbox"
                           checked={selectedIds.has(row.customer_id)}
                           onChange={() => toggleSelected(row.customer_id)}
-                          disabled={!row.bill_id || !row.contacts?.[medium]?.ready || bulkSending}
+                          disabled={!row.bill_id || !row.contacts?.[medium]?.ready || bulkSending || Boolean(bulkReview)}
                         />
                         <span>Select</span>
                       </label>
@@ -590,17 +934,19 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
                     <td>
                       <button
                         type="button"
-                        onClick={() => sendAlert(row)}
+                        onClick={() => requestSingleReview(row)}
                         disabled={
                           !row.bill_id ||
                           !row.contacts?.[medium]?.ready ||
                           sendingId === row.customer_id ||
+                          Boolean(singleReview) ||
+                          Boolean(bulkReview) ||
                           (medium === "whatsapp" && !whatsAppProviderReady)
                         }
-                        title={medium === "whatsapp" && !whatsAppProviderReady ? "WhatsApp provider is not configured" : `Send ${medium} alert`}
+                        title={medium === "whatsapp" && !whatsAppProviderReady ? "WhatsApp provider is not configured" : `Review ${medium} alert`}
                       >
                         <Send size={14} />
-                        {sendingId === row.customer_id ? "Sending" : "Send"}
+                        {sendingId === row.customer_id ? "Sending" : "Review"}
                       </button>
                     </td>
                   </tr>
@@ -614,118 +960,62 @@ function CommunicationsPage({ navigationIntent, onClearNavigationIntent }) {
       </div>
       ) : null}
 
-      <div className="panel">
-        <div className="panel-heading">
-          <h3>Campaign History</h3>
-          <button type="button" onClick={loadCampaigns}>
-            Refresh
-          </button>
+      <CampaignRecoveryWorkspace
+        campaignDeliveryCause={campaignDeliveryCause}
+        campaignRetryPolicy={campaignRetryPolicy}
+        campaignRecipientCounts={campaignRecipientCounts}
+        campaignRecipientTarget={campaignRecipientTarget}
+        campaignTable={campaignTable}
+        dateTime={dateTime}
+        onCloseCampaign={() => setSelectedCampaign(null)}
+        onNavigate={onNavigate}
+        onRecipientOutcomeChange={setRecipientOutcome}
+        onRefresh={loadCampaigns}
+        onViewCampaign={viewCampaign}
+        recipientOutcome={recipientOutcome}
+        recipientTable={recipientTable}
+        selectedCampaign={selectedCampaign}
+      />
+      <ReviewDialog
+        open={Boolean(singleReview)}
+        eyebrow="Review invoice alert"
+        title={`Send invoice alert to ${singleReview?.customer_name || "customer"}`}
+        description="This starts one delivery attempt. Review the recipient and rendered message before sending."
+        confirmLabel="Send alert"
+        busy={Boolean(singleReview && sendingId === singleReview.customer_id)}
+        busyLabel="Sending alert..."
+        reasonLabel={null}
+        onCancel={() => setSingleReview(null)}
+        onConfirm={sendSingleAlert}
+      >
+        <div className="review-summary-grid">
+          <div><span>Account</span><strong>{singleReview?.acc_number || "-"}</strong></div>
+          <div><span>Bill</span><strong>{singleReview?.bill_number || "-"}</strong></div>
+          <div><span>Channel</span><strong>{String(singleReview?.medium || "-").toUpperCase()}</strong></div>
+          <div><span>Recipient</span><strong>{singleReview?.recipient || "-"}</strong></div>
         </div>
-        <TableControls table={campaignTable} label="campaigns" placeholder="Search campaigns" />
-        <div className="table-wrap campaign-history-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Date</th>
-                <th>Medium</th>
-                <th>Status</th>
-                <th>Total</th>
-                <th>Sent</th>
-                <th>Skipped</th>
-                <th>Failed</th>
-                <th>By</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {campaignTable.visibleRows.length ? (
-                campaignTable.visibleRows.map((campaign) => (
-                  <tr key={campaign.id}>
-                    <td>
-                      <strong>{campaign.campaign_name || "-"}</strong>
-                      <small>{campaign.alert_type?.replace(/_/g, " ") || "-"}</small>
-                    </td>
-                    <td>{dateTime(campaign.created_at)}</td>
-                    <td>{campaign.medium}</td>
-                    <td>
-                      <StatusBadge status={campaign.status} />
-                    </td>
-                    <td>{campaign.total_count}</td>
-                    <td>{campaign.sent_count}</td>
-                    <td>{campaign.skipped_count}</td>
-                    <td>{campaign.failed_count}</td>
-                    <td>{campaign.created_by_name || "-"}</td>
-                    <td>
-                      <button type="button" onClick={() => viewCampaign(campaign.id)}>
-                        <Eye size={14} />
-                        View
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <EmptyTableRow colSpan={10} title="No campaign history found" detail="Bulk sends will appear here." />
-              )}
-            </tbody>
-          </table>
+        <div className="review-message-preview"><span>Prepared message</span><pre>{singleReview?.message || "No message rendered."}</pre></div>
+      </ReviewDialog>
+      <ReviewDialog
+        open={Boolean(bulkReview)}
+        eyebrow="Review campaign"
+        title={`Send ${Number(bulkReview?.customer_ids?.length || 0).toLocaleString()} invoice alert${bulkReview?.customer_ids?.length === 1 ? "" : "s"}`}
+        description="This creates a campaign and starts the selected delivery attempts. Review the batch details before sending."
+        confirmLabel="Send campaign"
+        busy={bulkSending}
+        busyLabel="Sending campaign..."
+        reasonLabel={null}
+        onCancel={() => !bulkSending && setBulkReview(null)}
+        onConfirm={sendBulkAlerts}
+      >
+        <div className="review-summary-grid">
+          <div><span>Recipients</span><strong>{Number(bulkReview?.customer_ids?.length || 0).toLocaleString()}</strong></div>
+          <div><span>Scope</span><strong>{bulkReview?.zone_name || "Selected accounts"}</strong></div>
+          <div><span>Channel</span><strong>{String(bulkReview?.medium || "-").toUpperCase()}</strong></div>
+          <div><span>Campaign</span><strong>{bulkReview?.campaign_name || "-"}</strong></div>
+          <div><span>Message</span><strong>{bulkReview?.template ? "Prepared" : "Missing"}</strong></div>
         </div>
-      </div>
-
-      {selectedCampaign ? (
-        <div className="panel">
-          <div className="panel-heading">
-            <h3>Campaign Results</h3>
-            <button type="button" onClick={() => setSelectedCampaign(null)}>
-              Close
-            </button>
-          </div>
-          <div className="campaign-summary-grid">
-            <StatCard label="Medium" value={selectedCampaign.campaign.medium} />
-            <StatCard label="Status" value={selectedCampaign.campaign.status} />
-            <StatCard label="Sent" value={selectedCampaign.campaign.sent_count} />
-            <StatCard label="Failed" value={selectedCampaign.campaign.failed_count} />
-          </div>
-          <TableControls table={recipientTable} label="recipients" placeholder="Search recipients" />
-          <div className="table-wrap campaign-results-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Customer</th>
-                  <th>Recipient</th>
-                  <th>Bill</th>
-                  <th>Status</th>
-                  <th>Provider</th>
-                  <th>Error</th>
-                  <th>Logged</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recipientTable.visibleRows.length ? (
-                  recipientTable.visibleRows.map((recipient) => (
-                    <tr key={recipient.id}>
-                      <td>
-                        <strong>{recipient.customer_name || "-"}</strong>
-                        <small>{recipient.acc_number || "-"}</small>
-                      </td>
-                      <td>{recipient.recipient || "-"}</td>
-                      <td>{recipient.bill_number || recipient.bill_id || "-"}</td>
-                      <td>
-                        <StatusBadge status={recipient.status} />
-                      </td>
-                      <td>{recipient.provider_message_id || "-"}</td>
-                      <td>{recipient.error_message || "-"}</td>
-                      <td>{dateTime(recipient.created_at)}</td>
-                    </tr>
-                  ))
-                ) : (
-                  <EmptyTableRow colSpan={7} title="No recipients found" detail="This campaign has no recorded recipients." />
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : null}
+      </ReviewDialog>
     </section>
   );
 }

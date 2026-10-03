@@ -7,12 +7,23 @@ function CollapsibleSection({
   children,
   className = "",
   defaultOpen = false,
+  disabled = false,
   icon = null,
+  onOpenChange,
+  open: controlledOpen,
   summary = "",
   title,
   ...props
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+  const open = typeof controlledOpen === "boolean" ? controlledOpen : uncontrolledOpen;
+
+  const toggle = () => {
+    if (disabled) return;
+    const next = !open;
+    if (typeof controlledOpen !== "boolean") setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  };
 
   return (
     <Component className={`panel collapsible-panel ${className}`.trim()} {...props}>
@@ -20,7 +31,8 @@ function CollapsibleSection({
         <button
           aria-expanded={open}
           className="collapsible-trigger"
-          onClick={() => setOpen((current) => !current)}
+          disabled={disabled}
+          onClick={toggle}
           type="button"
         >
           <span className="collapsible-title">

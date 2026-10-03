@@ -108,7 +108,8 @@ const createCustomerServiceCharge = asyncHandler(async (req, res) => {
     due_date,
     linked_maintenance_request_id,
     linked_meter_event_id,
-    notes
+    notes,
+    review_notes
   } = req.body || {};
 
   const customerId = Number(customer_id);
@@ -117,6 +118,7 @@ const createCustomerServiceCharge = asyncHandler(async (req, res) => {
   const cleanChargeType = normalizeChargeType(charge_type);
   const chargeDate = charge_date || new Date().toISOString().slice(0, 10);
   const dueDate = due_date || chargeDate;
+  const reviewNotes = String(review_notes || "").trim();
 
   if (!Number.isInteger(customerId) || customerId <= 0) {
     throw new ApiError(400, "Customer is required.");
@@ -126,6 +128,9 @@ const createCustomerServiceCharge = asyncHandler(async (req, res) => {
   }
   if (!Number.isFinite(chargeAmount) || chargeAmount <= 0) {
     throw new ApiError(400, "Service charge amount must be greater than zero.");
+  }
+  if (!reviewNotes) {
+    throw new ApiError(400, "Finance approval notes are required before posting a customer service charge.");
   }
   if (!isDateOnly(chargeDate) || !isDateOnly(dueDate)) {
     throw new ApiError(400, "Charge date and due date must use YYYY-MM-DD format.");
@@ -203,7 +208,7 @@ const createCustomerServiceCharge = asyncHandler(async (req, res) => {
         service_charge: linkedCharge.rows[0],
         bill
       },
-      reason: futureOverrideReason || notes || null
+      reason: [futureOverrideReason, reviewNotes, notes].filter(Boolean).join(" | ") || null
     });
     await recordAuditEvent(client, {
       req,
@@ -211,7 +216,7 @@ const createCustomerServiceCharge = asyncHandler(async (req, res) => {
       entityType: "bill",
       entityId: bill.id,
       afterData: bill,
-      reason: futureOverrideReason || cleanDescription
+      reason: [futureOverrideReason, `Service charge approval: ${reviewNotes}`, cleanDescription].filter(Boolean).join(" | ")
     });
 
     await client.query("COMMIT");
