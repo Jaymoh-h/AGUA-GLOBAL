@@ -75,13 +75,13 @@ export default function PaymentEntryFlow({
   const amount = Number(form?.amount || 0);
   const validAmount = Number.isFinite(amount) && amount > 0;
   const balance = customerBalance(selectedCustomer);
-  const amountToBalance = Math.min(validAmount ? amount : 0, Math.max(balance, 0));
-  const amountToCredit = Math.max((validAmount ? amount : 0) - amountToBalance, 0);
   const crossAccountAllocations = Array.isArray(form?.cross_account_allocations)
     ? form.cross_account_allocations
     : [];
   const splitAmount = crossAccountAllocations.reduce((sum, allocation) => sum + Number(allocation?.amount || 0), 0);
   const primaryAllocation = Math.max((validAmount ? amount : 0) - splitAmount, 0);
+  const amountToBalance = Math.min(primaryAllocation, Math.max(balance, 0));
+  const amountToCredit = Math.max(primaryAllocation - amountToBalance, 0);
   const splitOverAmount = splitAmount - (validAmount ? amount : 0) > 0.005;
   const splitHasIncompleteLine = crossAccountAllocations.some(
     (allocation) => !allocation?.customer_id || !Number.isFinite(Number(allocation?.amount)) || Number(allocation.amount) <= 0
@@ -322,11 +322,11 @@ export default function PaymentEntryFlow({
 
           <div className="payment-flow-allocation" aria-label="Payment allocation preview">
             <div>
-              <span>Applied to balance</span>
+              <span>{crossAccountAllocations.length ? `${selectedCustomer.acc_number} applied to balance` : "Applied to balance"}</span>
               <strong>{formatMoney(amountToBalance)}</strong>
             </div>
             <div>
-              <span>Customer credit</span>
+              <span>{crossAccountAllocations.length ? `${selectedCustomer.acc_number} credit` : "Customer credit"}</span>
               <strong>{formatMoney(amountToCredit)}</strong>
             </div>
           </div>

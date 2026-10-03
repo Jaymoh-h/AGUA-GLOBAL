@@ -1,4 +1,5 @@
 const pool = require("../db/pool");
+const { accountPaymentJoin } = require("../services/paymentAccount.service");
 const asyncHandler = require("../utils/asyncHandler");
 
 const tableCache = new Map();
@@ -527,9 +528,10 @@ const buildActionCenter = async (role, monthlyBudget) => {
               ), 0) AS amount
        FROM due_plans dp
        LEFT JOIN LATERAL (
-         SELECT COALESCE(SUM(p.amount), 0) AS received_amount
+         SELECT COALESCE(SUM(account_payment.amount), 0) AS received_amount
          FROM payments p
-         WHERE p.customer_id = dp.customer_id
+         ${accountPaymentJoin("dp.customer_id")}
+         WHERE account_payment.amount > 0
            AND p.status = 'posted'
            AND p.payment_date >= COALESCE(dp.approved_at::date, dp.created_at::date)
        ) receipts ON TRUE`
@@ -560,9 +562,10 @@ const buildActionCenter = async (role, monthlyBudget) => {
               ), 0) AS amount
        FROM due_orders so
        LEFT JOIN LATERAL (
-         SELECT COALESCE(SUM(p.amount), 0) AS matched_amount
+         SELECT COALESCE(SUM(account_payment.amount), 0) AS matched_amount
          FROM payments p
-         WHERE p.customer_id = so.customer_id
+         ${accountPaymentJoin("so.customer_id")}
+         WHERE account_payment.amount > 0
            AND p.status = 'posted'
            AND p.payment_date >= so.first_due_date
            AND CONCAT_WS(' ', p.external_reference, p.receipt_number, p.received_from, p.notes)

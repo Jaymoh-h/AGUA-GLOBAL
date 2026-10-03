@@ -642,9 +642,10 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent, onNavig
       return;
     }
     const balanceDue = Number(customer.balance_due || 0);
-    const amountToBalance = Math.min(amount, Math.max(balanceDue, 0));
     const crossAccountAllocations = Array.isArray(form.cross_account_allocations) ? form.cross_account_allocations : [];
     const splitTotal = crossAccountAllocations.reduce((sum, allocation) => sum + Number(allocation?.amount || 0), 0);
+    const primaryAmount = Math.max(amount - splitTotal, 0);
+    const amountToBalance = Math.min(primaryAmount, Math.max(balanceDue, 0));
     if (
       crossAccountAllocations.some(
         (allocation) => !allocation?.customer_id || !Number.isFinite(Number(allocation?.amount)) || Number(allocation.amount) <= 0
@@ -674,7 +675,7 @@ function PaymentsPage({ user, navigationIntent, onClearNavigationIntent, onNavig
       amount,
       balanceDue,
       amountToBalance,
-      amountToCredit: Math.max(amount - amountToBalance, 0),
+      amountToCredit: Math.max(primaryAmount - amountToBalance, 0),
       allocationPlan,
       allocationAccounts
     });

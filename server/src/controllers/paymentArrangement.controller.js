@@ -2,6 +2,7 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
+const { accountPaymentJoin } = require("../services/paymentAccount.service");
 
 const frequencies = ["weekly", "monthly"];
 const terminalStatuses = ["completed", "defaulted", "cancelled"];
@@ -55,9 +56,10 @@ const arrangementSelect = `
     END::integer AS installments_due
   ) schedule ON TRUE
   LEFT JOIN LATERAL (
-    SELECT COALESCE(SUM(p.amount), 0) AS received_amount
+    SELECT COALESCE(SUM(account_payment.amount), 0) AS received_amount
     FROM payments p
-    WHERE p.customer_id = pa.customer_id
+    ${accountPaymentJoin("pa.customer_id")}
+    WHERE account_payment.amount > 0
       AND p.status = 'posted'
       AND p.payment_date >= COALESCE(pa.approved_at::date, pa.created_at::date)
   ) collected ON TRUE

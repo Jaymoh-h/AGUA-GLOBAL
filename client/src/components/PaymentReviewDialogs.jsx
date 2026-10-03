@@ -84,8 +84,8 @@ function PaymentReviewDialogs({
           <div><span>Customer</span><strong>{paymentSubmissionReview?.customer?.name || "-"}</strong><small>{paymentSubmissionReview?.customer?.acc_number || "-"}</small></div>
           <div><span>Amount due before</span><strong>{money(paymentSubmissionReview?.balanceDue)}</strong></div>
           <div><span>Receipt amount</span><strong>{money(paymentSubmissionReview?.amount)}</strong></div>
-          <div><span>Applied to due</span><strong>{money(paymentSubmissionReview?.amountToBalance)}</strong></div>
-          <div><span>Customer credit</span><strong>{money(paymentSubmissionReview?.amountToCredit)}</strong></div>
+          <div><span>{paymentSubmissionReview?.allocationAccounts?.length ? `${paymentSubmissionReview.customer.acc_number} applied to due` : "Applied to due"}</span><strong>{money(paymentSubmissionReview?.amountToBalance)}</strong></div>
+          <div><span>{paymentSubmissionReview?.allocationAccounts?.length ? `${paymentSubmissionReview.customer.acc_number} credit` : "Customer credit"}</span><strong>{money(paymentSubmissionReview?.amountToCredit)}</strong></div>
           <div><span>Channel</span><strong>{String(paymentSubmissionReview?.form?.payment_channel || "-").replaceAll("_", " ")}</strong></div>
           <div><span>Payment date</span><strong>{paymentSubmissionReview?.form?.payment_date || "-"}</strong></div>
           <div><span>Reference</span><strong>{paymentSubmissionReview?.form?.external_reference || paymentSubmissionReview?.form?.receipt_number || "Auto-generated"}</strong></div>

@@ -80,7 +80,7 @@ function PaymentHistoryPanel({
             {table.visibleRows.length ? (
               table.visibleRows.map((payment) => (
                 <tr key={payment.id}>
-                  <td><strong>{payment.customer_name}</strong><small>{payment.acc_number}</small></td>
+                  <td><strong>{payment.customer_name}</strong><small>{payment.acc_number}</small>{payment.allocation_mode === "cross_account" ? <small>Split accounts: {payment.allocated_accounts || "-"}</small> : null}</td>
                   <td>{payment.receipt_number || "-"}</td>
                   <td>{money(payment.amount)}</td>
                   <td>{payment.payment_date?.slice(0, 10)}</td>

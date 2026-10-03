@@ -1,6 +1,7 @@
 const pool = require("../db/pool");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
+const { accountPaymentJoin } = require("../services/paymentAccount.service");
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -594,9 +595,10 @@ const getReportsSummary = asyncHandler(async (_req, res) => {
            AND b.bill_pay_status = 'payable'
        ) bill_totals ON TRUE
        LEFT JOIN LATERAL (
-         SELECT COALESCE(SUM(p.amount), 0) AS paid_amount
+         SELECT COALESCE(SUM(account_payment.amount), 0) AS paid_amount
          FROM payments p
-         WHERE p.customer_id = c.id
+         ${accountPaymentJoin("c.id")}
+         WHERE account_payment.amount > 0
            AND p.status = 'posted'
        ) payment_totals ON TRUE
        LEFT JOIN LATERAL (
@@ -623,9 +625,10 @@ const getReportsSummary = asyncHandler(async (_req, res) => {
          LIMIT 1
        ) latest_bill ON TRUE
        LEFT JOIN LATERAL (
-         SELECT p.payment_date, p.amount
+         SELECT p.payment_date, account_payment.amount
          FROM payments p
-         WHERE p.customer_id = c.id
+         ${accountPaymentJoin("c.id")}
+         WHERE account_payment.amount > 0
            AND p.status = 'posted'
          ORDER BY p.payment_date DESC, p.created_at DESC, p.id DESC
          LIMIT 1
@@ -999,7 +1002,7 @@ const getAccountantReports = asyncHandler(async (req, res) => {
      FROM payment_allocations pa
      JOIN payments p ON p.id = pa.payment_id
      JOIN bills b ON b.id = pa.bill_id
-     JOIN customers c ON c.id = p.customer_id
+     JOIN customers c ON c.id = b.customer_id
      WHERE p.status = 'posted'
        AND p.payment_date BETWEEN $1 AND $2
      ORDER BY p.payment_date DESC, p.receipt_number ASC, b.billing_month ASC
@@ -1684,13 +1687,16 @@ const getCashFlowForecast = asyncHandler(async (_req, res) => {
        LEFT JOIN expenses ON expenses.month_start = historic_months.month_start`
     ),
     pool.query(
-      `SELECT pa.*, COALESCE(SUM(p.amount), 0) AS received_amount
+      `SELECT pa.*, receipts.received_amount
        FROM payment_arrangements pa
-       LEFT JOIN payments p ON p.customer_id = pa.customer_id
-         AND p.status = 'posted'
-         AND p.payment_date >= COALESCE(pa.approved_at::date, pa.created_at::date)
-       WHERE pa.status = 'active'
-       GROUP BY pa.id`
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(SUM(account_payment.amount), 0) AS received_amount
+         FROM payments p
+         ${accountPaymentJoin("pa.customer_id")}
+         WHERE p.status = 'posted'
+           AND p.payment_date >= COALESCE(pa.approved_at::date, pa.created_at::date)
+       ) receipts ON TRUE
+       WHERE pa.status = 'active'`
     ).catch(() => ({ rows: [] })),
     pool.query(
       `SELECT *

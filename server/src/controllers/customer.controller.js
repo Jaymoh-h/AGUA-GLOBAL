@@ -7,6 +7,7 @@ const { createExpenseRecord } = require("./expense.controller");
 const { createBillNumber } = require("../services/billingPeriod.service");
 const { assertNoFutureDates, assertNotFutureDate } = require("../services/dateGuard.service");
 const { assertPortalCustomerAccess, getPortalCustomerIds } = require("../services/portalAccount.service");
+const { accountPaymentJoin } = require("../services/paymentAccount.service");
 
 const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
 
@@ -555,10 +556,11 @@ const getCustomerOverview = asyncHandler(async (req, res) => {
       [customerId]
     ),
     pool.query(
-      `SELECT p.id, p.receipt_number, p.payment_date, p.amount, p.payment_channel, p.reference, p.status,
-              p.unallocated_amount
+      `SELECT p.id, p.receipt_number, p.payment_date, account_payment.amount, p.payment_channel, p.reference, p.status,
+              account_payment.unallocated_amount
        FROM payments p
-       WHERE p.customer_id = $1
+       ${accountPaymentJoin("$1")}
+       WHERE account_payment.amount > 0
        ORDER BY p.payment_date DESC, p.created_at DESC
        LIMIT 12`,
       [customerId]
@@ -665,9 +667,10 @@ const getCustomerStatement = asyncHandler(async (req, res) => {
              ELSE 0
            END AS opening_debits,
            COALESCE((
-             SELECT SUM(p.amount)
+             SELECT SUM(account_payment.amount)
              FROM payments p
-             WHERE p.customer_id = $1
+             ${accountPaymentJoin("$1")}
+             WHERE account_payment.amount > 0
                AND p.status = 'posted'
                AND p.payment_date < $2::date
            ), 0) +
@@ -756,10 +759,11 @@ const getCustomerStatement = asyncHandler(async (req, res) => {
          COALESCE(p.receipt_number, p.reference, 'Payment #' || p.id::text) AS reference,
          'Payment via ' || replace(p.payment_channel, '_', ' ') AS description,
          0::numeric AS debit,
-         p.amount AS credit,
+         account_payment.amount AS credit,
          1 AS sort_order
        FROM payments p
-       WHERE p.customer_id = $1
+       ${accountPaymentJoin("$1")}
+       WHERE account_payment.amount > 0
          AND p.status = 'posted'
          AND ($2::date IS NULL OR p.payment_date >= $2::date)
          AND ($3::date IS NULL OR p.payment_date <= $3::date)

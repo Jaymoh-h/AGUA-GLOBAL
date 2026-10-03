@@ -752,12 +752,14 @@ const listPayments = asyncHandler(async (_req, res) => {
             c.name AS customer_name,
             c.acc_number,
             COUNT(pa.id) AS allocation_count,
+            STRING_AGG(DISTINCT allocation_customer.acc_number, ', ' ORDER BY allocation_customer.acc_number) AS allocated_accounts,
             COALESCE(SUM(pa.amount), 0) AS allocated_amount,
             STRING_AGG(DISTINCT b.bill_number, ', ' ORDER BY b.bill_number) FILTER (WHERE b.bill_number IS NOT NULL) AS bill_numbers
      FROM payments p
      JOIN customers c ON c.id = p.customer_id
      LEFT JOIN payment_allocations pa ON pa.payment_id = p.id
      LEFT JOIN bills b ON b.id = pa.bill_id
+     LEFT JOIN customers allocation_customer ON allocation_customer.id = b.customer_id
      GROUP BY p.id, c.name, c.acc_number
      ORDER BY p.payment_date DESC, p.created_at DESC
      LIMIT 300`
@@ -793,7 +795,14 @@ const listPaymentRegister = asyncHandler(async (req, res) => {
     const searchTerm = `%${search.replace(/[\\%_]/g, "\\$&")}%`;
     const placeholder = `$${params.push(searchTerm)}`;
     filters.push(
-      `(c.name ILIKE ${placeholder} ESCAPE '\\' OR c.acc_number ILIKE ${placeholder} ESCAPE '\\' OR COALESCE(p.receipt_number, '') ILIKE ${placeholder} ESCAPE '\\' OR COALESCE(p.external_reference, '') ILIKE ${placeholder} ESCAPE '\\')`
+      `(c.name ILIKE ${placeholder} ESCAPE '\\' OR c.acc_number ILIKE ${placeholder} ESCAPE '\\' OR COALESCE(p.receipt_number, '') ILIKE ${placeholder} ESCAPE '\\' OR COALESCE(p.external_reference, '') ILIKE ${placeholder} ESCAPE '\\'
+        OR EXISTS (
+          SELECT 1 FROM payment_allocations search_allocation
+          JOIN bills search_bill ON search_bill.id = search_allocation.bill_id
+          JOIN customers search_customer ON search_customer.id = search_bill.customer_id
+          WHERE search_allocation.payment_id = p.id
+            AND (search_customer.name ILIKE ${placeholder} ESCAPE '\\' OR search_customer.acc_number ILIKE ${placeholder} ESCAPE '\\')
+        ))`
     );
   }
   const where = filters.join(" AND ");
@@ -811,12 +820,14 @@ const listPaymentRegister = asyncHandler(async (req, res) => {
             c.name AS customer_name,
             c.acc_number,
             COUNT(pa.id) AS allocation_count,
+            STRING_AGG(DISTINCT allocation_customer.acc_number, ', ' ORDER BY allocation_customer.acc_number) AS allocated_accounts,
             COALESCE(SUM(pa.amount), 0) AS allocated_amount,
             STRING_AGG(DISTINCT b.bill_number, ', ' ORDER BY b.bill_number) FILTER (WHERE b.bill_number IS NOT NULL) AS bill_numbers
      FROM payments p
      JOIN customers c ON c.id = p.customer_id
      LEFT JOIN payment_allocations pa ON pa.payment_id = p.id
      LEFT JOIN bills b ON b.id = pa.bill_id
+     LEFT JOIN customers allocation_customer ON allocation_customer.id = b.customer_id
      WHERE ${where}
      GROUP BY p.id, c.name, c.acc_number
      ORDER BY p.payment_date DESC, p.created_at DESC

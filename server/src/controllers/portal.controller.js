@@ -7,6 +7,7 @@ const { getActiveMeter, getPreviousReadingForMeter } = require("../services/mete
 const { resolvePortalCustomer } = require("../services/portalAccount.service");
 const { normalizePhoneNumber } = require("../services/sms.service");
 const { normalizeWhatsAppNumber } = require("../services/whatsapp.service");
+const { accountPaymentJoin } = require("../services/paymentAccount.service");
 
 const categories = ["leak", "meter_fault", "no_water", "low_pressure", "water_quality", "connection", "billing_support", "billing_dispute", "payment_plan", "other"];
 const priorities = ["low", "normal", "high", "urgent"];
@@ -202,14 +203,13 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
   );
 
   const paymentsResult = await pool.query(
-    `SELECT p.id, p.receipt_number, p.payment_date, p.payment_channel, p.external_reference,
-            p.amount, p.total_allocated_amount, p.unallocated_amount, p.status,
-            STRING_AGG(DISTINCT b.bill_number, ', ' ORDER BY b.bill_number) FILTER (WHERE b.bill_number IS NOT NULL) AS bill_numbers
+    `SELECT p.id, p.receipt_number, p.payment_date, p.payment_channel,
+            CASE WHEN p.customer_id = $1 THEN p.external_reference ELSE NULL END AS external_reference,
+            account_payment.amount, account_payment.total_allocated_amount, account_payment.unallocated_amount, p.status,
+            account_payment.bill_numbers
      FROM payments p
-     LEFT JOIN payment_allocations pa ON pa.payment_id = p.id
-     LEFT JOIN bills b ON b.id = pa.bill_id
-     WHERE p.customer_id = $1 AND p.status = 'posted'
-     GROUP BY p.id
+     ${accountPaymentJoin("$1")}
+     WHERE account_payment.amount > 0 AND p.status = 'posted'
      ORDER BY p.payment_date DESC, p.created_at DESC
      LIMIT 300`,
     [customerId]
@@ -233,12 +233,13 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
        GROUP BY date_trunc('month', billing_month)::date
      ),
      payments_by_month AS (
-       SELECT date_trunc('month', payment_date)::date AS month_start,
-              COALESCE(SUM(amount), 0) AS paid_amount
-       FROM payments
-       WHERE customer_id = $1
-         AND status = 'posted'
-       GROUP BY date_trunc('month', payment_date)::date
+       SELECT date_trunc('month', p.payment_date)::date AS month_start,
+              COALESCE(SUM(account_payment.amount), 0) AS paid_amount
+       FROM payments p
+       ${accountPaymentJoin("$1")}
+       WHERE account_payment.amount > 0
+         AND p.status = 'posted'
+       GROUP BY date_trunc('month', p.payment_date)::date
      )
      SELECT to_char(months.month_start, 'Mon YYYY') AS label,
             months.month_start,
@@ -336,9 +337,10 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
        END::integer AS installments_due
      ) schedule ON TRUE
      LEFT JOIN LATERAL (
-       SELECT COALESCE(SUM(p.amount), 0) AS received_amount
+       SELECT COALESCE(SUM(account_payment.amount), 0) AS received_amount
        FROM payments p
-       WHERE p.customer_id = pa.customer_id
+       ${accountPaymentJoin("pa.customer_id")}
+       WHERE account_payment.amount > 0
          AND p.status = 'posted'
          AND p.payment_date >= COALESCE(pa.approved_at::date, pa.created_at::date)
      ) receipts ON TRUE
@@ -393,16 +395,23 @@ const getPortalDashboard = asyncHandler(async (req, res) => {
 const getPortalPayment = asyncHandler(async (req, res) => {
   const { customerId } = await resolvePortalCustomer(pool, req);
   const paymentResult = await pool.query(
-    `SELECT p.*,
+    `SELECT p.id, p.receipt_number, p.payment_date, p.payment_channel, p.status,
+            p.created_at, account_payment.amount, account_payment.total_allocated_amount,
+            account_payment.unallocated_amount, c.id AS customer_id,
+            CASE WHEN p.customer_id = $2 THEN p.reference ELSE NULL END AS reference,
+            CASE WHEN p.customer_id = $2 THEN p.external_reference ELSE NULL END AS external_reference,
+            CASE WHEN p.customer_id = $2 THEN p.received_from ELSE NULL END AS received_from,
+            CASE WHEN p.customer_id = $2 THEN p.notes ELSE NULL END AS notes,
             c.name AS customer_name,
             c.acc_number,
             c.phone,
             c.location,
             z.name AS zone_name
      FROM payments p
-     JOIN customers c ON c.id = p.customer_id
+     ${accountPaymentJoin("$2")}
+     JOIN customers c ON c.id = $2
      JOIN zones z ON z.id = c.zone_id
-     WHERE p.id = $1 AND p.customer_id = $2 AND p.status = 'posted'`,
+     WHERE p.id = $1 AND account_payment.amount > 0 AND p.status = 'posted'`,
     [req.params.id, customerId]
   );
   const payment = paymentResult.rows[0];
@@ -419,9 +428,9 @@ const getPortalPayment = asyncHandler(async (req, res) => {
             b.status AS bill_status
      FROM payment_allocations pa
      JOIN bills b ON b.id = pa.bill_id
-     WHERE pa.payment_id = $1
+     WHERE pa.payment_id = $1 AND b.customer_id = $2
      ORDER BY b.billing_month ASC, b.id ASC`,
-    [payment.id]
+    [payment.id, customerId]
   );
 
   res.json({

@@ -1,4 +1,5 @@
 const pool = require("../db/pool");
+const { accountPaymentJoin } = require("../services/paymentAccount.service");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
@@ -282,9 +283,10 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
        LIMIT 1
      ) previous_bill ON TRUE
      LEFT JOIN LATERAL (
-       SELECT COALESCE(SUM(p.amount), 0) AS recent_paid_amount
+       SELECT COALESCE(SUM(account_payment.amount), 0) AS recent_paid_amount
        FROM payments p
-       WHERE p.customer_id = c.id
+       ${accountPaymentJoin("c.id")}
+       WHERE account_payment.amount > 0
          AND p.status = 'posted'
          AND latest_bill.id IS NOT NULL
          AND p.payment_date > COALESCE(
@@ -383,9 +385,10 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
              ELSE 0
            END AS prior_debits,
            COALESCE((
-             SELECT SUM(p.amount)
+             SELECT SUM(account_payment.amount)
              FROM payments p
-             WHERE p.customer_id = c.id
+             ${accountPaymentJoin("c.id")}
+             WHERE account_payment.amount > 0
                AND p.status = 'posted'
                AND latest_bill.id IS NOT NULL
                AND p.payment_date <= COALESCE(
@@ -561,9 +564,10 @@ const getPaymentPlanFollowUpRows = async (client, arrangementId = null) => {
        END::integer AS installments_due
      ) schedule ON TRUE
      LEFT JOIN LATERAL (
-       SELECT COALESCE(SUM(p.amount), 0) AS received_amount
+       SELECT COALESCE(SUM(account_payment.amount), 0) AS received_amount
        FROM payments p
-       WHERE p.customer_id = pa.customer_id
+       ${accountPaymentJoin("pa.customer_id")}
+       WHERE account_payment.amount > 0
          AND p.status = 'posted'
          AND p.payment_date >= COALESCE(pa.approved_at::date, pa.created_at::date)
      ) receipts ON TRUE
@@ -642,9 +646,10 @@ const getStandingOrderFollowUpRows = async (client, standingOrderId = null) => {
        END::integer AS installments_due
      ) schedule ON TRUE
      LEFT JOIN LATERAL (
-       SELECT COALESCE(SUM(p.amount), 0) AS matched_amount
+       SELECT COALESCE(SUM(account_payment.amount), 0) AS matched_amount
        FROM payments p
-       WHERE p.customer_id = so.customer_id
+       ${accountPaymentJoin("so.customer_id")}
+       WHERE account_payment.amount > 0
          AND p.status = 'posted'
          AND p.payment_date >= so.first_due_date
          AND CONCAT_WS(' ', p.external_reference, p.receipt_number, p.received_from, p.notes)

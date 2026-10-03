@@ -109,6 +109,9 @@ describe("Payment entry safeguards", () => {
 
     fireEvent.change(splitAmountInput, { target: { value: "40" } });
     expect(screen.getByText("AG-0001 remains on this receipt").parentElement).toHaveTextContent("Ksh 60.00");
+    const allocation = screen.getByLabelText("Payment allocation preview");
+    expect(within(allocation).getByText("AG-0001 applied to balance").parentElement).toHaveTextContent("Ksh 60.00");
+    expect(within(allocation).getByText("AG-0001 credit").parentElement).toHaveTextContent("Ksh 0.00");
     expect(screen.getByRole("button", { name: "Continue to payment details" })).toBeEnabled();
   });
 
