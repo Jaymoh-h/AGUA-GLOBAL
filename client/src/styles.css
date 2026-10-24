@@ -7581,11 +7581,6 @@ td {
     font-size: 10px;
   }
 
-  .production-print-week {
-    break-inside: avoid;
-    page-break-inside: avoid;
-  }
-
   .active-print-surface:not(.report-print-all) .report-summary-section,
   .active-print-surface:not(.report-print-all) .report-section,
   .active-print-surface:not(.report-print-all) .management-section {
