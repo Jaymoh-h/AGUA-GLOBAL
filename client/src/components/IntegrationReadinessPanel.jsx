@@ -46,7 +46,7 @@ function IntegrationReadinessPanel({
   const readinessChecks = [
     { key: "email", title: "Email delivery", detail: messaging.email?.configured ? `SMTP via ${messaging.email.provider}` : "SMTP host, user, and password are required.", configured: messaging.email?.configured },
     { key: "sms", title: "SMS delivery", detail: messaging.sms?.configured ? `${messaging.sms.provider} is configured.` : "Select a supported provider and add sender credentials.", configured: messaging.sms?.configured },
-    { key: "whatsapp", title: "WhatsApp delivery", detail: messaging.whatsapp?.configured ? `${messaging.whatsapp.provider} is configured.` : "A Twilio or Meta business provider is required.", configured: messaging.whatsapp?.configured },
+    { key: "whatsapp", title: "WhatsApp delivery", detail: messaging.whatsapp?.configured ? `${messaging.whatsapp.provider} is configured.` : "An Africa's Talking, Twilio, or Meta business provider is required.", configured: messaging.whatsapp?.configured },
     {
       key: "mpesa",
       title: "M-Pesa callback",

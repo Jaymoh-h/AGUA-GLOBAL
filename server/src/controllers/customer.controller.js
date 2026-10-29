@@ -4,10 +4,11 @@ const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
 const { createPaymentWithAllocations } = require("./payment.controller");
 const { createExpenseRecord } = require("./expense.controller");
-const { createBillNumber } = require("../services/billingPeriod.service");
+const { createBillNumber, createReceiptNumber } = require("../services/billingPeriod.service");
 const { assertNoFutureDates, assertNotFutureDate } = require("../services/dateGuard.service");
 const { assertPortalCustomerAccess, getPortalCustomerIds } = require("../services/portalAccount.service");
 const { accountPaymentJoin } = require("../services/paymentAccount.service");
+const { buildDepositReceiptPdfAttachment } = require("../services/styledPdf.service");
 
 const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
 
@@ -29,6 +30,70 @@ const normalizeDeliveryChannel = (value) => {
     throw new ApiError(400, "Preferred delivery channel must be email, sms, or whatsapp.");
   }
   return channel;
+};
+
+const normalizeDepositPaymentChannel = (value) => {
+  const channel = String(value || "cash").trim().toLowerCase();
+  if (!["cash", "bank", "mpesa_paybill"].includes(channel)) {
+    throw new ApiError(400, "Deposit payment channel must be cash, bank, or M-Pesa Paybill.");
+  }
+  return channel;
+};
+
+const getDepositReceiptDetails = (payload, customerName) => {
+  const paymentChannel = normalizeDepositPaymentChannel(payload.deposit_payment_channel);
+  const externalReference = String(payload.deposit_external_reference || "").trim() || null;
+  if (["bank", "mpesa_paybill"].includes(paymentChannel) && !externalReference) {
+    throw new ApiError(400, "Transaction reference is required for bank and M-Pesa deposit receipts.");
+  }
+  return {
+    paymentChannel,
+    externalReference,
+    receivedFrom: String(payload.deposit_received_from || customerName || "").trim() || customerName,
+    notes: String(payload.deposit_notes || "").trim() || null
+  };
+};
+
+const createDepositReceipt = async (client, req, customer, { paymentDate, details }) => {
+  if (["bank", "mpesa_paybill"].includes(details.paymentChannel) && details.externalReference) {
+    const duplicate = await client.query(
+      `SELECT 1 FROM payments
+       WHERE status = 'posted'
+         AND payment_channel = $1
+         AND LOWER(BTRIM(external_reference)) = LOWER(BTRIM($2))
+       UNION ALL
+       SELECT 1 FROM customer_deposit_receipts
+       WHERE payment_channel = $1
+         AND LOWER(BTRIM(external_reference)) = LOWER(BTRIM($2))
+       LIMIT 1`,
+      [details.paymentChannel, details.externalReference]
+    );
+    if (duplicate.rows[0]) {
+      throw new ApiError(400, "This bank or M-Pesa transaction reference is already recorded.");
+    }
+  }
+
+  const receiptNumber = await createReceiptNumber(client);
+  const result = await client.query(
+    `INSERT INTO customer_deposit_receipts (
+       customer_id, receipt_number, amount, payment_date, payment_channel,
+       external_reference, received_from, notes, recorded_by
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING *`,
+    [
+      customer.id,
+      receiptNumber,
+      toMoney(customer.deposit_amount),
+      paymentDate,
+      details.paymentChannel,
+      details.externalReference,
+      details.receivedFrom,
+      details.notes,
+      req.user.id
+    ]
+  );
+  return result.rows[0];
 };
 
 const getCustomerBalanceDue = async (client, customerId) => {
@@ -438,6 +503,7 @@ const listCustomers = asyncHandler(async (req, res) => {
       r.name AS rate_name,
       r.amount AS rate_amount,
       z.name AS zone_name,
+      dr.receipt_number AS deposit_receipt_number,
       CASE
         WHEN NOT EXISTS (
           SELECT 1 FROM bills mb
@@ -460,6 +526,7 @@ const listCustomers = asyncHandler(async (req, res) => {
      FROM customers c
      JOIN rates r ON r.id = c.rate_id
      JOIN zones z ON z.id = c.zone_id
+     LEFT JOIN customer_deposit_receipts dr ON dr.customer_id = c.id
      WHERE (c.name ILIKE $1 OR c.acc_number ILIKE $1 OR c.phone ILIKE $1 OR c.email ILIKE $1)
      ${customerScope}
      ORDER BY c.created_at DESC`,
@@ -473,10 +540,12 @@ const getCustomer = asyncHandler(async (req, res) => {
     await assertPortalCustomerAccess(pool, req.user, req.params.id);
   }
   const { rows } = await pool.query(
-    `SELECT c.*, r.name AS rate_name, r.amount AS rate_amount, z.name AS zone_name
+    `SELECT c.*, r.name AS rate_name, r.amount AS rate_amount, z.name AS zone_name,
+            dr.receipt_number AS deposit_receipt_number
      FROM customers c
      JOIN rates r ON r.id = c.rate_id
      JOIN zones z ON z.id = c.zone_id
+     LEFT JOIN customer_deposit_receipts dr ON dr.customer_id = c.id
      WHERE c.id = $1`,
     [req.params.id]
   );
@@ -484,6 +553,30 @@ const getCustomer = asyncHandler(async (req, res) => {
     throw new ApiError(404, "Customer not found.");
   }
   res.json(rows[0]);
+});
+
+const getCustomerDepositReceipt = asyncHandler(async (req, res) => {
+  const { rows } = await pool.query(
+    `SELECT dr.*, c.name AS customer_name, c.acc_number, u.name AS recorded_by_name
+     FROM customer_deposit_receipts dr
+     JOIN customers c ON c.id = dr.customer_id
+     LEFT JOIN users u ON u.id = dr.recorded_by
+     WHERE dr.customer_id = $1`,
+    [req.params.id]
+  );
+  const depositReceipt = rows[0];
+  if (!depositReceipt) {
+    throw new ApiError(404, "No initial deposit receipt has been issued for this customer.");
+  }
+  const businessResult = await pool.query("SELECT * FROM business_settings WHERE id = 1");
+  const attachment = buildDepositReceiptPdfAttachment({
+    depositReceipt,
+    customer: { name: depositReceipt.customer_name, acc_number: depositReceipt.acc_number },
+    business: businessResult.rows[0] || {}
+  });
+  res.setHeader("Content-Type", attachment.contentType);
+  res.setHeader("Content-Disposition", `attachment; filename=\"${attachment.filename}\"`);
+  res.send(attachment.content);
 });
 
 const getCustomerOverview = asyncHandler(async (req, res) => {
@@ -1008,6 +1101,10 @@ const createCustomer = asyncHandler(async (req, res) => {
     deposit_amount = 0,
     deposit_paid = false,
     deposit_paid_at,
+    deposit_payment_channel,
+    deposit_external_reference,
+    deposit_received_from,
+    deposit_notes,
     opening_balance_amount = 0,
     opening_balance_date,
     preferred_delivery_channel = "email",
@@ -1025,6 +1122,10 @@ const createCustomer = asyncHandler(async (req, res) => {
   }
 
   const openingBalance = normalizeOpeningBalance(opening_balance_amount, opening_balance_date);
+  const nextDepositAmount = toMoney(deposit_amount);
+  if (deposit_paid && nextDepositAmount <= 0) {
+    throw new ApiError(400, "Enter an initial deposit amount before marking it as paid.");
+  }
   const nextEmail = normalizeEmail(email);
   const nextDeliveryChannel = normalizeDeliveryChannel(preferred_delivery_channel);
   const enabledDeliveryChannels = {
@@ -1036,6 +1137,12 @@ const createCustomer = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Choose an enabled channel as the preferred delivery channel.");
   }
   const nextDepositPaidAt = deposit_paid ? deposit_paid_at || new Date().toISOString().slice(0, 10) : null;
+  const depositReceiptDetails = deposit_paid
+    ? getDepositReceiptDetails(
+        { deposit_payment_channel, deposit_external_reference, deposit_received_from, deposit_notes },
+        name
+      )
+    : null;
   const futureOverrideReason = assertNoFutureDates(
     [
       { value: nextDepositPaidAt, label: "Deposit paid date" },
@@ -1066,7 +1173,7 @@ const createCustomer = asyncHandler(async (req, res) => {
         acc_number,
         rate_id,
         zone_id,
-        Number(deposit_amount) || 0,
+        nextDepositAmount,
         Boolean(deposit_paid),
         nextDepositPaidAt,
         openingBalance.balanceAmount,
@@ -1080,6 +1187,9 @@ const createCustomer = asyncHandler(async (req, res) => {
     if (!rows[0]) {
       throw new ApiError(400, "Selected rate or zone/location is inactive or does not exist.");
     }
+    const depositReceipt = depositReceiptDetails
+      ? await createDepositReceipt(client, req, rows[0], { paymentDate: nextDepositPaidAt, details: depositReceiptDetails })
+      : null;
     const migrationBill = await createMigrationBalanceBill(
       client,
       rows[0],
@@ -1104,8 +1214,18 @@ const createCustomer = asyncHandler(async (req, res) => {
         reason: [reviewNotes, futureOverrideReason].filter(Boolean).join(" | ") || null
       });
     }
+    if (depositReceipt) {
+      await recordAuditEvent(client, {
+        req,
+        action: "customer.deposit_receipt_issued",
+        entityType: "customer_deposit_receipt",
+        entityId: depositReceipt.id,
+        afterData: depositReceipt,
+        reason: reviewNotes
+      });
+    }
     await client.query("COMMIT");
-    res.status(201).json(rows[0]);
+    res.status(201).json({ ...rows[0], deposit_receipt: depositReceipt });
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -1128,6 +1248,10 @@ const updateCustomer = asyncHandler(async (req, res) => {
     deposit_amount,
     deposit_paid,
     deposit_paid_at,
+    deposit_payment_channel,
+    deposit_external_reference,
+    deposit_received_from,
+    deposit_notes,
     opening_balance_amount,
     opening_balance_date,
     preferred_delivery_channel,
@@ -1145,6 +1269,11 @@ const updateCustomer = asyncHandler(async (req, res) => {
     if (!before) {
       throw new ApiError(404, "Customer not found.");
     }
+    const existingDepositReceiptResult = await client.query(
+      "SELECT * FROM customer_deposit_receipts WHERE customer_id = $1 FOR UPDATE",
+      [before.id]
+    );
+    const existingDepositReceipt = existingDepositReceiptResult.rows[0] || null;
     const hasField = (field) => Object.prototype.hasOwnProperty.call(payload, field);
     const openingBalance =
       !hasField("opening_balance_amount") && !hasField("opening_balance_date")
@@ -1197,6 +1326,18 @@ const updateCustomer = asyncHandler(async (req, res) => {
       nextValues.deposit_paid_at = null;
     } else if (!before.deposit_paid && nextValues.deposit_paid && !nextValues.deposit_paid_at) {
       nextValues.deposit_paid_at = new Date().toISOString().slice(0, 10);
+    }
+    if (nextValues.deposit_paid && toMoney(nextValues.deposit_amount) <= 0) {
+      throw new ApiError(400, "Enter an initial deposit amount before marking it as paid.");
+    }
+    if (existingDepositReceipt && !nextValues.deposit_paid) {
+      throw new ApiError(400, "A receipted deposit cannot be marked unpaid. Record its refund or forfeiture through account closure.");
+    }
+    if (existingDepositReceipt && toMoney(nextValues.deposit_amount) !== toMoney(before.deposit_amount)) {
+      throw new ApiError(400, "A receipted deposit amount cannot be changed. Record any settlement through account closure.");
+    }
+    if (existingDepositReceipt && String(nextValues.deposit_paid_at || "") !== String(before.deposit_paid_at || "")) {
+      throw new ApiError(400, "A receipted deposit date cannot be changed.");
     }
     if (Number(nextValues.opening_balance_amount || 0) === 0) {
       nextValues.opening_balance_date = null;
@@ -1255,6 +1396,13 @@ const updateCustomer = asyncHandler(async (req, res) => {
       ],
       req
     );
+    const issueDepositReceipt = !before.deposit_paid && nextValues.deposit_paid;
+    const depositReceiptDetails = issueDepositReceipt
+      ? getDepositReceiptDetails(
+          { deposit_payment_channel, deposit_external_reference, deposit_received_from, deposit_notes },
+          nextValues.name
+        )
+      : null;
     const setClauses = changedFields.map((field, index) => `${field} = $${index + 1}`);
     const updateValues = changedFields.map((field) => nextValues[field]);
     const { rows } = await client.query(
@@ -1269,6 +1417,9 @@ const updateCustomer = asyncHandler(async (req, res) => {
     if (!rows[0]) {
       throw new ApiError(404, "Customer not found, or selected rate/zone is inactive.");
     }
+    const depositReceipt = depositReceiptDetails
+      ? await createDepositReceipt(client, req, rows[0], { paymentDate: rows[0].deposit_paid_at, details: depositReceiptDetails })
+      : null;
     const migrationBill = openingBalance
       ? await upsertMigrationBalanceBill(
           client,
@@ -1296,8 +1447,18 @@ const updateCustomer = asyncHandler(async (req, res) => {
         reason: [reviewNotes, futureOverrideReason].filter(Boolean).join(" | ") || null
       });
     }
+    if (depositReceipt) {
+      await recordAuditEvent(client, {
+        req,
+        action: "customer.deposit_receipt_issued",
+        entityType: "customer_deposit_receipt",
+        entityId: depositReceipt.id,
+        afterData: depositReceipt,
+        reason: reviewNotes
+      });
+    }
     await client.query("COMMIT");
-    res.json(rows[0]);
+    res.json({ ...rows[0], deposit_receipt: depositReceipt });
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -1555,6 +1716,7 @@ const closeCustomerAccount = asyncHandler(async (req, res) => {
 module.exports = {
   listCustomers,
   getCustomer,
+  getCustomerDepositReceipt,
   getCustomerOverview,
   getCustomerStatement,
   previewCustomerImport,

@@ -28,8 +28,8 @@ export const productionHostSetupItems = (readiness = {}) => {
       key: "whatsapp",
       title: "WhatsApp delivery",
       configured: Boolean(messaging.whatsapp?.configured),
-      variables: ["WHATSAPP_PROVIDER", "WHATSAPP_DEFAULT_COUNTRY_CODE", "WHATSAPP_TWILIO_ACCOUNT_SID", "WHATSAPP_TWILIO_AUTH_TOKEN", "WHATSAPP_TWILIO_FROM", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_API_VERSION"],
-      nextStep: "Set variables for the selected Twilio or Meta provider and verify an approved-template delivery to an approved recipient."
+      variables: ["WHATSAPP_PROVIDER", "WHATSAPP_DEFAULT_COUNTRY_CODE", "AT_USERNAME", "AT_API_KEY", "AT_WHATSAPP_NUMBER", "AT_WHATSAPP_TEMPLATE_HEADER_VALUE", "WHATSAPP_TWILIO_ACCOUNT_SID", "WHATSAPP_TWILIO_AUTH_TOKEN", "WHATSAPP_TWILIO_FROM", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_ACCESS_TOKEN", "WHATSAPP_API_VERSION"],
+      nextStep: "Set variables for the selected provider, complete WhatsApp onboarding, and verify an approved-template delivery to an approved recipient."
     },
     {
       key: "mpesa",

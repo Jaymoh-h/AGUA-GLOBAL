@@ -930,6 +930,51 @@ const buildReceiptPdfAttachment = ({ payment, allocations = [], customerBalance 
   };
 };
 
+const buildDepositReceiptPdfAttachment = ({ depositReceipt, customer, business = {} }) => {
+  const document = new PdfDocument(business);
+
+  document.documentHeader(
+    {
+      title: "Initial Deposit Receipt",
+      reference: depositReceipt.receipt_number || `DEPOSIT-${depositReceipt.id}`,
+      dateLabel: "Received",
+      dateValue: dateOnly(depositReceipt.payment_date)
+    },
+    business
+  );
+  document.infoGrid([
+    { label: "Received From", value: depositReceipt.received_from || customer.name || "-" },
+    { label: "Customer", value: customer.name || "-", subtext: customer.acc_number || "" },
+    { label: "Channel", value: label(depositReceipt.payment_channel || "cash") },
+    { label: "Reference", value: depositReceipt.external_reference || "-" }
+  ]);
+
+  document.sectionTitle("Deposit Record");
+  document.table(
+    [
+      { header: "Item", value: "item", weight: 2 },
+      { header: "Amount", value: "amount", align: "right" }
+    ],
+    [{ item: "Initial account deposit", amount: money(depositReceipt.amount, business) }]
+  );
+  document.totals([
+    { label: "Deposit received", value: money(depositReceipt.amount, business), primary: true },
+    { label: "Applied to water bills", value: money(0, business) },
+    { label: "Deposit status", value: "Retained customer deposit" }
+  ]);
+  document.footer([
+    business.receipt_footer_note || "Thank you.",
+    "This receipt records a retained customer deposit and does not reduce water-bill balances.",
+    depositReceipt.recorded_by_name ? `Recorded by ${depositReceipt.recorded_by_name}` : null
+  ]);
+
+  return {
+    filename: sanitizeFilename(`${depositReceipt.receipt_number || `deposit-receipt-${depositReceipt.id}`}.pdf`),
+    content: document.render(),
+    contentType: "application/pdf"
+  };
+};
+
 const buildPayslipPdfAttachment = ({ payrollLine, business = {} }) => {
   const document = new PdfDocument(business);
   const payslipNumber = `PAYSLIP-${payrollLine.payroll_run_id}-${payrollLine.id}`;
@@ -1013,6 +1058,7 @@ const buildPayslipPdfAttachment = ({ payrollLine, business = {} }) => {
 
 module.exports = {
   buildBillPdfAttachment,
+  buildDepositReceiptPdfAttachment,
   buildPayslipPdfAttachment,
   buildReceiptPdfAttachment
 };

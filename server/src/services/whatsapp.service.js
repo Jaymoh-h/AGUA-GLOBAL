@@ -1,7 +1,7 @@
 const { whatsapp } = require("../config/env");
 const { normalizePhoneNumber } = require("./sms.service");
 
-const normalizeWhatsAppNumber = (value) => normalizePhoneNumber(value);
+const normalizeWhatsAppNumber = (value) => normalizePhoneNumber(value, whatsapp.defaultCountryCode);
 const whatsappAddress = (value) => {
   const normalized = normalizeWhatsAppNumber(value);
   if (!normalized) return "";
@@ -12,17 +12,20 @@ const normalizedProvider = () => String(whatsapp.provider || "none").toLowerCase
 
 const getWhatsAppStatus = () => {
   const provider = normalizedProvider();
+  const africasTalkingConfigured = Boolean(whatsapp.africasTalking.username && whatsapp.africasTalking.apiKey && whatsapp.africasTalking.from);
   const twilioConfigured = Boolean(whatsapp.twilio.accountSid && whatsapp.twilio.authToken && whatsapp.twilio.from);
   const metaConfigured = Boolean(whatsapp.meta.phoneNumberId && whatsapp.meta.accessToken);
   const configured =
+    (provider === "africastalking" && africasTalkingConfigured) ||
     (provider === "twilio" && twilioConfigured) ||
     ((provider === "meta" || provider === "cloudapi" || provider === "whatsappcloud") && metaConfigured);
 
   return {
     provider: whatsapp.provider || "none",
     configured,
-    supported_providers: ["twilio", "meta"],
+    supported_providers: ["africastalking", "twilio", "meta"],
     details: {
+      africastalking: { configured: africasTalkingConfigured, has_from: Boolean(whatsapp.africasTalking.from) },
       twilio: {
         configured: twilioConfigured,
         has_from: Boolean(whatsapp.twilio.from)
@@ -35,6 +38,33 @@ const getWhatsAppStatus = () => {
       }
     }
   };
+};
+
+const sendAfricaTalkingWhatsApp = async ({ to, message, template }) => {
+  const { username, apiKey, from, templateHeaderValue } = whatsapp.africasTalking;
+  if (!username || !apiKey || !from) {
+    return { skipped: true, error: "Africa's Talking WhatsApp credentials or sender number are not configured." };
+  }
+  if (template?.name && !String(template.headerValue || templateHeaderValue).trim()) {
+    throw new Error("Set AT_WHATSAPP_TEMPLATE_HEADER_VALUE before sending an Africa's Talking WhatsApp template.");
+  }
+  const body = template?.name
+    ? { templateId: template.name, headerValue: template.headerValue || templateHeaderValue, bodyValues: (template.parameters || []).map((value) => String(value ?? "")) }
+    : { message };
+  const host = username.toLowerCase() === "sandbox" ? "chat.sandbox.africastalking.com" : "chat.africastalking.com";
+  const response = await fetch(`https://${host}/whatsapp/message/send`, {
+    method: "POST",
+    headers: { apiKey, Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ username, waNumber: from, phoneNumber: to, body })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || /fail|reject|invalid|error/i.test(String(payload.status || "")) || payload.error) {
+    throw new Error(payload.error?.message || payload.error || payload.message || payload.status || "Africa's Talking rejected the WhatsApp request.");
+  }
+  if (!payload.messageId || !payload.status) {
+    throw new Error("Africa's Talking did not confirm acceptance of the WhatsApp message.");
+  }
+  return { skipped: false, messageId: payload.messageId, providerStatus: payload.status };
 };
 
 const templateParametersToTwilioVariables = (parameters = []) =>
@@ -152,6 +182,9 @@ const sendWhatsApp = async ({ to, message, template = null }) => {
   }
 
   const provider = normalizedProvider();
+  if (provider === "africastalking") {
+    return sendAfricaTalkingWhatsApp({ to: normalizedTo, message, template });
+  }
   if (provider === "twilio") {
     return sendTwilioWhatsApp({ to: normalizedTo, message, template });
   }

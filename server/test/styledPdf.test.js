@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   buildBillPdfAttachment,
+  buildDepositReceiptPdfAttachment,
   buildPayslipPdfAttachment,
   buildReceiptPdfAttachment
 } = require("../src/services/styledPdf.service");
@@ -131,6 +132,26 @@ describe("styled PDF attachments", () => {
     });
 
     assertPdf(attachment, ["AG-RCPT-0071", "Receipt Allocations", "TSTPAY0071", "Total received", "Customer credit"]);
+  });
+
+  it("renders an initial deposit receipt without treating it as bill credit", () => {
+    const attachment = buildDepositReceiptPdfAttachment({
+      business,
+      customer: { name: "Amina Wanjiku", acc_number: "AG-10041" },
+      depositReceipt: {
+        id: 81,
+        receipt_number: "AG-RCPT-0081",
+        payment_date: "2026-09-15",
+        payment_channel: "mpesa_paybill",
+        external_reference: "TSTDEP0081",
+        amount: 3000,
+        received_from: "Amina Wanjiku",
+        recorded_by_name: "Finance User"
+      }
+    });
+
+    assertPdf(attachment, ["Initial Deposit Receipt", "AG-RCPT-0081", "Deposit Record", "Retained customer deposit", "TSTDEP0081"]);
+    assert.equal(attachment.content.toString("latin1").includes("Customer credit"), false);
   });
 
   it("renders a payslip with earnings, deductions, and payment record", () => {

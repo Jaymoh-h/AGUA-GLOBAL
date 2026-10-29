@@ -1,14 +1,14 @@
 const { sms } = require("../config/env");
 
-const normalizePhoneNumber = (value) => {
+const normalizePhoneNumber = (value, countryCode = sms.defaultCountryCode) => {
   const raw = String(value || "").trim();
   if (!raw) return "";
   if (raw.startsWith("+")) return `+${raw.slice(1).replace(/\D/g, "")}`;
 
   const digits = raw.replace(/\D/g, "");
   if (!digits) return "";
-  if (digits.startsWith(sms.defaultCountryCode)) return `+${digits}`;
-  if (digits.startsWith("0")) return `+${sms.defaultCountryCode}${digits.slice(1)}`;
+  if (digits.startsWith(countryCode)) return `+${digits}`;
+  if (digits.startsWith("0")) return `+${countryCode}${digits.slice(1)}`;
   return `+${digits}`;
 };
 
@@ -25,7 +25,8 @@ const sendAfricaTalkingSms = async ({ to, message }) => {
   });
   if (from) body.set("from", from);
 
-  const response = await fetch("https://api.africastalking.com/version1/messaging", {
+  const host = username.toLowerCase() === "sandbox" ? "api.sandbox.africastalking.com" : "api.africastalking.com";
+  const response = await fetch(`https://${host}/version1/messaging`, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -39,12 +40,14 @@ const sendAfricaTalkingSms = async ({ to, message }) => {
     throw new Error(payload.errorMessage || payload.message || "SMS provider rejected the request.");
   }
 
-  const recipient = payload.SMSMessageData?.Recipients?.[0] || {};
-  const providerStatus = recipient.status || payload.SMSMessageData?.Message || "sent";
-  const messageId = recipient.messageId || recipient.message_id || null;
-  if (/fail|reject|invalid/i.test(providerStatus)) {
-    throw new Error(providerStatus);
+  const recipient = payload.SMSMessageData?.Recipients?.[0];
+  const providerStatus = recipient?.status || "";
+  const statusCode = Number(recipient?.statusCode);
+  if (!recipient || (recipient.statusCode != null && ![100, 101, 102].includes(statusCode)) ||
+      (recipient.statusCode == null && !/^(success|processed|sent|queued)$/i.test(providerStatus))) {
+    throw new Error(providerStatus || payload.SMSMessageData?.Message || "SMS provider did not accept the message.");
   }
+  const messageId = recipient.messageId || recipient.message_id || null;
   return { skipped: false, messageId, providerStatus };
 };
 

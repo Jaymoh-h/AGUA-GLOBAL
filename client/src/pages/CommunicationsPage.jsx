@@ -776,11 +776,11 @@ function CommunicationsPage({ user, navigationIntent, onClearNavigationIntent, o
           {medium === "whatsapp" ? (
             <>
               <label>
-                Approved template / Content SID
+                Approved template name / ID
                 <input
                   value={whatsAppTemplateName}
                   onChange={(event) => setWhatsAppTemplateName(event.target.value)}
-                  placeholder="Meta template name or Twilio Content SID"
+                  placeholder="Africa's Talking template ID, Meta name, or Twilio Content SID"
                   maxLength={160}
                 />
               </label>

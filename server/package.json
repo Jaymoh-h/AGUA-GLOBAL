@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "test:smoke": "node -r dotenv/config --test test/smoke.test.js test/rateLimit.test.js test/styledPdf.test.js test/email.service.test.js test/crossAccountPayment.test.js",
+    "test:smoke": "node -r dotenv/config --test test/smoke.test.js test/rateLimit.test.js test/styledPdf.test.js test/email.service.test.js test/messaging.service.test.js test/crossAccountPayment.test.js",
     "test:smoke:current": "node test/run-current-smoke.js",
     "test:backup:current": "node test/backup-validation.js",
     "db:check": "node src/db/check.js",

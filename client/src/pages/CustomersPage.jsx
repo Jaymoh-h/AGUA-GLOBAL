@@ -12,7 +12,7 @@ import { useToastMessage } from "../components/ToastProvider";
 import WorkspaceState from "../components/WorkspaceState";
 import { api } from "../services/api";
 import { downloadCsvRows, downloadCsvTemplate } from "../utils/csvTemplate";
-import { namedExport, withPrintTitle } from "../utils/exportNames";
+import { downloadBlobFile, namedExport, withPrintTitle } from "../utils/exportNames";
 import useScopedDraft from "../utils/useScopedDraft";
 
 const money = (value) => `KES ${Number(value || 0).toLocaleString()}`;
@@ -45,6 +45,11 @@ const blank = {
   zone_id: "",
   deposit_amount: "",
   deposit_paid: false,
+  deposit_paid_at: "",
+  deposit_payment_channel: "cash",
+  deposit_external_reference: "",
+  deposit_received_from: "",
+  deposit_notes: "",
   opening_balance_amount: "",
   opening_balance_date: "",
   preferred_delivery_channel: "email",
@@ -212,17 +217,24 @@ function CustomersPage({ user, navigationIntent, onClearNavigationIntent, onNavi
   const saveCustomer = async (payload, reviewNotes = "") => {
     try {
       const reviewedPayload = reviewNotes ? { ...payload, review_notes: reviewNotes } : payload;
-      if (editingId) {
-        await api.customers.update(editingId, reviewedPayload);
-      } else {
-        await api.customers.create(reviewedPayload);
-      }
+      const savedCustomer = editingId
+        ? await api.customers.update(editingId, reviewedPayload)
+        : await api.customers.create(reviewedPayload);
       setForm(blank);
       setDeliveryPreferenceReason("");
       setEditingId(null);
       setEntryOpen(false);
       await load();
-      setMessage("Customer saved.");
+      if (savedCustomer.deposit_receipt) {
+        downloadBlobFile(
+          await api.customers.downloadDepositReceipt(savedCustomer.id),
+          savedCustomer.deposit_receipt.receipt_number,
+          "pdf"
+        );
+        setMessage(`Customer saved and deposit receipt ${savedCustomer.deposit_receipt.receipt_number} downloaded.`);
+      } else {
+        setMessage("Customer saved.");
+      }
     } catch (err) {
       setMessage(err.message);
     }
@@ -240,16 +252,23 @@ function CustomersPage({ user, navigationIntent, onClearNavigationIntent, onNavi
       return;
     }
 
+    const existingCustomer = editingId ? customers.find((customer) => Number(customer.id) === Number(editingId)) : null;
     const normalizedPayload = {
       ...form,
       rate_id: Number(form.rate_id),
       zone_id: Number(form.zone_id),
       deposit_amount: Number(form.deposit_amount || 0),
       deposit_paid: Boolean(form.deposit_paid),
+      deposit_paid_at: form.deposit_paid ? form.deposit_paid_at || null : null,
       opening_balance_amount: Number(form.opening_balance_amount || 0),
       opening_balance_date: Number(form.opening_balance_amount || 0) !== 0 ? form.opening_balance_date : null
     };
-    const existingCustomer = editingId ? customers.find((customer) => Number(customer.id) === Number(editingId)) : null;
+    if (!form.deposit_paid || existingCustomer?.deposit_paid) {
+      delete normalizedPayload.deposit_payment_channel;
+      delete normalizedPayload.deposit_external_reference;
+      delete normalizedPayload.deposit_received_from;
+      delete normalizedPayload.deposit_notes;
+    }
     let payload = existingCustomer
       ? Object.fromEntries(
           Object.entries(normalizedPayload).filter(([field, value]) => {
@@ -321,6 +340,11 @@ function CustomersPage({ user, navigationIntent, onClearNavigationIntent, onNavi
       zone_id: customer.zone_id || "",
       deposit_amount: customer.deposit_amount || "",
       deposit_paid: Boolean(customer.deposit_paid),
+      deposit_paid_at: customer.deposit_paid_at ? customer.deposit_paid_at.slice(0, 10) : "",
+      deposit_payment_channel: "cash",
+      deposit_external_reference: "",
+      deposit_received_from: "",
+      deposit_notes: "",
       opening_balance_amount: customer.opening_balance_amount || "",
       opening_balance_date: customer.opening_balance_date ? customer.opening_balance_date.slice(0, 10) : "",
       preferred_delivery_channel: customer.preferred_delivery_channel || "email",
@@ -364,6 +388,20 @@ function CustomersPage({ user, navigationIntent, onClearNavigationIntent, onNavi
     setStatementStart("");
     setStatementEnd("");
     setMessage("");
+  };
+
+  const downloadDepositReceipt = async (customer) => {
+    setMessage("");
+    try {
+      downloadBlobFile(
+        await api.customers.downloadDepositReceipt(customer.id),
+        customer.deposit_receipt_number || `deposit-receipt-${customer.id}`,
+        "pdf"
+      );
+      setMessage("Initial deposit receipt downloaded.");
+    } catch (err) {
+      setMessage(err.message);
+    }
   };
 
   const generateStatement = async (mode = "period") => {
@@ -718,6 +756,7 @@ function CustomersPage({ user, navigationIntent, onClearNavigationIntent, onNavi
         onDeliveryFilterChange={setDeliveryFilter}
         onDeliveryPreferenceReasonChange={setDeliveryPreferenceReason}
         onDeliveryChannelChange={setDeliveryChannel}
+        onDownloadDepositReceipt={downloadDepositReceipt}
         onOpenServiceCharges={openServiceCharges}
         onOpenStatement={openStatement}
         onRemove={remove}

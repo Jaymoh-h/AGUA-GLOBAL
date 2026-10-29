@@ -196,6 +196,7 @@ export const api = {
     commitOpeningBalanceImport: (csv, reviewNotes) =>
       request("/customers/opening-balances/imports/commit", { method: "POST", body: { csv, review_notes: reviewNotes } }),
     closeAccount: (id, payload) => request(`/customers/${id}/close`, { method: "POST", body: payload }),
+    downloadDepositReceipt: (id) => requestBlob(`/customers/${id}/deposit-receipt`),
     create: (payload) => request("/customers", { method: "POST", body: payload }),
     update: (id, payload) => request(`/customers/${id}`, { method: "PUT", body: payload }),
     remove: (id, payload) => request(`/customers/${id}`, { method: "DELETE", body: payload })

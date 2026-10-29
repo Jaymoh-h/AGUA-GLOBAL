@@ -80,7 +80,7 @@ CLIENT_ORIGIN=https://www.example.com,https://status.example.com,https://docs.ex
 | `TWILIO_AUTH_TOKEN` | Twilio | `<secret>` | Twilio auth token |
 | `TWILIO_PHONE_NUMBER` | Twilio | `+123456789` | Twilio sender number |
 | `TWILIO_MESSAGING_SERVICE_SID` | Optional Twilio | `MG...` | Twilio messaging service |
-| `AT_USERNAME` | Africa's Talking | `sandbox` | Africa's Talking username |
+| `AT_USERNAME` | Africa's Talking | `sandbox` | Africa's Talking app username; `sandbox` selects sandbox endpoints for both channels |
 | `AT_API_KEY` | Africa's Talking | `<secret>` | Africa's Talking API key |
 | `AT_SENDER_ID` | Optional | `AGUA` | Sender ID |
 
@@ -88,8 +88,11 @@ CLIENT_ORIGIN=https://www.example.com,https://status.example.com,https://docs.ex
 
 | Variable | Required For WhatsApp | Example | Purpose |
 | --- | --- | --- | --- |
-| `WHATSAPP_PROVIDER` | Yes | `twilio`, `meta`, or `none` | Selects WhatsApp provider |
+| `WHATSAPP_PROVIDER` | Yes | `africastalking`, `twilio`, `meta`, or `none` | Selects WhatsApp provider |
 | `WHATSAPP_DEFAULT_COUNTRY_CODE` | No | `254` | Default country code |
+| `AT_USERNAME`, `AT_API_KEY` | Africa's Talking | See SMS variables | Shared app username and API key |
+| `AT_WHATSAPP_NUMBER` | Africa's Talking | `+2547...` | Onboarded WhatsApp sender number in international format |
+| `AT_WHATSAPP_TEMPLATE_HEADER_VALUE` | Africa's Talking templates | `AGUA` | Shared non-empty header value required by the provider's published SDK template payload |
 | `TWILIO_WHATSAPP_FROM` | Twilio | `whatsapp:+14155238886` | Twilio WhatsApp sender |
 | `WHATSAPP_TWILIO_ACCOUNT_SID` | Optional Twilio | `AC...` | Overrides SMS Twilio SID |
 | `WHATSAPP_TWILIO_AUTH_TOKEN` | Optional Twilio | `<secret>` | Overrides SMS Twilio token |
@@ -97,6 +100,10 @@ CLIENT_ORIGIN=https://www.example.com,https://status.example.com,https://docs.ex
 | `WHATSAPP_PHONE_NUMBER_ID` | Meta | `123456789` | Meta phone number ID |
 | `WHATSAPP_ACCESS_TOKEN` | Meta | `<secret>` | Meta Cloud API token |
 | `WHATSAPP_API_VERSION` | Meta | `v20.0` | Meta API version |
+
+For Africa's Talking, complete provider and Meta onboarding and use an approved WhatsApp template ID in the Communications template field. Body variables are sent in the listed order. Free-form messages are subject to WhatsApp's customer-service window. The provider's acceptance is not proof of handset delivery; verify delivery in the provider dashboard. SMS sender IDs require provider approval, and the wallet must be funded. Never place keys in the client or repository. Set production variables in the hosting secret manager and redeploy before a controlled test.
+
+The invoice Communications screen supports provider template metadata. Payment-plan, standing-order, and disconnection follow-up screens currently send free-form WhatsApp text, so they require an open customer-service window; they do not yet send the saved provider-template ID. Use the provider-approved channel and a controlled recipient until those workflows support approved templates.
 
 ## Secret Handling Rules
 

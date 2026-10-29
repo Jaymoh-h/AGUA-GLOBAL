@@ -87,6 +87,12 @@ module.exports = {
   whatsapp: {
     provider: process.env.WHATSAPP_PROVIDER || "none",
     defaultCountryCode: process.env.WHATSAPP_DEFAULT_COUNTRY_CODE || process.env.SMS_DEFAULT_COUNTRY_CODE || "254",
+    africasTalking: {
+      username: process.env.AT_USERNAME || process.env.AFRICASTALKING_USERNAME,
+      apiKey: process.env.AT_API_KEY || process.env.AFRICASTALKING_API_KEY,
+      from: process.env.AT_WHATSAPP_NUMBER || "",
+      templateHeaderValue: process.env.AT_WHATSAPP_TEMPLATE_HEADER_VALUE || ""
+    },
     twilio: {
       accountSid: process.env.WHATSAPP_TWILIO_ACCOUNT_SID || process.env.TWILIO_ACCOUNT_SID,
       authToken: process.env.WHATSAPP_TWILIO_AUTH_TOKEN || process.env.TWILIO_AUTH_TOKEN,

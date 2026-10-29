@@ -91,13 +91,27 @@ const nextDocumentNumber = async (client, type) => {
   const prefixColumn = type === "receipt" ? "receipt_number_prefix" : "bill_number_prefix";
   const nextColumn = type === "receipt" ? "receipt_number_next" : "bill_number_next";
   const numberColumn = type === "receipt" ? "receipt_number" : "bill_number";
-  const documentTable = type === "receipt" ? "payments" : "bills";
   const prefix = settings[prefixColumn] || (type === "receipt" ? "RCPT" : "BILL");
   let nextValue = Number(settings[nextColumn] || 1);
   let number = `${prefix}-${padSequence(nextValue, settings.number_padding)}`;
 
   // Settings can be restored from a backup that predates imported documents. Keep the sequence ahead of retained records.
-  while ((await client.query(`SELECT 1 FROM ${documentTable} WHERE ${numberColumn} = $1 LIMIT 1`, [number])).rows[0]) {
+  const numberExists = async (candidate) => {
+    if (type === "receipt") {
+      return (
+        await client.query(
+          `SELECT 1 FROM payments WHERE receipt_number = $1
+           UNION ALL
+           SELECT 1 FROM customer_deposit_receipts WHERE receipt_number = $1
+           LIMIT 1`,
+          [candidate]
+        )
+      ).rows[0];
+    }
+    return (await client.query(`SELECT 1 FROM bills WHERE ${numberColumn} = $1 LIMIT 1`, [candidate])).rows[0];
+  };
+
+  while (await numberExists(number)) {
     nextValue += 1;
     number = `${prefix}-${padSequence(nextValue, settings.number_padding)}`;
   }

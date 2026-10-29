@@ -22,6 +22,7 @@ function CustomerManagementWorkspace({
   onEntryOpenChange,
   onDeliveryFilterChange,
   onDeliveryPreferenceReasonChange,
+  onDownloadDepositReceipt,
   onExport,
   onFieldChange,
   onOpenServiceCharges,
@@ -74,6 +75,20 @@ function CustomerManagementWorkspace({
           </label>
           <label>Deposit amount<input value={form.deposit_amount} onChange={(event) => onFieldChange("deposit_amount", event.target.value)} type="number" min="0" /></label>
           <label className="checkbox-row"><input checked={Boolean(form.deposit_paid)} onChange={(event) => onFieldChange("deposit_paid", event.target.checked)} type="checkbox" />Deposit paid</label>
+          {form.deposit_paid ? <>
+            <label>Deposit paid date<input value={form.deposit_paid_at} onChange={(event) => onFieldChange("deposit_paid_at", event.target.value)} type="date" /></label>
+            <label>
+              Deposit payment channel
+              <select value={form.deposit_payment_channel} onChange={(event) => onFieldChange("deposit_payment_channel", event.target.value)}>
+                <option value="cash">Cash</option>
+                <option value="mpesa_paybill">M-Pesa Paybill</option>
+                <option value="bank">Bank</option>
+              </select>
+            </label>
+            <label>Transaction reference<input value={form.deposit_external_reference} onChange={(event) => onFieldChange("deposit_external_reference", event.target.value)} required={["bank", "mpesa_paybill"].includes(form.deposit_payment_channel)} /></label>
+            <label>Received from<input value={form.deposit_received_from} onChange={(event) => onFieldChange("deposit_received_from", event.target.value)} /></label>
+            <label>Deposit notes<textarea value={form.deposit_notes} onChange={(event) => onFieldChange("deposit_notes", event.target.value)} maxLength={1000} /></label>
+          </> : null}
           <label>Opening balance<input value={form.opening_balance_amount} onChange={(event) => onFieldChange("opening_balance_amount", event.target.value)} type="number" step="0.01" /></label>
           <label>Opening balance date<input value={form.opening_balance_date} onChange={(event) => onFieldChange("opening_balance_date", event.target.value)} type="date" required={Number(form.opening_balance_amount || 0) !== 0} /></label>
           <label>
@@ -111,13 +126,14 @@ function CustomerManagementWorkspace({
                 <td data-label="Account">{customer.acc_number}</td><td data-label="Location">{customer.zone_name || customer.location}</td>
                 <td data-label="Rate"><strong>{customer.rate_name}</strong><small>{Number(customer.rate).toLocaleString()} | {customer.preferred_delivery_channel || "email"}</small></td>
                 <td data-label="Delivery"><strong>{customer.delivery_state?.label || "-"}</strong><small>{customer.preferred_delivery_channel || "email"}</small></td>
-                <td data-label="Deposit"><strong>{customer.deposit_paid ? "Paid" : "Not paid"}</strong><small>{Number(customer.deposit_amount || 0).toLocaleString()}</small></td>
+                <td data-label="Deposit"><strong>{customer.deposit_paid ? "Paid" : "Not paid"}</strong><small>{customer.deposit_receipt_number || Number(customer.deposit_amount || 0).toLocaleString()}</small></td>
                 <td data-label="Opening"><strong>{money(customer.opening_balance_amount)}</strong><small>{customer.opening_balance_date ? new Date(customer.opening_balance_date).toLocaleDateString() : "-"}</small></td>
                 <td data-label="Balance"><strong>{moneyAbs(customer.balance_due)}</strong><small>{accountPositionLabel(customer.balance_due)}</small></td>
                 {canWrite ? <td className="row-actions mobile-record-actions" data-label="Actions">
                   <button type="button" onClick={() => onSelectCustomer(customer)}>View</button>
                   <button type="button" onClick={() => onEdit(customer)}>Edit</button>
                   <button type="button" onClick={() => onOpenStatement(customer)} title="Generate customer statement"><FileText size={15} />Statement</button>
+                  {customer.deposit_receipt_number ? <button type="button" onClick={() => onDownloadDepositReceipt(customer)} title="Download initial deposit receipt"><Download size={15} />Receipt</button> : null}
                   <button type="button" onClick={() => onOpenServiceCharges(customer)} title="Manage customer service charges">Service Charges</button>
                   {userRole === "admin" ? <button className="danger-button" type="button" onClick={() => onRemove(customer)} title="Delete customer"><Trash2 size={15} /></button> : null}
                   {customer.status !== "inactive" ? <button type="button" onClick={() => onCloseAccount(customer)}>Close</button> : null}
