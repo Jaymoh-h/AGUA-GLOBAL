@@ -102,6 +102,10 @@ Meter reader cannot:
 
 ## Customer
 
+### Portal Provisioning
+
+Every customer account is visible in the customer register with a portal state before a portal user is created. A customer with a recorded email is marked **Ready to set up**; a customer without one is marked **Email required**. An admin can open the prefilled client-access form directly from that customer row, review the customer name, email, phone, linked account, and temporary password, then create the active customer user account. The first login requires the client to change that temporary password.
+
 Customer can:
 
 - Access `/api/portal/dashboard`.

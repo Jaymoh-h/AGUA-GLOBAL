@@ -387,7 +387,7 @@ function App() {
     knowledge: <KnowledgeBasePage user={user} />,
     rates: <RatesPage user={user} />,
     zones: <ZonesPage user={user} />,
-    users: <UsersPage user={user} />
+    users: <UsersPage user={user} navigationIntent={navigationIntent} onClearNavigationIntent={clearNavigationIntent} />
   };
 
   return (

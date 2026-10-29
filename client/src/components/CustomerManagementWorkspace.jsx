@@ -18,6 +18,7 @@ function CustomerManagementWorkspace({
   moneyAbs,
   onCloseAccount,
   onDeliveryChannelChange,
+  onStartPortalAccess,
   onEdit,
   onEntryOpenChange,
   onDeliveryFilterChange,
@@ -34,6 +35,7 @@ function CustomerManagementWorkspace({
   onZoneChange,
   rates,
   statusFilter,
+  canManagePortal,
   userRole,
   zoneFilter,
   zones
@@ -118,7 +120,7 @@ function CustomerManagementWorkspace({
         </div>
         <TableControls table={customerTable} label="customers" placeholder="Search customers" />
         <div className="table-wrap"><table className="mobile-record-table customer-record-table">
-          <thead><tr><th>Name</th><th>Account</th><th>Location</th><th>Rate</th><th>Delivery</th><th>Deposit</th><th>Opening</th><th>Balance</th>{canWrite ? <th>Actions</th> : null}</tr></thead>
+          <thead><tr><th>Name</th><th>Account</th><th>Location</th><th>Rate</th><th>Delivery</th><th>Portal</th><th>Deposit</th><th>Opening</th><th>Balance</th>{canWrite ? <th>Actions</th> : null}</tr></thead>
           <tbody>
             {customerTable.visibleRows.length ? customerTable.visibleRows.map((customer) => (
               <tr key={customer.id}>
@@ -126,6 +128,7 @@ function CustomerManagementWorkspace({
                 <td data-label="Account">{customer.acc_number}</td><td data-label="Location">{customer.zone_name || customer.location}</td>
                 <td data-label="Rate"><strong>{customer.rate_name}</strong><small>{Number(customer.rate).toLocaleString()} | {customer.preferred_delivery_channel || "email"}</small></td>
                 <td data-label="Delivery"><strong>{customer.delivery_state?.label || "-"}</strong><small>{customer.preferred_delivery_channel || "email"}</small></td>
+                <td data-label="Portal"><strong>{customer.portal_access_status === "active" ? "Active" : customer.portal_access_status === "inactive" ? "Locked" : customer.portal_access_status === "contact_required" ? "Email required" : "Ready to set up"}</strong><small>{customer.portal_user_email || customer.email || "No portal login"}</small></td>
                 <td data-label="Deposit"><strong>{customer.deposit_paid ? "Paid" : "Not paid"}</strong><small>{customer.deposit_receipt_number || Number(customer.deposit_amount || 0).toLocaleString()}</small></td>
                 <td data-label="Opening"><strong>{money(customer.opening_balance_amount)}</strong><small>{customer.opening_balance_date ? new Date(customer.opening_balance_date).toLocaleDateString() : "-"}</small></td>
                 <td data-label="Balance"><strong>{moneyAbs(customer.balance_due)}</strong><small>{accountPositionLabel(customer.balance_due)}</small></td>
@@ -134,12 +137,13 @@ function CustomerManagementWorkspace({
                   <button type="button" onClick={() => onEdit(customer)}>Edit</button>
                   <button type="button" onClick={() => onOpenStatement(customer)} title="Generate customer statement"><FileText size={15} />Statement</button>
                   {customer.deposit_receipt_number ? <button type="button" onClick={() => onDownloadDepositReceipt(customer)} title="Download initial deposit receipt"><Download size={15} />Receipt</button> : null}
+                  {canManagePortal && !customer.portal_user_id ? <button type="button" onClick={() => onStartPortalAccess(customer)} title="Set up customer portal access">Portal access</button> : null}
                   <button type="button" onClick={() => onOpenServiceCharges(customer)} title="Manage customer service charges">Service Charges</button>
                   {userRole === "admin" ? <button className="danger-button" type="button" onClick={() => onRemove(customer)} title="Delete customer"><Trash2 size={15} /></button> : null}
                   {customer.status !== "inactive" ? <button type="button" onClick={() => onCloseAccount(customer)}>Close</button> : null}
                 </td> : null}
               </tr>
-            )) : <EmptyTableRow colSpan={canWrite ? 9 : 8} title="No customers found" detail="Add customers or adjust the filters." />}
+            )) : <EmptyTableRow colSpan={canWrite ? 10 : 9} title="No customers found" detail="Add customers or adjust the filters." />}
           </tbody>
         </table></div>
       </div>

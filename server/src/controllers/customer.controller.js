@@ -504,6 +504,16 @@ const listCustomers = asyncHandler(async (req, res) => {
       r.amount AS rate_amount,
       z.name AS zone_name,
       dr.receipt_number AS deposit_receipt_number,
+      portal_user.id AS portal_user_id,
+      portal_user.email AS portal_user_email,
+      portal_user.is_active AS portal_user_is_active,
+      portal_user.last_login_at AS portal_last_login_at,
+      CASE
+        WHEN portal_user.id IS NOT NULL AND portal_user.is_active = TRUE THEN 'active'
+        WHEN portal_user.id IS NOT NULL THEN 'inactive'
+        WHEN NULLIF(BTRIM(c.email), '') IS NULL THEN 'contact_required'
+        ELSE 'ready_to_set_up'
+      END AS portal_access_status,
       CASE
         WHEN NOT EXISTS (
           SELECT 1 FROM bills mb
@@ -527,6 +537,15 @@ const listCustomers = asyncHandler(async (req, res) => {
      JOIN rates r ON r.id = c.rate_id
      JOIN zones z ON z.id = c.zone_id
      LEFT JOIN customer_deposit_receipts dr ON dr.customer_id = c.id
+     LEFT JOIN LATERAL (
+       SELECT u.id, u.email, u.is_active, u.last_login_at
+       FROM portal_user_customers puc
+       JOIN users u ON u.id = puc.user_id
+       WHERE puc.customer_id = c.id
+         AND u.role = 'customer'
+       ORDER BY u.is_active DESC, puc.is_primary DESC, u.created_at ASC
+       LIMIT 1
+     ) portal_user ON TRUE
      WHERE (c.name ILIKE $1 OR c.acc_number ILIKE $1 OR c.phone ILIKE $1 OR c.email ILIKE $1)
      ${customerScope}
      ORDER BY c.created_at DESC`,

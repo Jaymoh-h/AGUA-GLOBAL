@@ -42,7 +42,7 @@ const formatDateTime = (value) => {
 const customerLabel = (customer) => `${customer.acc_number} - ${customer.name}`;
 const roleLabel = (role) => roleOptions.find((option) => option.value === role)?.label || String(role || "").replace("_", " ");
 
-function UsersPage({ user: currentUser }) {
+function UsersPage({ user: currentUser, navigationIntent, onClearNavigationIntent }) {
   const [users, setUsers] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -81,6 +81,27 @@ function UsersPage({ user: currentUser }) {
   useEffect(() => {
     load({ showState: true }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (navigationIntent?.page !== "users" || navigationIntent.focus !== "portal_access" || !navigationIntent.customer_id) return;
+    const customer = customers.find((row) => Number(row.id) === Number(navigationIntent.customer_id));
+    if (!customer) return;
+
+    setEditingId(null);
+    setAccessForm(blankAccessProfile);
+    setForm({
+      ...blank,
+      name: customer.name || "",
+      email: customer.email || "",
+      phone: customer.phone || "",
+      role: "customer",
+      customer_id: customer.id,
+      linked_customer_ids: [Number(customer.id)]
+    });
+    setEntryOpen(true);
+    setMessage(customer.email ? "Client portal access is ready to set up." : "Add the client's login email before creating portal access.");
+    onClearNavigationIntent?.();
+  }, [customers, navigationIntent, onClearNavigationIntent]);
 
   const resetForm = () => {
     setEditingId(null);
@@ -293,9 +314,11 @@ function UsersPage({ user: currentUser }) {
       inactive: users.filter((account) => !account.is_active).length,
       customers: users.filter((account) => account.role === "customer").length,
       passwordReset: users.filter((account) => account.must_change_password).length,
-      noLogin: users.filter((account) => account.is_active && !account.last_login_at).length
+      noLogin: users.filter((account) => account.is_active && !account.last_login_at).length,
+      portalSetupReady: customers.filter((customer) => customer.portal_access_status === "ready_to_set_up").length,
+      portalContactRequired: customers.filter((customer) => customer.portal_access_status === "contact_required").length
     }),
-    [users]
+    [customers, users]
   );
 
   if (initialLoading) {
@@ -328,6 +351,7 @@ function UsersPage({ user: currentUser }) {
         <div className={userSummary.passwordReset ? "needs-attention" : ""}><span>Password changes</span><strong>{userSummary.passwordReset}</strong><small>Users required to update credentials</small></div>
         <div className={userSummary.noLogin ? "needs-attention" : ""}><span>Never signed in</span><strong>{userSummary.noLogin}</strong><small>Active accounts with no login record</small></div>
         <div><span>Portal accounts</span><strong>{userSummary.customers}</strong><small>{userSummary.inactive} inactive account{userSummary.inactive === 1 ? "" : "s"}</small></div>
+        <div className={userSummary.portalContactRequired ? "needs-attention" : ""}><span>Portal setup</span><strong>{userSummary.portalSetupReady}</strong><small>{userSummary.portalContactRequired} client{userSummary.portalContactRequired === 1 ? "" : "s"} need email</small></div>
       </section>
 
       <section className="workspace-grid entry-led-workspace access-control-workspace">

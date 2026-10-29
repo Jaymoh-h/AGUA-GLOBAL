@@ -485,7 +485,7 @@ function CustomersPage({ user, navigationIntent, onClearNavigationIntent, onNavi
   });
   const customerTable = useTableControls(filteredCustomers, {
     storageKey: `customer-register:${user?.id || "anonymous"}:${user?.access_profile_id || "legacy"}`,
-    searchFields: ["name", "acc_number", "phone", "email", "zone_name", "location", "rate_name", "status", "preferred_delivery_channel"]
+    searchFields: ["name", "acc_number", "phone", "email", "zone_name", "location", "rate_name", "status", "preferred_delivery_channel", "portal_access_status", "portal_user_email"]
   });
 
   if (initialLoading) {
@@ -739,6 +739,7 @@ function CustomersPage({ user, navigationIntent, onClearNavigationIntent, onNavi
       {!selectedCustomer ? <CustomerManagementWorkspace
         accountPositionLabel={accountPositionLabel}
         busy={customerReviewBusy || Boolean(customerReview)}
+        canManagePortal={user.role === "admin"}
         canWrite={canWrite}
         customerTable={customerTable}
         deliveryFilter={deliveryFilter}
@@ -761,6 +762,7 @@ function CustomersPage({ user, navigationIntent, onClearNavigationIntent, onNavi
         onOpenStatement={openStatement}
         onRemove={remove}
         onSelectCustomer={setSelectedCustomer}
+        onStartPortalAccess={(customer) => onNavigate?.({ page: "users", focus: "portal_access", customer_id: customer.id })}
         onStatusChange={setStatusFilter}
         onSubmit={submit}
         onZoneChange={setZoneFilter}
