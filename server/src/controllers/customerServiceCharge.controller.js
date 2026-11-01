@@ -2,7 +2,7 @@ const pool = require("../db/pool");
 const ApiError = require("../utils/apiError");
 const asyncHandler = require("../utils/asyncHandler");
 const { recordAuditEvent } = require("../services/audit.service");
-const { createBillNumber } = require("../services/billingPeriod.service");
+const { createBillNumber, getOrCreateBillingPeriod } = require("../services/billingPeriod.service");
 const { assertNoFutureDates } = require("../services/dateGuard.service");
 
 const isDateOnly = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
@@ -152,6 +152,7 @@ const createCustomerServiceCharge = asyncHandler(async (req, res) => {
     if (!customer) {
       throw new ApiError(404, "Customer not found.");
     }
+    const billingPeriod = await getOrCreateBillingPeriod(client, chargeDate, req.user.id);
 
     const chargeNumber = await createChargeNumber(client);
     const chargeResult = await client.query(
@@ -179,15 +180,15 @@ const createCustomerServiceCharge = asyncHandler(async (req, res) => {
     const billNumber = await createBillNumber(client);
     const billResult = await client.query(
       `INSERT INTO bills (
-         customer_id, bill_number, billing_month, previous_reading, current_reading,
+         customer_id, billing_period_id, bill_number, billing_month, previous_reading, current_reading,
          units_used, rate, amount, subtotal_amount, total_amount, balance_amount,
          paid_amount, status, due_date, issued_at, bill_origin, service_charge_id,
          bill_pay_status, payability_reason
        )
-       VALUES ($1, $2, $3, 0, 0, 0, 0, $4, $4, $4, $4, 0, 'unpaid', $5, NOW(),
-               'service_charge', $6, 'payable', $7)
+       VALUES ($1, $2, $3, $4, 0, 0, 0, 0, $5, $5, $5, $5, 0, 'unpaid', $6, NOW(),
+               'service_charge', $7, 'payable', $8)
        RETURNING *`,
-      [customer.id, billNumber, chargeDate, chargeAmount, dueDate, charge.id, cleanDescription]
+      [customer.id, billingPeriod.id, billNumber, chargeDate, chargeAmount, dueDate, charge.id, cleanDescription]
     );
     const bill = billResult.rows[0];
     const linkedCharge = await client.query(

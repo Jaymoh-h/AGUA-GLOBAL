@@ -29,8 +29,8 @@ const buildPaymentInformation = (business, accountNumber) => {
 const buildInvoiceTemplateValues = ({ row, business }) => {
   const businessName = business.business_name || "Water Billing";
   const currency = business.default_currency || "KES";
-  const total = asNumber(row.total_amount || row.amount);
-  const paidAmount = asNumber(row.recent_paid_amount);
+  const total = asNumber(row.period_total_amount || row.total_amount || row.amount);
+  const paidAmount = asNumber(row.period_paid_amount);
   const outstanding = asNumber(row.statement_total_outstanding);
   const priorOutstanding = asNumber(row.statement_arrears_after_payment);
   const invoicePeriod = row.billing_period_name || dateOnly(row.billing_month);
@@ -45,6 +45,16 @@ const buildInvoiceTemplateValues = ({ row, business }) => {
     units_consumed: formatNumber(row.units_used),
     amount: money(total, currency),
     amount_paid: money(paidAmount, currency),
+    meter_consumption: row.meter_consumption_amount > 0 && !(row.old_meter_units > 0 || row.new_meter_units > 0)
+      ? `Meter consumption: ${formatNumber(row.meter_consumption_units)} units (${money(row.meter_consumption_amount, currency)}).`
+      : "",
+    old_meter_consumption: row.old_meter_units > 0 ? `Old meter consumption: ${formatNumber(row.old_meter_units)} units.` : "",
+    new_meter_consumption: row.new_meter_units > 0 ? `New meter consumption: ${formatNumber(row.new_meter_units)} units.` : "",
+    additional_charges: row.additional_charges_amount > 0
+      ? `Additional charges: ${row.additional_charge_summary || "Service charge"} (${money(row.additional_charges_amount, currency)}).`
+      : "",
+    period_charges: money(total, currency),
+    period_amount_due: money(row.period_balance_amount, currency),
     arrears_after_payment: money(priorOutstanding, currency),
     total_outstanding: money(outstanding, currency),
     overdue_balance: money(row.overdue_balance, currency),
@@ -71,11 +81,13 @@ const renderInvoiceMessage = ({ row, business, template = defaultInvoiceTemplate
 const defaultInvoiceTemplate = [
   "{{business_name}}",
   "Dear, {{customer_name}}. {{acc_number}}",
-  "Water bill dated {{invoice_period}}.",
-  "Previous reading. {{previous_reading}}.",
-  "Current reading. {{current_reading}}.",
-  "Units consumed. {{units_consumed}}. {{amount}}",
-  "Amount paid. {{amount_paid}}",
+  "Charges for {{invoice_period}}.",
+  "{{old_meter_consumption}}",
+  "{{new_meter_consumption}}",
+  "{{meter_consumption}}",
+  "{{additional_charges}}",
+  "Period charges. {{period_charges}}",
+  "Period amount due. {{period_amount_due}}",
   "Arrears after payment. {{arrears_after_payment}}",
   "Total outstanding. {{total_outstanding}}",
   "Due date. {{due_date}}",
@@ -205,6 +217,7 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
         z.name AS zone_name,
         latest_bill.id AS bill_id,
         latest_bill.bill_number,
+        latest_bill.billing_period_id,
         latest_bill.billing_month,
         latest_bill.billing_period_name,
         latest_bill.previous_reading,
@@ -214,14 +227,26 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
         latest_bill.total_amount,
         latest_bill.paid_amount,
         latest_bill.balance_amount,
-        latest_bill.due_date,
+        COALESCE(period_totals.period_due_date, latest_bill.due_date) AS due_date,
         latest_bill.status AS bill_status,
+        COALESCE(period_totals.meter_consumption_amount, 0) AS meter_consumption_amount,
+        COALESCE(period_totals.meter_consumption_units, 0) AS meter_consumption_units,
+        COALESCE(period_totals.additional_charges_amount, 0) AS additional_charges_amount,
+        COALESCE(period_totals.period_total_amount, latest_bill.total_amount, 0) AS period_total_amount,
+        COALESCE(period_totals.period_paid_amount, 0) AS period_paid_amount,
+        COALESCE(period_totals.period_balance_amount, latest_bill.balance_amount, 0) AS period_balance_amount,
+        period_totals.additional_charge_summary,
+        COALESCE(meter_segments.old_meter_units, 0) AS old_meter_units,
+        COALESCE(meter_segments.new_meter_units, 0) AS new_meter_units,
         COALESCE(recent_payments.recent_paid_amount, 0) AS recent_paid_amount,
         COALESCE(customer_totals.gross_outstanding, 0) AS gross_outstanding,
         COALESCE(prior_totals.prior_outstanding, 0) AS prior_outstanding,
         COALESCE(customer_credit.credit_balance, 0) AS credit_balance,
         COALESCE(statement_totals.arrears_after_payment, 0) AS statement_arrears_after_payment,
-        COALESCE(statement_totals.total_outstanding, 0) AS statement_total_outstanding,
+        GREATEST(
+          COALESCE(customer_totals.gross_outstanding, 0) - COALESCE(customer_credit.credit_balance, 0),
+          0
+        ) AS statement_total_outstanding,
         COALESCE(overdue_totals.overdue_balance, 0) AS overdue_balance,
         overdue_totals.oldest_due_date,
         COALESCE(CURRENT_DATE - overdue_totals.oldest_due_date, 0) AS days_overdue
@@ -240,6 +265,7 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
        SELECT
          b.id,
          b.bill_number,
+         b.billing_period_id,
          b.billing_month,
          bp.name AS billing_period_name,
          b.previous_reading,
@@ -266,9 +292,67 @@ const getInvoicePreviewRows = async (client, customerId = null) => {
        ) bill_allocations ON TRUE
        WHERE b.customer_id = c.id
          AND b.bill_pay_status = 'payable'
-       ORDER BY b.billing_month DESC, b.created_at DESC, b.id DESC
+       ORDER BY b.billing_month DESC,
+                CASE WHEN b.bill_origin = 'meter_reading' THEN 0 ELSE 1 END,
+                b.created_at DESC, b.id DESC
        LIMIT 1
      ) latest_bill ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT
+         COALESCE(SUM(COALESCE(NULLIF(b.total_amount, 0), b.amount, 0)) FILTER (WHERE b.bill_origin = 'meter_reading'), 0) AS meter_consumption_amount,
+         COALESCE(SUM(b.units_used) FILTER (WHERE b.bill_origin = 'meter_reading'), 0) AS meter_consumption_units,
+         COALESCE(SUM(COALESCE(NULLIF(b.total_amount, 0), b.amount, 0)) FILTER (WHERE b.bill_origin <> 'meter_reading'), 0) AS additional_charges_amount,
+         COALESCE(SUM(COALESCE(NULLIF(b.total_amount, 0), b.amount, 0)), 0) AS period_total_amount,
+         COALESCE(SUM(GREATEST(COALESCE(b.paid_amount, 0), COALESCE(bill_allocations.allocated_amount, 0))), 0) AS period_paid_amount,
+         COALESCE(SUM(GREATEST(
+           COALESCE(NULLIF(b.total_amount, 0), b.amount, 0) -
+             GREATEST(COALESCE(b.paid_amount, 0), COALESCE(bill_allocations.allocated_amount, 0)),
+           0
+         )), 0) AS period_balance_amount,
+         MIN(COALESCE(b.due_date, b.billing_month)) AS period_due_date,
+         STRING_AGG(
+           CASE
+             WHEN b.bill_origin = 'service_charge' THEN COALESCE(sc.description, sc.charge_type, 'Service charge')
+             ELSE REPLACE(INITCAP(REPLACE(b.bill_origin, '_', ' ')), '_', ' ')
+           END,
+           '; ' ORDER BY b.id
+         ) FILTER (WHERE b.bill_origin <> 'meter_reading') AS additional_charge_summary
+       FROM bills b
+       LEFT JOIN customer_service_charges sc ON sc.id = b.service_charge_id
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(SUM(pa.amount), 0) AS allocated_amount
+         FROM payment_allocations pa
+         WHERE pa.bill_id = b.id
+       ) bill_allocations ON TRUE
+       WHERE b.customer_id = c.id
+         AND b.bill_pay_status = 'payable'
+         AND latest_bill.id IS NOT NULL
+         AND (
+           (latest_bill.billing_period_id IS NOT NULL AND b.billing_period_id = latest_bill.billing_period_id)
+           OR (
+             latest_bill.billing_period_id IS NULL
+             AND b.billing_period_id IS NULL
+             AND b.billing_month = latest_bill.billing_month
+           )
+         )
+     ) period_totals ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT
+         COALESCE(SUM(bms.units_used) FILTER (WHERE bms.segment_type = 'replacement_old'), 0) AS old_meter_units,
+         COALESCE(SUM(bms.units_used) FILTER (WHERE bms.segment_type = 'replacement_new'), 0) AS new_meter_units
+       FROM bill_meter_segments bms
+       JOIN bills b ON b.id = bms.bill_id
+       WHERE b.customer_id = c.id
+         AND latest_bill.id IS NOT NULL
+         AND (
+           (latest_bill.billing_period_id IS NOT NULL AND b.billing_period_id = latest_bill.billing_period_id)
+           OR (
+             latest_bill.billing_period_id IS NULL
+             AND b.billing_period_id IS NULL
+             AND b.billing_month = latest_bill.billing_month
+           )
+         )
+     ) meter_segments ON TRUE
      LEFT JOIN LATERAL (
        SELECT b.billing_month, b.issued_at, b.created_at
        FROM bills b
@@ -476,14 +560,23 @@ const mapInvoicePreviewRow = ({ row, business }) => {
     preferred_delivery_channel: row.preferred_delivery_channel,
     bill_id: row.bill_id,
     bill_number: row.bill_number,
+    billing_period_id: row.billing_period_id,
     bill_status: row.bill_status,
     billing_month: row.billing_month,
     billing_period_name: row.billing_period_name,
     previous_reading: row.previous_reading,
     current_reading: row.current_reading,
     units_used: row.units_used,
-    amount: row.total_amount || row.amount,
-    amount_paid: asNumber(row.recent_paid_amount),
+    amount: row.period_total_amount || row.total_amount || row.amount,
+    amount_paid: asNumber(row.period_paid_amount),
+    meter_consumption_amount: asNumber(row.meter_consumption_amount),
+    meter_consumption_units: asNumber(row.meter_consumption_units),
+    old_meter_units: asNumber(row.old_meter_units),
+    new_meter_units: asNumber(row.new_meter_units),
+    additional_charges_amount: asNumber(row.additional_charges_amount),
+    additional_charge_summary: row.additional_charge_summary || "",
+    period_charges: asNumber(row.period_total_amount),
+    period_amount_due: asNumber(row.period_balance_amount),
     arrears_after_payment: arrearsAfterPayment,
     total_outstanding: totalOutstanding,
     overdue_balance: asNumber(row.overdue_balance),

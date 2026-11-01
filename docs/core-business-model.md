@@ -202,6 +202,7 @@ Replacement billing rule:
 - Current reading entry should show the latest previous reading for the active meter.
 - If replacement happens mid-period, bill old meter consumption up to final reading and new meter consumption from initial reading on one bill for the billing period.
 - Store each reading span as a bill meter segment so the bill remains auditable while tariff blocks, fixed charges, and VAT are calculated once from combined consumption.
+- Period invoice alerts summarize meter consumption, old/new replacement-meter units where applicable, and additional service charges before showing the period total and amount due.
 
 ### Meter Readings
 

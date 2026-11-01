@@ -109,7 +109,10 @@ const collectionMessageLibrary = [
     body: [
       "{{business_name}}",
       "Dear {{customer_name}} ({{acc_number}}),",
-      "Your {{invoice_period}} water bill of {{amount}} is due on {{due_date}}.",
+      "Charges for {{invoice_period}} total {{period_charges}}. Amount due: {{period_amount_due}} by {{due_date}}.",
+      "{{old_meter_consumption}}",
+      "{{new_meter_consumption}}",
+      "{{additional_charges}}",
       "Your current account balance is {{total_outstanding}}.",
       "{{payment_information}}",
       "For assistance contact {{business_phone}}."
@@ -793,7 +796,7 @@ function CommunicationsPage({ user, navigationIntent, onClearNavigationIntent, o
                 <input
                   value={whatsAppTemplateVariables}
                   onChange={(event) => setWhatsAppTemplateVariables(event.target.value)}
-                  placeholder="customer_name, acc_number, total_outstanding, due_date"
+                placeholder="customer_name, period_charges, period_amount_due, additional_charges"
                 />
                 <small>Comma-separated placeholders passed to the approved template body in order.</small>
               </label>
@@ -921,8 +924,9 @@ function CommunicationsPage({ user, navigationIntent, onClearNavigationIntent, o
                       <small>{row.bill_status || "-"}</small>
                     </td>
                     <td>
-                      <strong>{money(row.total_outstanding)}</strong>
-                      <small>Latest bill {money(row.arrears_after_payment)}</small>
+                      <strong>{money(row.period_amount_due)}</strong>
+                      <small>Period charges {money(row.period_charges)}</small>
+                      <small>Account balance {money(row.total_outstanding)}</small>
                     </td>
                     <td>
                       {row.issues?.length ? (
