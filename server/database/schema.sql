@@ -17,6 +17,7 @@ DROP TABLE IF EXISTS production_weekly_readings CASCADE;
 DROP TABLE IF EXISTS production_electricity_topups CASCADE;
 DROP TABLE IF EXISTS production_source_meters CASCADE;
 DROP TABLE IF EXISTS source_billing_requests CASCADE;
+DROP TABLE IF EXISTS bill_meter_segments CASCADE;
 DROP TABLE IF EXISTS customer_adjustments CASCADE;
 DROP TABLE IF EXISTS customer_deposit_transactions CASCADE;
 DROP TABLE IF EXISTS bill_penalty_applications CASCADE;
@@ -607,6 +608,25 @@ CREATE TABLE bills (
   service_charge_id INTEGER UNIQUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE bill_meter_segments (
+  id SERIAL PRIMARY KEY,
+  bill_id INTEGER NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+  meter_id INTEGER REFERENCES meters(id) ON DELETE SET NULL,
+  previous_reading_id INTEGER REFERENCES meter_readings(id) ON DELETE SET NULL,
+  current_reading_id INTEGER NOT NULL UNIQUE REFERENCES meter_readings(id) ON DELETE CASCADE,
+  previous_reading NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  current_reading NUMERIC(12, 2) NOT NULL,
+  units_used NUMERIC(12, 2) NOT NULL CHECK (units_used >= 0),
+  segment_type VARCHAR(30) NOT NULL DEFAULT 'standard'
+    CHECK (segment_type IN ('standard', 'replacement_old', 'replacement_new')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (bill_id, current_reading_id)
+);
+
+CREATE INDEX idx_bill_meter_segments_bill ON bill_meter_segments(bill_id);
+CREATE INDEX idx_bill_meter_segments_meter ON bill_meter_segments(meter_id, current_reading_id);
 
 CREATE TABLE communication_campaign_recipients (
   id SERIAL PRIMARY KEY,

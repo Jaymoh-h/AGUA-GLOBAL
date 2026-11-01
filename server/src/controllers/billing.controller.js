@@ -169,10 +169,14 @@ const getCloseBlockerSnapshot = async (client, period) => {
     runQuery(
       `SELECT COUNT(*) AS count
        FROM meter_readings mr
-       LEFT JOIN bills b ON b.current_reading_id = mr.id
        WHERE mr.billing_period_id = $1
          AND mr.previous_reading_id IS NOT NULL
-         AND b.id IS NULL`,
+         AND NOT EXISTS (
+           SELECT 1
+           FROM bills b
+           LEFT JOIN bill_meter_segments bms ON bms.bill_id = b.id
+           WHERE b.current_reading_id = mr.id OR bms.current_reading_id = mr.id
+         )`,
       periodIdParams
     ),
     runQuery(
@@ -351,10 +355,14 @@ const getBillingPeriodReadiness = asyncHandler(async (req, res) => {
     pool.query(
       `SELECT COUNT(*) AS count
        FROM meter_readings mr
-       LEFT JOIN bills b ON b.current_reading_id = mr.id
        WHERE mr.billing_period_id = $1
          AND mr.previous_reading_id IS NOT NULL
-         AND b.id IS NULL`,
+         AND NOT EXISTS (
+           SELECT 1
+           FROM bills b
+           LEFT JOIN bill_meter_segments bms ON bms.bill_id = b.id
+           WHERE b.current_reading_id = mr.id OR bms.current_reading_id = mr.id
+         )`,
       periodIdParams
     ),
     pool.query(
@@ -628,8 +636,13 @@ const getRevenueAssurance = asyncHandler(async (req, res) => {
        JOIN customers c ON c.id = mr.customer_id
        JOIN meters m ON m.id = mr.meter_id
        LEFT JOIN zones z ON z.id = c.zone_id
-       LEFT JOIN bills b ON b.current_reading_id = mr.id
-       WHERE mr.billing_period_id = $1 AND m.meter_role = 'client_billing' AND b.id IS NULL
+       WHERE mr.billing_period_id = $1 AND m.meter_role = 'client_billing'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM bills b
+           LEFT JOIN bill_meter_segments bms ON bms.bill_id = b.id
+           WHERE b.current_reading_id = mr.id OR bms.current_reading_id = mr.id
+         )
        ORDER BY units_used DESC, c.acc_number ASC`,
       [period.id]
     ),

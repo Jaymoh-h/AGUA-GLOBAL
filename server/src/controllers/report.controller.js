@@ -1475,8 +1475,13 @@ const getDataQualityChecks = asyncHandler(async (_req, res) => {
          'A reading with a previous reading normally creates a bill.',
          'medium'
        FROM meter_readings mr
-       LEFT JOIN bills b ON b.current_reading_id = mr.id
-       WHERE mr.previous_reading_id IS NOT NULL AND b.id IS NULL
+       WHERE mr.previous_reading_id IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1
+           FROM bills b
+           LEFT JOIN bill_meter_segments bms ON bms.bill_id = b.id
+           WHERE b.current_reading_id = mr.id OR bms.current_reading_id = mr.id
+         )
      ) checks
      ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, count DESC, label ASC`
   );

@@ -358,7 +358,8 @@ const buildActionCenter = async (role, monthlyBudget) => {
          AND NOT EXISTS (
            SELECT 1
            FROM bills b
-           WHERE b.current_reading_id = mr.id
+           LEFT JOIN bill_meter_segments bms ON bms.bill_id = b.id
+           WHERE b.current_reading_id = mr.id OR bms.current_reading_id = mr.id
          )`
     ),
     optionalQuery(
@@ -950,7 +951,8 @@ const buildPerformanceSnapshot = async (role, monthlyBudget) => {
          AND NOT EXISTS (
            SELECT 1
            FROM bills b
-           WHERE b.current_reading_id = mr.id
+           LEFT JOIN bill_meter_segments bms ON bms.bill_id = b.id
+           WHERE b.current_reading_id = mr.id OR bms.current_reading_id = mr.id
          )`
     ),
     optionalQuery(

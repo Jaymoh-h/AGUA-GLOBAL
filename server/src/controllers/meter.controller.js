@@ -5,7 +5,7 @@ const { getOrCreateBillingPeriod } = require("../services/billingPeriod.service"
 const { assertBillingPeriodEditableById, normalizeCorrectionReason } = require("../services/billingPeriodGuard.service");
 const { assertNotFutureDate } = require("../services/dateGuard.service");
 const { ensureActiveMeter, getMeterHistory, getPreviousReadingForMeter } = require("../services/meter.service");
-const { recalculateBillForReading } = require("./reading.controller");
+const { attachReplacementBillSegment, recalculateBillForReading } = require("./reading.controller");
 const { recordAuditEvent } = require("../services/audit.service");
 
 const meterRoles = ["client_billing", "source_backup", "shared_source_monitoring"];
@@ -440,6 +440,14 @@ const replaceMeter = asyncHandler(async (req, res) => {
         req.user.id
       ]
     );
+    if (bill && oldMeter.meter_role === "client_billing") {
+      await attachReplacementBillSegment(client, {
+        billId: bill.id,
+        meterId: oldMeter.id,
+        readingId: finalReading.id,
+        segmentType: "replacement_old"
+      });
+    }
     await recordAuditEvent(client, {
       req,
       action: "meter_event.created",

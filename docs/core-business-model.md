@@ -196,11 +196,12 @@ Business purpose:
 - Provides a clear, dispute-friendly trail for replacements.
 - Lets billing calculate old-meter usage plus new-meter usage in the same period if needed.
 
-Initial replacement rule recommendation:
+Replacement billing rule:
 
 - Record old final reading and new initial reading.
 - Current reading entry should show the latest previous reading for the active meter.
-- If replacement happens mid-period, bill old meter consumption up to final reading and new meter consumption from initial reading.
+- If replacement happens mid-period, bill old meter consumption up to final reading and new meter consumption from initial reading on one bill for the billing period.
+- Store each reading span as a bill meter segment so the bill remains auditable while tariff blocks, fixed charges, and VAT are calculated once from combined consumption.
 
 ### Meter Readings
 

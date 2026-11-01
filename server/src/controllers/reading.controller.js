@@ -91,6 +91,160 @@ const billingSourceForMeter = (meter) => (meter?.meter_role === "source_backup" 
 
 const defaultSourceReviewReason = "Source meter reading captured for billing review.";
 
+const upsertBillMeterSegment = async (client, { billId, meterId, previous, reading, segmentType }) => {
+  const unitsUsed = Number(reading.reading_value) - Number(previous.reading_value);
+  const result = await client.query(
+    `INSERT INTO bill_meter_segments (
+      bill_id, meter_id, previous_reading_id, current_reading_id,
+      previous_reading, current_reading, units_used, segment_type
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    ON CONFLICT (current_reading_id) DO UPDATE
+    SET bill_id = EXCLUDED.bill_id,
+        meter_id = EXCLUDED.meter_id,
+        previous_reading_id = EXCLUDED.previous_reading_id,
+        previous_reading = EXCLUDED.previous_reading,
+        current_reading = EXCLUDED.current_reading,
+        units_used = EXCLUDED.units_used,
+        segment_type = EXCLUDED.segment_type,
+        updated_at = NOW()
+    RETURNING *`,
+    [
+      billId,
+      meterId,
+      previous.id || null,
+      reading.id,
+      previous.reading_value,
+      reading.reading_value,
+      unitsUsed,
+      segmentType
+    ]
+  );
+  return result.rows[0];
+};
+
+const getSegmentedBillForReading = async (client, readingId) => {
+  const result = await client.query(
+    `SELECT b.*
+     FROM bill_meter_segments bms
+     JOIN bills b ON b.id = bms.bill_id
+     WHERE bms.current_reading_id = $1
+     FOR UPDATE OF b`,
+    [readingId]
+  );
+  return result.rows[0] || null;
+};
+
+const getReplacementBillForNewMeter = async (client, { customerId, meterId, billingPeriodId }) => {
+  const result = await client.query(
+    `SELECT b.*
+     FROM meter_events me
+     JOIN bill_meter_segments bms
+       ON bms.meter_id = me.old_meter_id
+      AND bms.segment_type = 'replacement_old'
+     JOIN bills b ON b.id = bms.bill_id
+     WHERE me.customer_id = $1
+       AND me.new_meter_id = $2
+       AND me.event_type = 'replacement'
+       AND b.billing_period_id = $3
+       AND b.bill_pay_status <> 'superseded'
+     ORDER BY me.event_date DESC, b.id DESC
+     LIMIT 1
+     FOR UPDATE OF b`,
+    [customerId, meterId, billingPeriodId]
+  );
+  return result.rows[0] || null;
+};
+
+const recalculateSegmentedBill = async (client, { bill, billingPeriod, rateId, readingDate }) => {
+  const segmentsResult = await client.query(
+    `SELECT bms.*, m.meter_number
+     FROM bill_meter_segments bms
+     LEFT JOIN meters m ON m.id = bms.meter_id
+     WHERE bms.bill_id = $1
+     ORDER BY bms.created_at, bms.id`,
+    [bill.id]
+  );
+  const segments = segmentsResult.rows;
+  if (!segments.length) return bill;
+
+  const unitsUsed = segments.reduce((total, segment) => total + Number(segment.units_used), 0);
+  const tariff = await getTariffWithBlocks(client, rateId, readingDate);
+  const charge = calculateTariffCharge(tariff, unitsUsed);
+  const nextPaidAmount = Math.min(Number(bill.paid_amount), charge.totalAmount);
+  const nextStatus = nextPaidAmount <= 0 ? "unpaid" : nextPaidAmount >= charge.totalAmount ? "paid" : "partial";
+  const tariffSnapshot = {
+    ...charge.tariffSnapshot,
+    meter_segments: segments.map((segment) => ({
+      meter_id: segment.meter_id,
+      meter_number: segment.meter_number || null,
+      previous_reading: Number(segment.previous_reading),
+      current_reading: Number(segment.current_reading),
+      units_used: Number(segment.units_used),
+      segment_type: segment.segment_type
+    }))
+  };
+  const result = await client.query(
+    `UPDATE bills
+     SET billing_period_id = $1,
+         billing_month = $2,
+         units_used = $3,
+         rate = $4,
+         amount = $5,
+         subtotal_amount = $6,
+         fixed_charge_amount = $7,
+         penalty_amount = 0,
+         vat_amount = $8,
+         reconnection_fee_amount = $9,
+         deposit_applied_amount = 0,
+         adjustment_amount = 0,
+         total_amount = $5,
+         balance_amount = $10,
+         paid_amount = $11,
+         status = $12::varchar,
+         tariff_snapshot = $13::jsonb,
+         due_date = $14,
+         paid_at = CASE WHEN $12::text = 'paid' THEN COALESCE(paid_at, NOW()) ELSE NULL END,
+         issued_at = COALESCE(issued_at, NOW())
+     WHERE id = $15
+     RETURNING *`,
+    [
+      billingPeriod.id,
+      billingPeriod.period_start,
+      unitsUsed,
+      charge.rateAmount,
+      charge.totalAmount,
+      charge.subtotalAmount,
+      charge.fixedChargeAmount,
+      charge.vatAmount,
+      charge.reconnectionFeeAmount,
+      Math.max(charge.totalAmount - nextPaidAmount, 0),
+      nextPaidAmount,
+      nextStatus,
+      JSON.stringify(tariffSnapshot),
+      billingPeriod.due_date,
+      bill.id
+    ]
+  );
+  const recalculated = result.rows[0];
+  if (recalculated.bill_pay_status !== "payable") return recalculated;
+  const creditApplication = await applyCustomerCreditToBill(client, {
+    customerId: recalculated.customer_id,
+    billId: recalculated.id
+  });
+  return creditApplication.appliedAmount > 0 ? creditApplication.bill : recalculated;
+};
+
+const attachReplacementBillSegment = async (client, { billId, meterId, readingId, segmentType }) => {
+  const readingResult = await client.query("SELECT * FROM meter_readings WHERE id = $1", [readingId]);
+  const reading = readingResult.rows[0];
+  if (!reading || !reading.previous_reading_id) return null;
+  const previousResult = await client.query("SELECT * FROM meter_readings WHERE id = $1", [reading.previous_reading_id]);
+  const previous = previousResult.rows[0];
+  if (!previous) return null;
+  return upsertBillMeterSegment(client, { billId, meterId, previous, reading, segmentType });
+};
+
 const upsertPendingSourceBillingRequest = async (
   client,
   {
@@ -1161,7 +1315,13 @@ const recalculateBillForReading = async (
     "SELECT * FROM bills WHERE current_reading_id = $1 FOR UPDATE",
     [reading.id]
   );
-  const existingBill = existingBillResult.rows[0];
+  let existingBill = existingBillResult.rows[0] || null;
+  let isSegmentedBill = false;
+  const existingSegmentedBill = await getSegmentedBillForReading(client, reading.id);
+  if (existingSegmentedBill) {
+    existingBill = existingSegmentedBill;
+    isSegmentedBill = true;
+  }
 
   if (!previous) {
     if (existingBill && Number(existingBill.paid_amount) > 0) {
@@ -1189,6 +1349,18 @@ const recalculateBillForReading = async (
   const sourceRequest = sourceRequestResult.rows[0] || null;
   const sourceFallbackReason = sourceRequest?.reason || reading.notes || correctionReason || null;
 
+  if (activeMeter.meter_role === "client_billing" && !existingBill) {
+    const replacementBill = await getReplacementBillForNewMeter(client, {
+      customerId: reading.customer_id,
+      meterId: activeMeter.id,
+      billingPeriodId: billingPeriod.id
+    });
+    if (replacementBill) {
+      existingBill = replacementBill;
+      isSegmentedBill = true;
+    }
+  }
+
   if (activeMeter.meter_role === "source_backup" && !existingBill) {
     const request = await upsertPendingSourceBillingRequest(client, {
       customerId: reading.customer_id,
@@ -1212,6 +1384,22 @@ const recalculateBillForReading = async (
       });
     }
     return null;
+  }
+
+  if (isSegmentedBill) {
+    await upsertBillMeterSegment(client, {
+      billId: existingBill.id,
+      meterId: activeMeter.id,
+      previous,
+      reading,
+      segmentType: activeMeter.id === existingBill.billing_meter_id ? "replacement_old" : "replacement_new"
+    });
+    return recalculateSegmentedBill(client, {
+      bill: existingBill,
+      billingPeriod,
+      rateId: reading.rate_id,
+      readingDate: reading.reading_date
+    });
   }
 
   if (existingBill) {
@@ -1541,6 +1729,7 @@ module.exports = {
   createReading,
   previewReadingImport,
   recalculateBillForReading,
+  attachReplacementBillSegment,
   reviewCustomerReadingSubmission,
   updateReading
 };

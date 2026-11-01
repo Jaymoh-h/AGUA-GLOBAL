@@ -295,7 +295,15 @@ const buildBillPreparationReminder = async (client, asOf = new Date()) => {
     `SELECT
        COUNT(b.id) FILTER (WHERE b.bill_pay_status = 'payable') AS payable_bills,
        COALESCE(SUM(COALESCE(NULLIF(b.total_amount, 0), b.amount)) FILTER (WHERE b.bill_pay_status = 'payable'), 0) AS billed_amount,
-       COUNT(mr.id) FILTER (WHERE mr.previous_reading_id IS NOT NULL AND b.id IS NULL) AS readings_without_bills,
+       COUNT(DISTINCT mr.id) FILTER (
+         WHERE mr.previous_reading_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1
+             FROM bills reading_bill
+             LEFT JOIN bill_meter_segments bms ON bms.bill_id = reading_bill.id
+             WHERE reading_bill.current_reading_id = mr.id OR bms.current_reading_id = mr.id
+           )
+       ) AS readings_without_bills,
        COUNT(sbr.id) FILTER (WHERE sbr.status = 'pending') AS pending_source_reviews
      FROM billing_periods bp
      LEFT JOIN bills b ON b.billing_period_id = bp.id

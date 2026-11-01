@@ -729,6 +729,7 @@ const buildBillPdfAttachment = ({ bill, business = {} }) => {
   const balance = Number(bill.balance_amount ?? total - Number(bill.paid_amount || 0));
   const tariff = parseJson(bill.tariff_snapshot);
   const tariffBlocks = Array.isArray(tariff.blocks) ? tariff.blocks : [];
+  const meterSegments = Array.isArray(bill.meter_segments) ? bill.meter_segments : [];
   const penalties = Array.isArray(bill.penalty_applications) ? bill.penalty_applications : [];
   const document = new PdfDocument(business);
   const serviceCharge = isServiceChargeBill(bill);
@@ -767,6 +768,19 @@ const buildBillPdfAttachment = ({ bill, business = {} }) => {
       { label: "Billing Period", value: bill.billing_period_name || dateOnly(bill.billing_month) },
       { label: "Status", value: label(bill.status) }
     ]);
+
+    if (meterSegments.length > 1) {
+      document.sectionTitle("Meter Replacement Detail");
+      document.table(
+        [
+          { header: "Meter", value: (row) => row.meter_number || "Replaced meter", weight: 1.3 },
+          { header: "Previous", value: (row) => Number(row.previous_reading || 0).toLocaleString() },
+          { header: "Current", value: (row) => Number(row.current_reading || 0).toLocaleString() },
+          { header: "Units", value: (row) => Number(row.units_used || 0).toLocaleString() }
+        ],
+        meterSegments
+      );
+    }
 
     document.sectionTitle("Reading Summary");
     document.table(

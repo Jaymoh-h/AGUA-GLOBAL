@@ -644,11 +644,16 @@ const getCustomerOverview = asyncHandler(async (req, res) => {
     pool.query(
       `SELECT mr.id, mr.reading_value, mr.reading_date, mr.notes, mr.created_at,
               m.meter_number, m.meter_role, bp.name AS billing_period_name,
-              b.id AS bill_id, b.bill_number, b.status AS bill_status, b.bill_pay_status
+              COALESCE(b.id, bms.bill_id) AS bill_id,
+              COALESCE(b.bill_number, segmented_bill.bill_number) AS bill_number,
+              COALESCE(b.status, segmented_bill.status) AS bill_status,
+              COALESCE(b.bill_pay_status, segmented_bill.bill_pay_status) AS bill_pay_status
        FROM meter_readings mr
        LEFT JOIN meters m ON m.id = mr.meter_id
        LEFT JOIN billing_periods bp ON bp.id = mr.billing_period_id
        LEFT JOIN bills b ON b.current_reading_id = mr.id
+       LEFT JOIN bill_meter_segments bms ON bms.current_reading_id = mr.id
+       LEFT JOIN bills segmented_bill ON segmented_bill.id = bms.bill_id
        WHERE mr.customer_id = $1
        ORDER BY mr.reading_date DESC, mr.created_at DESC
        LIMIT 12`,

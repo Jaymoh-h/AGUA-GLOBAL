@@ -15,6 +15,18 @@ const {
   sendDocumentSms
 } = require("../services/documentDelivery.service");
 
+const getBillMeterSegments = async (queryable, billId) => {
+  const result = await queryable.query(
+    `SELECT bms.*, m.meter_number
+     FROM bill_meter_segments bms
+     LEFT JOIN meters m ON m.id = bms.meter_id
+     WHERE bms.bill_id = $1
+     ORDER BY bms.created_at, bms.id`,
+    [billId]
+  );
+  return result.rows;
+};
+
 const listBills = asyncHandler(async (req, res) => {
   const status = req.query.status;
   const params = [];
@@ -81,11 +93,13 @@ const getBill = asyncHandler(async (req, res) => {
   );
 
   const deliveryLogs = await listDeliveryLogs(pool, "bill", req.params.id);
+  const meterSegments = await getBillMeterSegments(pool, rows[0].id);
 
   res.json({
     ...rows[0],
     penalty_applications: penalties.rows,
-    delivery_logs: deliveryLogs
+    delivery_logs: deliveryLogs,
+    meter_segments: meterSegments
   });
 });
 
@@ -119,13 +133,15 @@ const sendBillEmail = asyncHandler(async (req, res) => {
       [bill.id]
     );
 
-    const [business, recipient] = await Promise.all([
+    const [business, recipient, meterSegments] = await Promise.all([
       getBusinessSettings(client),
-      getCustomerEmailRecipient(client, bill.customer_id)
+      getCustomerEmailRecipient(client, bill.customer_id),
+      getBillMeterSegments(client, bill.id)
     ]);
     const billWithDetails = {
       ...bill,
-      penalty_applications: penalties.rows
+      penalty_applications: penalties.rows,
+      meter_segments: meterSegments
     };
     const email = buildBillEmail({ bill, business });
     const result = await sendDocumentEmail(client, req, {

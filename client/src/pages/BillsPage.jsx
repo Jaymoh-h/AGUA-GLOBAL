@@ -181,6 +181,7 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
   };
   const selectedTariff = selectedBill?.tariff_snapshot || {};
   const selectedTariffBlocks = Array.isArray(selectedTariff.blocks) ? selectedTariff.blocks : [];
+  const selectedMeterSegments = Array.isArray(selectedBill?.meter_segments) ? selectedBill.meter_segments : [];
   const selectedPenalties = selectedBill?.penalty_applications || [];
   const isServiceChargeBill = selectedBill?.bill_origin === "service_charge";
   const billSummary = useMemo(() => {
@@ -464,6 +465,30 @@ function BillsPage({ user, navigationIntent, onClearNavigationIntent }) {
             </div>
           ) : (
             <>
+          {selectedMeterSegments.length > 1 ? (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Meter</th>
+                    <th>Previous</th>
+                    <th>Current</th>
+                    <th>Units</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedMeterSegments.map((segment) => (
+                    <tr key={segment.id}>
+                      <td>{segment.meter_number || "Replaced meter"}</td>
+                      <td>{Number(segment.previous_reading || 0).toLocaleString()}</td>
+                      <td>{Number(segment.current_reading || 0).toLocaleString()}</td>
+                      <td>{Number(segment.units_used || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
           <table className="receipt-table">
             <thead>
               <tr>
