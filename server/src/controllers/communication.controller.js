@@ -17,11 +17,15 @@ const formatNumber = (value) => asNumber(value).toLocaleString("en-KE");
 const money = (value, currency = "KES") => `${currency} ${asNumber(value).toLocaleString("en-KE")}`;
 
 const buildPaymentInformation = (business, accountNumber) => {
-  const lines = ["PAYMENTS information"];
-  lines.push(`Paybill number, ${business.paybill_number || business.till_number || "-"}.`);
-  lines.push(`Account, ${accountNumber || "-"}.`);
+  const channel = String(business.paybill_number || business.till_number || "").trim();
+  const channelMatch = channel.match(/^(.*?)(?:\s+account(?:\s+number)?\s*[:,.-]?\s*)(.+)$/i);
+  const channelLabel = business.paybill_number ? "Paybill" : business.till_number ? "Till" : "Payment channel";
+  const lines = ["Payment information"];
+  lines.push(`${channelLabel}: ${channelMatch ? channelMatch[1].trim() : channel || "-"}`);
+  if (channelMatch?.[2]) lines.push(`Payment account: ${channelMatch[2].trim()}`);
+  lines.push(`Customer reference: ${accountNumber || "-"}`);
   if (business.bank_details) {
-    lines.push(`Bank, ${business.bank_details}.`);
+    lines.push(`Bank: ${business.bank_details}`);
   }
   return lines.join("\n");
 };
@@ -69,9 +73,13 @@ const buildInvoiceTemplateValues = ({ row, business }) => {
 };
 
 const renderTemplate = (template, values) =>
-  String(template || defaultInvoiceTemplate).replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) =>
-    values[key] === undefined || values[key] === null ? "" : String(values[key])
-  );
+  String(template || defaultInvoiceTemplate)
+    .replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) =>
+      values[key] === undefined || values[key] === null ? "" : String(values[key])
+    )
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 
 const renderInvoiceMessage = ({ row, business, template = defaultInvoiceTemplate }) => {
   if (!row.bill_id) return "";
@@ -80,17 +88,19 @@ const renderInvoiceMessage = ({ row, business, template = defaultInvoiceTemplate
 
 const defaultInvoiceTemplate = [
   "{{business_name}}",
-  "Dear, {{customer_name}}. {{acc_number}}",
-  "Charges for {{invoice_period}}.",
+  "Dear {{customer_name}} ({{acc_number}}),",
+  "",
+  "{{invoice_period}} water bill",
   "{{old_meter_consumption}}",
   "{{new_meter_consumption}}",
   "{{meter_consumption}}",
   "{{additional_charges}}",
-  "Period charges. {{period_charges}}",
-  "Period amount due. {{period_amount_due}}",
-  "Arrears after payment. {{arrears_after_payment}}",
-  "Total outstanding. {{total_outstanding}}",
-  "Due date. {{due_date}}",
+  "",
+  "Period charges: {{period_charges}}",
+  "Amount due by {{due_date}}: {{period_amount_due}}",
+  "Previous arrears: {{arrears_after_payment}}",
+  "Total account balance: {{total_outstanding}}",
+  "",
   "{{payment_information}}",
   "For enquiries contact customer care on {{business_phone}}."
 ].join("\n");

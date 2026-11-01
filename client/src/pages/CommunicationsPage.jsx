@@ -41,9 +41,13 @@ const contactLabel = (row, medium) => {
 };
 
 const renderTemplate = (template, values = {}) =>
-  String(template || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) =>
-    values[key] === undefined || values[key] === null ? "" : String(values[key])
-  );
+  String(template || "")
+    .replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) =>
+      values[key] === undefined || values[key] === null ? "" : String(values[key])
+    )
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 
 const summarizeTemplate = (template) => {
   const line = String(template || "")
@@ -109,11 +113,14 @@ const collectionMessageLibrary = [
     body: [
       "{{business_name}}",
       "Dear {{customer_name}} ({{acc_number}}),",
-      "Charges for {{invoice_period}} total {{period_charges}}. Amount due: {{period_amount_due}} by {{due_date}}.",
+      "{{invoice_period}} water bill",
       "{{old_meter_consumption}}",
       "{{new_meter_consumption}}",
+      "{{meter_consumption}}",
       "{{additional_charges}}",
-      "Your current account balance is {{total_outstanding}}.",
+      "Period charges: {{period_charges}}",
+      "Amount due by {{due_date}}: {{period_amount_due}}",
+      "Total account balance: {{total_outstanding}}",
       "{{payment_information}}",
       "For assistance contact {{business_phone}}."
     ].join("\n")
