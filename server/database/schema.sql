@@ -1012,7 +1012,7 @@ CREATE TABLE production_source_meters (
   customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
   meter_id INTEGER REFERENCES meters(id) ON DELETE SET NULL,
   rate_id INTEGER REFERENCES rates(id) ON DELETE SET NULL,
-  meter_number VARCHAR(80) NOT NULL UNIQUE,
+  meter_number VARCHAR(80) NOT NULL,
   name VARCHAR(160),
   meter_type VARCHAR(30) NOT NULL DEFAULT 'shared_source' CHECK (meter_type IN ('customer_source', 'shared_source')),
   installed_at DATE NOT NULL DEFAULT CURRENT_DATE,
@@ -1175,6 +1175,9 @@ CREATE INDEX idx_maintenance_requests_zone ON maintenance_requests(zone_id);
 CREATE INDEX idx_maintenance_requests_assigned_to ON maintenance_requests(assigned_to);
 CREATE INDEX idx_maintenance_requests_reported_at ON maintenance_requests(reported_at DESC);
 CREATE INDEX idx_production_source_meters_status ON production_source_meters(status, meter_type);
+CREATE UNIQUE INDEX idx_production_source_meters_current_meter_number
+  ON production_source_meters(meter_number)
+  WHERE status NOT IN ('replaced', 'removed');
 CREATE INDEX idx_production_weekly_readings_date ON production_weekly_readings(reading_date DESC);
 CREATE INDEX idx_production_meter_readings_meter ON production_meter_readings(production_meter_id, id DESC);
 CREATE INDEX idx_production_electricity_topups_date ON production_electricity_topups(topup_date DESC);

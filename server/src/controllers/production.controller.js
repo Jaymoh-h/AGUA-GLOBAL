@@ -157,7 +157,11 @@ const updateProductionMeter = asyncHandler(async (req, res) => {
     if (!nextMeterNumber) throw new ApiError(400, "Production meter label is required.");
     if (nextMeterNumber !== before.meter_number) {
       const duplicateMeter = await client.query(
-        "SELECT id FROM production_source_meters WHERE meter_number = $1 AND id <> $2",
+        `SELECT id
+         FROM production_source_meters
+         WHERE meter_number = $1
+           AND id <> $2
+           AND status NOT IN ('replaced', 'removed')`,
         [nextMeterNumber, before.id]
       );
       if (duplicateMeter.rows[0]) throw new ApiError(400, "Production meter label is already in use.");
@@ -305,9 +309,13 @@ const replaceProductionMeter = asyncHandler(async (req, res) => {
       previous?.reading_value
     );
 
-    const duplicateMeter = await client.query("SELECT id FROM production_source_meters WHERE meter_number = $1", [
-      String(new_meter_number).trim()
-    ]);
+    const duplicateMeter = await client.query(
+      `SELECT id
+       FROM production_source_meters
+       WHERE meter_number = $1
+         AND status NOT IN ('replaced', 'removed')`,
+      [String(new_meter_number).trim()]
+    );
     if (duplicateMeter.rows[0]) {
       throw new ApiError(400, "New production meter number is already in use.");
     }

@@ -339,6 +339,11 @@ describe("unified customer source-meter replacement", { skip: !shouldRun }, () =
     assert.ok(successorProductionMeter, "a successor production meter must be created for the new source meter");
     assert.equal(successorProductionMeter?.status, "active");
     assert.equal(successorProductionMeter?.meter_id, sourceReplacement.data.newMeter.id);
+    assert.equal(
+      successorProductionMeter?.meter_number,
+      productionMeter.rows[0].meter_number,
+      "the successor must retain the reporting label of its retired predecessor"
+    );
     assert.equal(Number(successorProductionMeter?.initial_reading), 1000);
 
     const productionEvent = await pool.query(
