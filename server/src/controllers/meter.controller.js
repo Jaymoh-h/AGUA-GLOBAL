@@ -702,6 +702,101 @@ const updateMeterEvent = asyncHandler(async (req, res) => {
          WHERE id = $3`,
         [eventDate, newInitialReading, productionEvent.new_production_meter_id]
       );
+    } else {
+      const sourceReplacementResult = await client.query(
+        `SELECT old_meter.meter_role AS old_meter_role,
+                new_meter.meter_number AS new_meter_number
+         FROM meters old_meter
+         JOIN meters new_meter ON new_meter.id = $2
+         WHERE old_meter.id = $1`,
+        [before.old_meter_id, before.new_meter_id]
+      );
+      const sourceReplacement = sourceReplacementResult.rows[0];
+      if (sourceReplacement?.old_meter_role === "source_backup") {
+        const staleProductionResult = await client.query(
+          `SELECT *
+           FROM production_source_meters
+           WHERE meter_id = $1
+             AND meter_type = 'customer_source'
+             AND status = 'active'
+           FOR UPDATE`,
+          [before.new_meter_id]
+        );
+        const staleProductionMeters = staleProductionResult.rows;
+        if (staleProductionMeters.length > 1) {
+          throw new ApiError(409, "This source replacement is linked to multiple active production meters. Resolve the duplicate production links before reconciling it.");
+        }
+        const staleProductionMeter = staleProductionMeters[0];
+        if (staleProductionMeter) {
+          const segment = await calculateProductionReplacementSegment(client, staleProductionMeter, eventDate, oldFinalReading);
+          const retiredProductionResult = await client.query(
+            `UPDATE production_source_meters
+             SET meter_id = $1,
+                 status = 'replaced',
+                 removed_at = $2,
+                 updated_at = NOW()
+             WHERE id = $3
+             RETURNING *`,
+            [before.old_meter_id, eventDate, staleProductionMeter.id]
+          );
+          const successorResult = await client.query(
+            `INSERT INTO production_source_meters (
+              zone_id, customer_id, meter_id, rate_id, meter_number, name, meter_type,
+              installed_at, initial_reading, status, notes, created_by
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, 'customer_source', $7, $8, 'active', $9, $10)
+            RETURNING *`,
+            [
+              staleProductionMeter.zone_id,
+              staleProductionMeter.customer_id,
+              before.new_meter_id,
+              staleProductionMeter.rate_id,
+              sourceReplacement.new_meter_number,
+              staleProductionMeter.name,
+              eventDate,
+              newInitialReading,
+              req.body.reason || `Historical reconciliation for ${staleProductionMeter.meter_number}`,
+              req.user.id
+            ]
+          );
+          const reconciledProductionEvent = await client.query(
+            `INSERT INTO production_meter_events (
+              old_production_meter_id, new_production_meter_id, meter_event_id, event_type, event_date,
+              old_final_reading, new_initial_reading, old_previous_reading, old_consumption,
+              old_revenue_amount, tariff_snapshot, reason, created_by
+            )
+            VALUES ($1, $2, $3, 'replacement', $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
+            RETURNING *`,
+            [
+              staleProductionMeter.id,
+              successorResult.rows[0].id,
+              before.id,
+              eventDate,
+              oldFinalReading,
+              newInitialReading,
+              segment.previousReading,
+              segment.consumption,
+              segment.revenueAmount,
+              JSON.stringify(segment.tariffSnapshot),
+              req.body.reason || null,
+              req.user.id
+            ]
+          );
+          await recordAuditEvent(client, {
+            req,
+            action: "production_meter.replacement_reconciled",
+            entityType: "production_source_meter",
+            entityId: staleProductionMeter.id,
+            beforeData: staleProductionMeter,
+            afterData: {
+              oldMeter: retiredProductionResult.rows[0],
+              newMeter: successorResult.rows[0],
+              event: reconciledProductionEvent.rows[0]
+            },
+            reason: "Historical source-meter replacement reconciliation"
+          });
+        }
+      }
     }
 
     await recordAuditEvent(client, {
