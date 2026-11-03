@@ -139,7 +139,7 @@ const createProductionMeter = asyncHandler(async (req, res) => {
 });
 
 const updateProductionMeter = asyncHandler(async (req, res) => {
-  const { name, zone_id, meter_id, rate_id, notes, status } = req.body;
+  const { meter_number, name, zone_id, meter_id, rate_id, notes, status } = req.body;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -151,6 +151,16 @@ const updateProductionMeter = asyncHandler(async (req, res) => {
     if (!before) throw new ApiError(404, "Production meter not found.");
     if (before.status === "replaced" || before.status === "removed") {
       throw new ApiError(400, "Replaced or removed meters cannot be edited.");
+    }
+
+    const nextMeterNumber = meter_number === undefined ? before.meter_number : String(meter_number || "").trim();
+    if (!nextMeterNumber) throw new ApiError(400, "Production meter label is required.");
+    if (nextMeterNumber !== before.meter_number) {
+      const duplicateMeter = await client.query(
+        "SELECT id FROM production_source_meters WHERE meter_number = $1 AND id <> $2",
+        [nextMeterNumber, before.id]
+      );
+      if (duplicateMeter.rows[0]) throw new ApiError(400, "Production meter label is already in use.");
     }
 
     const nextStatus = status === undefined ? before.status : String(status);
@@ -200,16 +210,18 @@ const updateProductionMeter = asyncHandler(async (req, res) => {
        SET zone_id = $1,
            meter_id = $2,
            rate_id = $3,
-           name = NULLIF($4, ''),
-           notes = NULLIF($5, ''),
-           status = $6,
+           meter_number = $4,
+           name = NULLIF($5, ''),
+           notes = NULLIF($6, ''),
+           status = $7,
            updated_at = NOW()
-       WHERE id = $7
+       WHERE id = $8
        RETURNING *`,
       [
         nextZoneId,
         before.meter_type === "customer_source" ? nextMeterId : null,
         before.meter_type === "shared_source" ? nextRateId : null,
+        nextMeterNumber,
         name === undefined ? before.name || "" : String(name || "").trim(),
         notes === undefined ? before.notes || "" : String(notes || "").trim(),
         nextStatus,
@@ -225,7 +237,9 @@ const updateProductionMeter = asyncHandler(async (req, res) => {
       beforeData: before,
       afterData: result.rows[0],
       reason:
-        Number(nextMeterId || 0) !== Number(before.meter_id || 0)
+        nextMeterNumber !== before.meter_number
+          ? "Production meter label updated"
+          : Number(nextMeterId || 0) !== Number(before.meter_id || 0)
           ? "Production meter linked source meter updated"
           : "Production meter details updated"
     });

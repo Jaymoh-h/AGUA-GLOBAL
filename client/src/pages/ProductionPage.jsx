@@ -382,6 +382,7 @@ function ProductionPage({ user, navigationIntent, onClearNavigationIntent }) {
     try {
       if (editingMeterId) {
         await api.production.updateMeter(editingMeterId, {
+          meter_number: meterForm.meter_number.trim(),
           name: meterForm.name,
           zone_id: meterForm.zone_id || null,
           meter_id: meterForm.meter_type === "customer_source" ? Number(meterForm.meter_id) : null,

@@ -31,7 +31,7 @@ export default function ProductionMeterForm({
           <option value="customer_source">Customer source</option>
         </select>
       </label>
-      <label>Meter number<input value={form.meter_number} onChange={(event) => onChange("meter_number", event.target.value)} disabled={Boolean(editingMeterId)} required /></label>
+      <label>Meter number<input value={form.meter_number} onChange={(event) => onChange("meter_number", event.target.value)} disabled={Boolean(editingMeterId) && form.meter_type === "shared_source"} required /></label>
       <label>Display name<input value={form.name} onChange={(event) => onChange("name", event.target.value)} /></label>
       <label>
         Zone

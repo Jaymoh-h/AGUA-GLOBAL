@@ -471,7 +471,7 @@ const replaceMeter = asyncHandler(async (req, res) => {
           linkedProductionMeter.customer_id,
           newMeterResult.rows[0].id,
           linkedProductionMeter.rate_id,
-          newMeterResult.rows[0].meter_number,
+          linkedProductionMeter.meter_number,
           linkedProductionMeter.name,
           event_date,
           newInitialReading,
@@ -704,12 +704,10 @@ const updateMeterEvent = asyncHandler(async (req, res) => {
       );
     } else {
       const sourceReplacementResult = await client.query(
-        `SELECT old_meter.meter_role AS old_meter_role,
-                new_meter.meter_number AS new_meter_number
+        `SELECT old_meter.meter_role AS old_meter_role
          FROM meters old_meter
-         JOIN meters new_meter ON new_meter.id = $2
          WHERE old_meter.id = $1`,
-        [before.old_meter_id, before.new_meter_id]
+        [before.old_meter_id]
       );
       const sourceReplacement = sourceReplacementResult.rows[0];
       if (sourceReplacement?.old_meter_role === "source_backup") {
@@ -751,7 +749,7 @@ const updateMeterEvent = asyncHandler(async (req, res) => {
               staleProductionMeter.customer_id,
               before.new_meter_id,
               staleProductionMeter.rate_id,
-              sourceReplacement.new_meter_number,
+              staleProductionMeter.meter_number,
               staleProductionMeter.name,
               eventDate,
               newInitialReading,
