@@ -275,11 +275,21 @@ const replaceProductionMeter = asyncHandler(async (req, res) => {
     const oldMeter = oldMeterResult.rows[0];
     if (!oldMeter) throw new ApiError(404, "Production meter not found.");
     if (oldMeter.status !== "active") throw new ApiError(400, "Only active production meters can be replaced.");
+    if (oldMeter.meter_type === "customer_source") {
+      throw new ApiError(400, "Replace customer-linked source meters from Readings so monthly and production histories stay together.");
+    }
 
     const previous = await getPreviousProductionReading(client, oldMeter.id, event_date);
     if (previous && oldFinalReading < toNumber(previous.reading_value)) {
       throw new ApiError(400, "Old final reading cannot be lower than the previous production reading.");
     }
+    const replacementCalculation = await calculateProductionReading(
+      client,
+      oldMeter,
+      event_date,
+      oldFinalReading,
+      previous?.reading_value
+    );
 
     const duplicateMeter = await client.query("SELECT id FROM production_source_meters WHERE meter_number = $1", [
       String(new_meter_number).trim()
@@ -323,9 +333,10 @@ const replaceProductionMeter = asyncHandler(async (req, res) => {
     const eventResult = await client.query(
       `INSERT INTO production_meter_events (
         old_production_meter_id, new_production_meter_id, event_type, event_date,
-        old_final_reading, new_initial_reading, reason, created_by
+        old_final_reading, new_initial_reading, old_previous_reading, old_consumption,
+        old_revenue_amount, tariff_snapshot, reason, created_by
       )
-      VALUES ($1, $2, 'replacement', $3, $4, $5, $6, $7)
+      VALUES ($1, $2, 'replacement', $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
       RETURNING *`,
       [
         oldMeter.id,
@@ -333,6 +344,10 @@ const replaceProductionMeter = asyncHandler(async (req, res) => {
         event_date,
         oldFinalReading,
         newInitialReading,
+        replacementCalculation.previousReadingValue,
+        replacementCalculation.consumption,
+        replacementCalculation.revenueAmount,
+        JSON.stringify(replacementCalculation.tariffSnapshot),
         reason || null,
         req.user.id
       ]
@@ -994,13 +1009,34 @@ const deleteWeeklyReading = asyncHandler(async (req, res) => {
 
 const listWeeklyReadings = asyncHandler(async (_req, res) => {
   const { rows } = await pool.query(
-    `SELECT pwr.*,
-            COUNT(pmr.id) AS meter_count,
-            COALESCE(SUM(pmr.consumption), 0) AS total_consumption,
-            COALESCE(SUM(pmr.revenue_amount), 0) AS total_revenue
-     FROM production_weekly_readings pwr
-     LEFT JOIN production_meter_readings pmr ON pmr.weekly_reading_id = pwr.id
-     GROUP BY pwr.id
+    `WITH weekly_rows AS (
+       SELECT pwr.*,
+              LAG(pwr.reading_date) OVER (ORDER BY pwr.reading_date) AS previous_reading_date
+       FROM production_weekly_readings pwr
+     ),
+     meter_totals AS (
+       SELECT pmr.weekly_reading_id,
+              COUNT(pmr.id) AS meter_count,
+              COALESCE(SUM(pmr.consumption), 0) AS total_consumption,
+              COALESCE(SUM(pmr.revenue_amount), 0) AS total_revenue
+       FROM production_meter_readings pmr
+       GROUP BY pmr.weekly_reading_id
+     )
+     SELECT pwr.*,
+            COALESCE(mt.meter_count, 0) + COALESCE(replacement.meter_count, 0) AS meter_count,
+            COALESCE(mt.total_consumption, 0) + COALESCE(replacement.total_consumption, 0) AS total_consumption,
+            COALESCE(mt.total_revenue, 0) + COALESCE(replacement.total_revenue, 0) AS total_revenue
+     FROM weekly_rows pwr
+     LEFT JOIN meter_totals mt ON mt.weekly_reading_id = pwr.id
+     LEFT JOIN LATERAL (
+       SELECT COUNT(*)::int AS meter_count,
+              COALESCE(SUM(pme.old_consumption), 0) AS total_consumption,
+              COALESCE(SUM(pme.old_revenue_amount), 0) AS total_revenue
+       FROM production_meter_events pme
+       WHERE pme.event_type = 'replacement'
+         AND pme.event_date > COALESCE(pwr.previous_reading_date, pwr.reading_date)
+         AND pme.event_date <= pwr.reading_date
+     ) replacement ON TRUE
      ORDER BY pwr.reading_date DESC
      LIMIT 100`
   );
@@ -1068,8 +1104,38 @@ const getProductionReport = asyncHandler(async (req, res) => {
        ORDER BY psm.meter_number ASC`,
       [week.id]
     );
-    const totalConsumption = rowsResult.rows.reduce((sum, row) => sum + toNumber(row.consumption), 0);
-    const totalRevenue = rowsResult.rows.reduce((sum, row) => sum + toNumber(row.revenue_amount), 0);
+    const replacementSegmentsResult = await pool.query(
+      `SELECT pme.id,
+              pme.old_production_meter_id AS production_meter_id,
+              pme.old_previous_reading AS previous_reading_value,
+              pme.old_final_reading AS reading_value,
+              pme.old_consumption AS consumption,
+              pme.old_revenue_amount AS revenue_amount,
+              pme.tariff_snapshot,
+              pme.reason AS event_reason,
+              old_meter.meter_number,
+              old_meter.name AS meter_name,
+              old_meter.meter_type,
+              c.name AS customer_name,
+              c.acc_number
+       FROM production_meter_events pme
+       JOIN production_source_meters old_meter ON old_meter.id = pme.old_production_meter_id
+       LEFT JOIN customers c ON c.id = old_meter.customer_id
+       WHERE pme.event_type = 'replacement'
+         AND pme.event_date > $1::date
+         AND pme.event_date <= $2::date
+       ORDER BY pme.event_date ASC, pme.id ASC`,
+      [periodStart, week.reading_date]
+    );
+    const replacementSegments = replacementSegmentsResult.rows.map((segment) => ({
+      ...segment,
+      id: `replacement-${segment.id}`,
+      is_replacement_segment: true,
+      notes: "Final reading at meter replacement"
+    }));
+    const reportRows = [...rowsResult.rows, ...replacementSegments];
+    const totalConsumption = reportRows.reduce((sum, row) => sum + toNumber(row.consumption), 0);
+    const totalRevenue = reportRows.reduce((sum, row) => sum + toNumber(row.revenue_amount), 0);
 
     weeks.push({
       ...week,
@@ -1088,7 +1154,7 @@ const getProductionReport = asyncHandler(async (req, res) => {
       total_revenue: totalRevenue,
       cost_of_production_ratio: totalRevenue > 0 ? electricityCostUsed / totalRevenue : 0,
       cost_per_water_unit: totalConsumption > 0 ? electricityCostUsed / totalConsumption : 0,
-      rows: rowsResult.rows
+      rows: reportRows
     });
   }
 

@@ -56,6 +56,8 @@ Typical replacement flow:
 
 This preserves continuity while avoiding false consumption jumps.
 
+For a customer source-backup meter linked to Production, use this same Readings replacement workflow. It retires the old production source meter, creates a successor linked to the new source meter, records the final old-meter production segment, and begins the successor from the new meter baseline. The replacement-week production report therefore includes old and new consumption without creating a duplicate weekly kWh entry.
+
 ## CSV Reading Imports
 
 Reading imports use a preview-then-commit pattern:

@@ -27,11 +27,11 @@ Production setup and payroll forms retain unfinished entries while you move betw
 
 ## Production Meters
 
-Admins and accountants can select Edit from the Production Meters register to update a meter's display name, zone, tariff, notes, or operating status. For a customer-source production meter, the exact active source-backup meter can be rematched to another source meter for the same customer. Meter number, type, and customer linkage remain protected; use Replace Source Meter when the physical production meter changes.
+Admins and accountants can select Edit from the Production Meters register to update a meter's display name, zone, tariff, notes, or operating status. For a customer-source production meter, the exact active source-backup meter can be rematched to another source meter for the same customer. Meter number, type, and customer linkage remain protected. Use Readings > Replace Meter for a customer-linked source meter; use Replace Shared Source Meter in Production only for a shared source meter.
 
 ## Replacing Customer Meters
 
-In Readings, use Replace Meter to select the exact active customer meter being changed. This includes source-backup meters. The replacement keeps the same meter role and, for a replaced source-backup meter, automatically rematches active linked production meters to the new source meter.
+In Readings, use Replace Meter to select the exact active customer meter being changed. This includes source-backup meters. The replacement keeps the same meter role and, for a replaced source-backup meter, retires each linked production meter, creates a successor linked to the new source meter, and carries the final old-meter consumption into the replacement-week production report.
 
 ## Ending Payroll Payees
 

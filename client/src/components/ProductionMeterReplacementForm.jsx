@@ -9,14 +9,14 @@ export default function ProductionMeterReplacementForm({ form, meterTypeLabels, 
       defaultOpen={Boolean(form.production_meter_id)}
       icon={<RotateCcw size={18} />}
       onSubmit={onSubmit}
-      summary={form.production_meter_id ? "Replacement in progress" : "Select active source meter"}
-      title="Replace Source Meter"
+      summary={form.production_meter_id ? "Replacement in progress" : "Select shared source meter"}
+      title="Replace Shared Source Meter"
     >
       <label>
-        Existing source meter
+        Existing shared source meter
         <select value={form.production_meter_id} onChange={(event) => onChange("production_meter_id", event.target.value)} required>
           <option value="">Select active meter</option>
-          {meters.filter((meter) => meter.status === "active").map((meter) => <option key={meter.id} value={meter.id}>{meter.meter_number} - {meter.customer_name || meter.name || meterTypeLabels[meter.meter_type]}</option>)}
+          {meters.filter((meter) => meter.status === "active" && meter.meter_type === "shared_source").map((meter) => <option key={meter.id} value={meter.id}>{meter.meter_number} - {meter.name || meterTypeLabels[meter.meter_type]}</option>)}
         </select>
       </label>
       <label>Replacement date<input value={form.event_date} onChange={(event) => onChange("event_date", event.target.value)} type="date" required /></label>

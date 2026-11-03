@@ -7,8 +7,37 @@ const { assertNotFutureDate } = require("../services/dateGuard.service");
 const { ensureActiveMeter, getMeterHistory, getPreviousReadingForMeter } = require("../services/meter.service");
 const { attachReplacementBillSegment, recalculateBillForReading } = require("./reading.controller");
 const { recordAuditEvent } = require("../services/audit.service");
+const { calculateTariffCharge, getTariffWithBlocks } = require("../services/tariff.service");
 
 const meterRoles = ["client_billing", "source_backup", "shared_source_monitoring"];
+
+const calculateProductionReplacementSegment = async (client, productionMeter, eventDate, oldFinalReading) => {
+  const previousResult = await client.query(
+    `SELECT pmr.reading_value
+     FROM production_meter_readings pmr
+     JOIN production_weekly_readings pwr ON pwr.id = pmr.weekly_reading_id
+     WHERE pmr.production_meter_id = $1
+       AND pwr.reading_date < $2
+     ORDER BY pwr.reading_date DESC, pmr.id DESC
+     LIMIT 1`,
+    [productionMeter.id, eventDate]
+  );
+  const previousReading = previousResult.rows[0]?.reading_value ?? productionMeter.initial_reading ?? 0;
+  if (Number(oldFinalReading) < Number(previousReading || 0)) {
+    throw new ApiError(400, "Old final reading cannot be lower than the latest production reading.");
+  }
+  const consumption = Number(oldFinalReading) - Number(previousReading || 0);
+  const rateResult = await client.query("SELECT rate_id FROM customers WHERE id = $1", [productionMeter.customer_id]);
+  const rateId = rateResult.rows[0]?.rate_id || productionMeter.rate_id;
+  const tariff = rateId ? await getTariffWithBlocks(client, rateId, eventDate) : null;
+  const charge = calculateTariffCharge(tariff || { amount: 0 }, consumption);
+  return {
+    previousReading,
+    consumption,
+    revenueAmount: charge.subtotalAmount,
+    tariffSnapshot: charge.tariffSnapshot
+  };
+};
 
 const searchMeters = asyncHandler(async (req, res) => {
   const search = String(req.query.search || "").trim();
@@ -371,31 +400,9 @@ const replaceMeter = asyncHandler(async (req, res) => {
       [oldMeter.id]
     );
     const linkedProductionMeters = linkedProductionResult.rows;
-    if (linkedProductionMeters.length) {
-      const rematchedProductionResult = await client.query(
-        `UPDATE production_source_meters
-         SET meter_id = $1,
-             updated_at = NOW()
-         WHERE meter_id = $2
-           AND meter_type = 'customer_source'
-           AND status NOT IN ('replaced', 'removed')
-         RETURNING *`,
-        [newMeterResult.rows[0].id, oldMeter.id]
-      );
-      for (const rematchedMeter of rematchedProductionResult.rows) {
-        const beforeProductionMeter = linkedProductionMeters.find((meter) => meter.id === rematchedMeter.id);
-        await recordAuditEvent(client, {
-          req,
-          action: "production_meter.source_meter_rematched",
-          entityType: "production_source_meter",
-          entityId: rematchedMeter.id,
-          beforeData: beforeProductionMeter,
-          afterData: rematchedMeter,
-          reason: "Linked source meter replaced"
-        });
-      }
+    if (linkedProductionMeters.length > 1) {
+      throw new ApiError(409, "This source meter is linked to multiple active production meters. Resolve the duplicate production links before replacing it.");
     }
-
     const newBaselineReadingResult = await client.query(
       `INSERT INTO meter_readings (
         customer_id, meter_id, billing_period_id, previous_reading_id, previous_reading_value,
@@ -440,6 +447,77 @@ const replaceMeter = asyncHandler(async (req, res) => {
         req.user.id
       ]
     );
+    const productionReplacements = [];
+    for (const linkedProductionMeter of linkedProductionMeters) {
+      const segment = await calculateProductionReplacementSegment(client, linkedProductionMeter, event_date, oldFinalReading);
+      const retiredProductionResult = await client.query(
+        `UPDATE production_source_meters
+         SET status = 'replaced',
+             removed_at = $1,
+             updated_at = NOW()
+         WHERE id = $2
+         RETURNING *`,
+        [event_date, linkedProductionMeter.id]
+      );
+      const successorResult = await client.query(
+        `INSERT INTO production_source_meters (
+          zone_id, customer_id, meter_id, rate_id, meter_number, name, meter_type,
+          installed_at, initial_reading, status, notes, created_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'customer_source', $7, $8, 'active', $9, $10)
+        RETURNING *`,
+        [
+          linkedProductionMeter.zone_id,
+          linkedProductionMeter.customer_id,
+          newMeterResult.rows[0].id,
+          linkedProductionMeter.rate_id,
+          newMeterResult.rows[0].meter_number,
+          linkedProductionMeter.name,
+          event_date,
+          newInitialReading,
+          reason || `Replacement for ${linkedProductionMeter.meter_number}`,
+          req.user.id
+        ]
+      );
+      const productionEventResult = await client.query(
+        `INSERT INTO production_meter_events (
+          old_production_meter_id, new_production_meter_id, meter_event_id, event_type, event_date,
+          old_final_reading, new_initial_reading, old_previous_reading, old_consumption,
+          old_revenue_amount, tariff_snapshot, reason, created_by
+        )
+        VALUES ($1, $2, $3, 'replacement', $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
+        RETURNING *`,
+        [
+          linkedProductionMeter.id,
+          successorResult.rows[0].id,
+          eventResult.rows[0].id,
+          event_date,
+          oldFinalReading,
+          newInitialReading,
+          segment.previousReading,
+          segment.consumption,
+          segment.revenueAmount,
+          JSON.stringify(segment.tariffSnapshot),
+          reason || null,
+          req.user.id
+        ]
+      );
+      const productionReplacement = {
+        oldMeter: retiredProductionResult.rows[0],
+        newMeter: successorResult.rows[0],
+        event: productionEventResult.rows[0]
+      };
+      productionReplacements.push(productionReplacement);
+      await recordAuditEvent(client, {
+        req,
+        action: "production_meter.replaced_from_source_meter",
+        entityType: "production_source_meter",
+        entityId: linkedProductionMeter.id,
+        beforeData: linkedProductionMeter,
+        afterData: productionReplacement,
+        reason: "Linked source meter replaced"
+      });
+    }
     if (bill && oldMeter.meter_role === "client_billing") {
       await attachReplacementBillSegment(client, {
         billId: bill.id,
@@ -464,7 +542,8 @@ const replaceMeter = asyncHandler(async (req, res) => {
       newMeter: newMeterResult.rows[0],
       finalReading,
       newBaselineReading: newBaselineReadingResult.rows[0],
-      bill
+      bill,
+      productionReplacements
     });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -568,6 +647,60 @@ const updateMeterEvent = asyncHandler(async (req, res) => {
            LIMIT 1
          )`,
         [newInitialReading, eventDate, billingPeriod.id, req.user.id, before.new_meter_id]
+      );
+    }
+
+    const productionEventResult = await client.query(
+      `SELECT pme.id AS production_event_id,
+              pme.old_production_meter_id,
+              pme.new_production_meter_id,
+              old_meter.id,
+              old_meter.customer_id,
+              old_meter.rate_id,
+              old_meter.initial_reading
+       FROM production_meter_events pme
+       JOIN production_source_meters old_meter ON old_meter.id = pme.old_production_meter_id
+       WHERE pme.meter_event_id = $1
+       FOR UPDATE`,
+      [before.id]
+    );
+    const productionEvent = productionEventResult.rows[0];
+    if (productionEvent) {
+      const segment = await calculateProductionReplacementSegment(client, productionEvent, eventDate, oldFinalReading);
+      await client.query(
+        `UPDATE production_meter_events
+         SET event_date = $1,
+             old_final_reading = $2,
+             new_initial_reading = $3,
+             old_previous_reading = $4,
+             old_consumption = $5,
+             old_revenue_amount = $6,
+             tariff_snapshot = $7::jsonb,
+             reason = $8
+         WHERE id = $9`,
+        [
+          eventDate,
+          oldFinalReading,
+          newInitialReading,
+          segment.previousReading,
+          segment.consumption,
+          segment.revenueAmount,
+          JSON.stringify(segment.tariffSnapshot),
+          req.body.reason || null,
+          productionEvent.production_event_id
+        ]
+      );
+      await client.query(
+        "UPDATE production_source_meters SET removed_at = $1, updated_at = NOW() WHERE id = $2",
+        [eventDate, productionEvent.old_production_meter_id]
+      );
+      await client.query(
+        `UPDATE production_source_meters
+         SET installed_at = $1,
+             initial_reading = $2,
+             updated_at = NOW()
+         WHERE id = $3`,
+        [eventDate, newInitialReading, productionEvent.new_production_meter_id]
       );
     }
 

@@ -86,7 +86,7 @@ Production:
 
 - Source production meters.
 - Production meter editing for operational details, tariff, zone, notes, active/inactive/faulty status, and rematching a customer-source meter to an active source-backup meter for the same customer; physical replacement remains a separate audited workflow.
-- Customer-meter replacement supports both client-billing and source-backup meters, preserves the source role, and automatically rematches active linked production meters when a source-backup meter is replaced.
+- Customer-meter replacement supports both client-billing and source-backup meters. A source-backup replacement now retires each linked production meter, creates a successor linked to the new source meter, retains the final old-meter production segment, and starts the successor from its own baseline.
 - Weekly production readings.
 - Electricity top-ups.
 - Top-ups post linked expenses.

@@ -33,7 +33,7 @@ export default function ProductionRegistersPanel({
                 {meter.linked_latest_reading_value !== null && meter.linked_latest_reading_value !== undefined ? <small>Latest source {Number(meter.linked_latest_reading_value || 0).toLocaleString()} on {dateOnly(meter.linked_latest_reading_date)}</small> : null}
               </td>
               <td>{meter.zone_name || "-"}</td><td>{meter.rate_name || "-"}</td><td><span className={`status status-${meter.status}`}>{meter.status}</span></td>
-              <td>{canConfigure && !["replaced", "removed"].includes(meter.status) ? <div className="row-actions"><button type="button" onClick={() => onEditMeter(meter)} title="Edit production meter"><Edit2 size={14} />Edit</button>{meter.status === "active" ? <button type="button" onClick={() => onPrefillReplacement(meter)}><RotateCcw size={14} />Replace</button> : null}</div> : "-"}</td>
+              <td>{canConfigure && !["replaced", "removed"].includes(meter.status) ? <div className="row-actions"><button type="button" onClick={() => onEditMeter(meter)} title="Edit production meter"><Edit2 size={14} />Edit</button>{meter.status === "active" && meter.meter_type === "shared_source" ? <button type="button" onClick={() => onPrefillReplacement(meter)}><RotateCcw size={14} />Replace</button> : null}</div> : "-"}</td>
             </tr>
           )) : <EmptyTableRow colSpan={7} title="No production meters" detail="Register source meters to start monitoring." />}
         </tbody></table></div>
